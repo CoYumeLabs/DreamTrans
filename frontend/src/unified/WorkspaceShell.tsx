@@ -67,6 +67,7 @@ export interface WorkspaceShellProps {
   pendingWrites: number
   ragEnabled: boolean
   recorderStatus: RecorderStatus
+  paymentRequired: boolean
   sessionCost: SessionCostView | null
   sessionId: string
   sessionSourceLanguage: string
@@ -249,6 +250,7 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
   const [notice, setNotice] = useState<string | null>(null)
   const m = useMessages()
   const w = m.workspace
+  const { paymentRequired } = props
   const status = { label: w.status[recorderStatus], tone: statusTone[recorderStatus] }
   const balanceError = isInsufficientBalanceMessage(error)
   const memberActive = balance?.member_active ?? account?.member_active ?? false
@@ -669,10 +671,14 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
           </div>
         </header>
 
-        {error && (
-          <div className="dt-alert" role="alert">
-            <span><strong>{w.notices.problem}</strong>{error}</span>
-            {balanceError && (
+        {(paymentRequired || error) && (
+          <div className={`dt-alert${paymentRequired ? ' dt-alert--payment' : ''}`} role="alert">
+            <span>
+              <strong>{paymentRequired ? w.runtime.paymentPaused : w.notices.problem}</strong>
+              {paymentRequired ? w.runtime.paymentPausedDetail : error}
+              {paymentRequired && error && <span>{error}</span>}
+            </span>
+            {(paymentRequired || balanceError) && (
               <button
                 className="dt-alert__action"
                 onClick={() => setPanel('account')}
@@ -681,13 +687,24 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
                 {w.notices.topUp}
               </button>
             )}
-            <button aria-label={w.notices.closeError} onClick={onClearError} type="button">
-              <Icon name="close" size={17} />
-            </button>
+            {paymentRequired ? (
+              <button
+                className="dt-alert__action"
+                disabled={recorderStatus !== 'paused'}
+                onClick={onPauseToggle}
+                type="button"
+              >
+                {w.runtime.paymentResume}
+              </button>
+            ) : (
+              <button aria-label={w.notices.closeError} onClick={onClearError} type="button">
+                <Icon name="close" size={17} />
+              </button>
+            )}
           </div>
         )}
 
-        {notice && !error && (
+        {notice && !error && !paymentRequired && (
           <div className="dt-alert dt-alert--info" role="status">
             <span>{notice}</span>
             <button

@@ -664,7 +664,11 @@ func (h *SpeechmaticsProxyHandler) HandleProxy(w http.ResponseWriter, r *http.Re
 	case proxyErr = <-errChan:
 		if proxyErr != nil {
 			log.Printf("Proxy error: %v", proxyErr)
-			sendErrorToClient(safeClientConn, proxyErr.Error())
+			if failure, ok := websocketAccountingFailureFromError(proxyErr); ok {
+				_ = safeClientConn.WriteJSON(failure.response())
+			} else {
+				sendErrorToClient(safeClientConn, proxyErr.Error())
+			}
 		}
 	case <-ctx.Done():
 		proxyErr = ctx.Err()
@@ -711,7 +715,7 @@ func (h *SpeechmaticsProxyHandler) reserveSpeechmaticsAudio(
 	if reservation == nil {
 		return nil
 	}
-	if !h.recordSpeechmaticsUsage(
+	if err := h.recordSpeechmaticsUsage(
 		ctx,
 		clientConn,
 		userID,
@@ -719,8 +723,8 @@ func (h *SpeechmaticsProxyHandler) reserveSpeechmaticsAudio(
 		sessionID,
 		reservation.minutes,
 		reservation.key,
-	) {
-		return fmt.Errorf("usage charge failed or balance is insufficient")
+	); err != nil {
+		return wrapWebSocketAccountingError(classifyBillingAccountingFailure(err), err)
 	}
 	audioMeter.ConfirmReservation(reservation.key)
 	return nil
@@ -922,9 +926,9 @@ func (h *SpeechmaticsProxyHandler) recordSpeechmaticsUsage(
 	sessionID *string,
 	minutes float64,
 	idempotencyKey string,
-) bool {
+) error {
 	if minutes <= 0 || h.billing == nil || userID == "" || tenantID == "" {
-		return false
+		return fmt.Errorf("audio billing is unavailable")
 	}
 	c, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -940,15 +944,15 @@ func (h *SpeechmaticsProxyHandler) recordSpeechmaticsUsage(
 	})
 	if err != nil {
 		log.Printf("failed to record Speechmatics usage: %v", err)
-		return false
+		return err
 	}
 	if cost <= 0 {
-		return true
+		return nil
 	}
 	if balance, err := h.billing.GetUserBalance(c, userID); err == nil && balance != nil {
 		h.sendSpeechmaticsBalanceUpdate(clientConn, balance, cost)
 	}
-	return true
+	return nil
 }
 
 func (h *SpeechmaticsProxyHandler) settleSpeechmaticsReservations(

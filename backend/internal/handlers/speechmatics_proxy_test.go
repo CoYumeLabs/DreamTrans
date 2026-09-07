@@ -424,7 +424,7 @@ func TestSpeechmaticsChargeFailureStopsRecognitionBeforeUpstreamWrite(t *testing
 	safeUpstreamConn := newSafeWebSocketConn(upstreamConn)
 	defer safeUpstreamConn.Close()
 
-	stub := &speechmaticsBillingStub{recordErr: errors.New("insufficient balance")}
+	stub := &speechmaticsBillingStub{recordErr: billing.ErrInsufficientBalance}
 	handler := &SpeechmaticsProxyHandler{billing: stub}
 	recognitionQuotaCalls := 0
 	proxyDone := make(chan error, 1)
@@ -482,7 +482,7 @@ func TestSpeechmaticsChargeFailureStopsRecognitionBeforeUpstreamWrite(t *testing
 	}
 	select {
 	case proxyErr := <-proxyDone:
-		if proxyErr == nil || !strings.Contains(proxyErr.Error(), "usage charge failed") {
+		if !errors.Is(proxyErr, billing.ErrInsufficientBalance) {
 			t.Fatalf("unexpected proxy result: %v", proxyErr)
 		}
 	case <-time.After(2 * time.Second):
@@ -508,5 +508,49 @@ func TestSpeechmaticsChargeFailureStopsRecognitionBeforeUpstreamWrite(t *testing
 	}
 	if recognitionQuotaCalls != 1 {
 		t.Fatalf("got %d recognition API quota calls, want 1", recognitionQuotaCalls)
+	}
+}
+
+func TestSpeechmaticsMidStreamReservationFailureKeepsPaymentClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		err       error
+		wantType  string
+		retryable bool
+	}{
+		{"balance exhausted", billing.ErrInsufficientBalance, "insufficient_balance", false},
+		{"database unavailable", errors.New("database unavailable"), "billing_temporarily_unavailable", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &speechmaticsBillingStub{}
+			handler := &SpeechmaticsProxyHandler{billing: stub}
+			meter := &audioUsageMeter{}
+			configureTestAudioMeter(t, meter)
+			ctx := context.Background()
+			if err := handler.reserveSpeechmaticsAudio(ctx, nil, meter, "live", "user", "tenant", nil, 1); err != nil {
+				t.Fatal(err)
+			}
+			// Consume exactly the first prepaid five seconds, then exhaust funds.
+			const firstWindow = 16000 * 2 * 5
+			if err := meter.AddReservedForwardedBytes(firstWindow); err != nil {
+				t.Fatal(err)
+			}
+			stub.recordErr = tc.err
+			err := handler.reserveSpeechmaticsAudio(ctx, nil, meter, "live", "user", "tenant", nil, 1280)
+			if !errors.Is(err, tc.err) {
+				t.Fatalf("reservation lost its cause: %v", err)
+			}
+			failure, ok := websocketAccountingFailureFromError(err)
+			if !ok || failure.ErrorType != tc.wantType || failure.Retryable != tc.retryable {
+				t.Fatalf("unexpected client failure: %+v, typed=%v", failure, ok)
+			}
+			if failure.response()["type"] != tc.wantType {
+				t.Fatal("client cannot distinguish exhausted balance from a transient outage")
+			}
+			settlements := meter.PendingSettlements()
+			if len(settlements) != 1 || settlements[0].minutes != 0 {
+				t.Fatalf("failed reservation must reconcile to zero usage: %+v", settlements)
+			}
+		})
 	}
 }

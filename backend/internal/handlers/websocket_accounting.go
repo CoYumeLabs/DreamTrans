@@ -99,7 +99,7 @@ func (g *providerFlowGate) FailClosed(
 	return stored, true
 }
 
-func (f websocketAccountingFailure) response(requestID string) map[string]interface{} {
+func (f websocketAccountingFailure) response() map[string]interface{} {
 	response := map[string]interface{}{
 		"message":   "Error",
 		"type":      f.ErrorType,
@@ -108,9 +108,6 @@ func (f websocketAccountingFailure) response(requestID string) map[string]interf
 	}
 	if f.ConnectionTerminal {
 		response["connection_terminal"] = true
-	}
-	if requestID != "" {
-		response["request_id"] = requestID
 	}
 	if f.RetryAfterMs > 0 {
 		response["retry_after_ms"] = f.RetryAfterMs

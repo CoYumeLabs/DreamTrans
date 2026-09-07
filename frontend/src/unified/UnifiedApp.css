@@ -692,6 +692,25 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
+.dt-alert--payment {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.dt-alert--payment > span {
+  flex: 1 0 100%;
+  flex-direction: column;
+}
+
+.dt-alert--payment button.dt-alert__action {
+  margin-inline-start: 0;
+}
+
+.dt-alert--payment button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
 .dt-alert--info {
   color: #1f3b8a;
   background: #eef3ff;

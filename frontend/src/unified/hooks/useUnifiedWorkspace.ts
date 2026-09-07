@@ -39,6 +39,7 @@ import {
   createStableTranslationId,
   resolveSpeechmaticsProxyUrl,
   SpeechmaticsProxyClient,
+  SpeechmaticsPaymentRequiredError,
   TranscriptStore,
   type TranscriptSegment,
   type TranslationSegment,
@@ -77,6 +78,7 @@ import {
   legacyChatHistoryKey,
 } from '../workspace/browserStorageKeys'
 import { ensureSpeechmaticsPreflight } from '../workspace/speechmaticsPreflight'
+import { isInsufficientBalanceError } from '../workspace/billingErrors'
 import { messages } from '../../i18n'
 
 const ANONYMOUS_TOKEN_SENTINEL = '__dreamtrans_anonymous__'
@@ -355,6 +357,7 @@ export interface TransportDiagnostics {
 }
 
 export interface UnifiedWorkspaceState {
+  paymentRequired: boolean
   connectionLabel: string
   durationLabel: string
   error: string | null
@@ -810,6 +813,9 @@ export function useUnifiedWorkspace({
   user,
   onBalanceUpdated,
 }: UnifiedWorkspaceOptions): UnifiedWorkspaceState {
+  const [paymentRequired, setPaymentRequired] = useState(false)
+  const paymentRequiredRef = useRef(false)
+  const paymentHandlerRef = useRef<() => void>(() => {})
   const repositoryOwnerRef = useRef<string | null>(user?.id ?? null)
   const [repository] = useState(
     () => new IndexedDbSessionRepository<TranscriptSegment, TranslationSegment>({
@@ -839,6 +845,16 @@ export function useUnifiedWorkspace({
   }))
   const sessionAuthRequiredRef = useRef(false)
   const [client] = useState(() => new SpeechmaticsProxyClient({
+    beforeReconnect: async () => {
+      try {
+        await ensureSpeechmaticsPreflight()
+      } catch (reason) {
+        if (isInsufficientBalanceError(reason)) {
+          throw new SpeechmaticsPaymentRequiredError(messages().workspace.runtime.insufficientBalance)
+        }
+        throw reason
+      }
+    },
     // The session id lets the backend tie this live stream to the session so
     // it can be ended remotely from another device or the admin console.
     url: () => resolveSpeechmaticsProxyUrl(backendURL, currentSessionRef.current),
@@ -895,6 +911,7 @@ export function useUnifiedWorkspace({
       feedModel.markTranslationError(chunk.segmentIds, message)
     },
     onError: (message) => setError(message),
+    onPaymentRequired: () => paymentHandlerRef.current(),
     onRecovered: () => setError(null),
     onBalance: (event) => {
       balanceCallbackRef.current?.(parseAccountBalance(event.balance))
@@ -1581,6 +1598,8 @@ export function useUnifiedWorkspace({
       cloudSessionRef.current = null
       releaseSessionLock()
       setRecorderStatus('idle')
+      paymentRequiredRef.current = false
+      setPaymentRequired(false)
       const stopFailure = stopFailures[0]
       if (stopFailure) {
         setError(messages().workspace.runtime.finishStepFailed(stopFailure.message))
@@ -2274,6 +2293,9 @@ export function useUnifiedWorkspace({
         }
         captureRef.current?.setPaused(false)
         elapsedRunStartedRef.current = performance.now()
+        paymentRequiredRef.current = false
+        setPaymentRequired(false)
+        setError(null)
         setRecorderStatus('recording')
       })
       .catch((reason: unknown) => {
@@ -2288,6 +2310,28 @@ export function useUnifiedWorkspace({
         setError(messages().workspace.runtime.resumeFailed(reason instanceof Error ? reason.message : String(reason)))
       })
   }, [checkpointDuration, client, setRecorderStatus, updateElapsed])
+
+  paymentHandlerRef.current = () => {
+    if (
+      paymentRequiredRef.current
+      || statusRef.current === 'idle'
+      || statusRef.current === 'starting'
+      || statusRef.current === 'stopping'
+    ) return
+    paymentRequiredRef.current = true
+    setPaymentRequired(true)
+    captureRef.current?.setPaused(true)
+    if (elapsedRunStartedRef.current !== null) {
+      elapsedAccumulatedRef.current += performance.now() - elapsedRunStartedRef.current
+      elapsedRunStartedRef.current = null
+    }
+    updateElapsed()
+    checkpointDuration({ cloud: true })
+    client.suspendForPayment()
+    aiTranslator.suspendForPayment()
+    setRecorderStatus('paused')
+    setError(null)
+  }
 
   const loadHistory = useCallback(async (session: HistorySession) => {
     const ownerGeneration = ownerGenerationRef.current
@@ -3231,7 +3275,7 @@ export function useUnifiedWorkspace({
       || recorderStatus === 'reconnecting'
       || recorderStatus === 'paused'
       || recorderStatus === 'error'
-    if (!live || !currentSessionRef.current) return
+    if (!live || !currentSessionRef.current || paymentRequiredRef.current) return
 
     const activeSettings = settingsRef.current
     const wantAi = activeSettings.assistMode !== 'learn'
@@ -3460,7 +3504,7 @@ export function useUnifiedWorkspace({
           && liveSettings.translationEngine === 'ai'
         // Prefer live settings over the session snapshot so mid-session
         // assistMode toggles take effect without restarting the recorder.
-        if (wantAiNow) {
+        if (wantAiNow && !paymentRequiredRef.current) {
           if (
             sessionTranslationEngineRef.current !== 'ai'
             || !aiTranslator.isSessionActive()
@@ -3652,6 +3696,7 @@ export function useUnifiedWorkspace({
     }
 
     const remaining = [
+      client.on('paymentRequired', () => paymentHandlerRef.current()),
       client.on('state', (snapshot) => {
         if (snapshot.status === 'reconnecting' && (
           statusRef.current === 'recording'
@@ -3670,6 +3715,7 @@ export function useUnifiedWorkspace({
           setRecorderStatus('error')
         } else if (
           snapshot.status === 'running'
+          && !paymentRequiredRef.current
           && (
             statusRef.current === 'reconnecting'
             || statusRef.current === 'error'
@@ -3810,7 +3856,9 @@ export function useUnifiedWorkspace({
     return () => window.clearInterval(timer)
   }, [aiTranslator, client, recorderStatus, settings.debugTransport])
 
-  const connectionLabel = recorderStatus === 'error'
+  const connectionLabel = paymentRequired
+    ? messages().workspace.runtime.paymentPaused
+    : recorderStatus === 'error'
     ? localAudioHealthyRef.current
       ? messages().workspace.runtime.disconnectedRecording
       : messages().workspace.runtime.connectionFailed
@@ -3824,6 +3872,7 @@ export function useUnifiedWorkspace({
   const ownerTransitioning = repositoryOwnerRef.current !== (user?.id ?? null)
 
   return {
+    paymentRequired,
     connectionLabel,
     durationLabel: formatDuration(ownerTransitioning ? 0 : elapsedSeconds),
     error,

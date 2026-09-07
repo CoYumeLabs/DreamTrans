@@ -68,6 +68,13 @@ This project serves two purposes:
 - **Resilient Capture and Sync**: The transcription connection reconnects after
   transient interruptions. Authenticated cloud transcript writes first enter a
   durable, account-scoped browser outbox and are retried after reconnect/reload.
+- **Balance-Aware Pause**: Insufficient transcription or AI translation funds
+  pause audio capture, the timer, and live translation without repeated
+  reconnects. Existing content and queued, unsent audio are retained. After
+  topping up, explicitly resume the same session; the server checks access
+  before reconnecting. No audio is recorded during this pause, and text around
+  the original interruption may be incomplete. Stopping remains available
+  without paying for another connection.
 
 ### Authenticated / Pro Deployment
 

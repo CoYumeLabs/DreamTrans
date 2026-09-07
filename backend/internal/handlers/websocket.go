@@ -2154,7 +2154,7 @@ func (h *WebSocketHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	var paidFlowCloseOnce sync.Once
 	closePaidFlow := func(failure websocketAccountingFailure) {
 		paidFlowCloseOnce.Do(func() {
-			_ = safeConn.WriteJSON(failure.response(""))
+			_ = safeConn.WriteJSON(failure.response())
 			_ = safeConn.WriteControl(
 				websocket.CloseMessage,
 				websocket.FormatCloseMessage(
@@ -2923,7 +2923,7 @@ func (h *WebSocketHandler) Handle(w http.ResponseWriter, r *http.Request) {
 						failClosePaidFlow,
 					); summaryErr != nil && operationCtx.Err() == nil {
 						if failure, ok := websocketAccountingFailureFromError(summaryErr); ok {
-							_ = safeConn.WriteJSON(failure.response(""))
+							_ = safeConn.WriteJSON(failure.response())
 						} else {
 							_ = safeConn.WriteJSON(map[string]interface{}{
 								"message":   "Error",

@@ -8,6 +8,7 @@
  */
 import {
   SpeechmaticsProxyClient,
+  SpeechmaticsPaymentRequiredError,
   TranscriptStore,
   type SpeechmaticsSocket,
 } from './index'
@@ -348,3 +349,129 @@ async function verifyCancelledStart(): Promise<void> {
 await verifyStore()
 await verifyClient()
 await verifyCancelledStart()
+
+async function verifyPaymentPause(): Promise<void> {
+  for (const legacy of [false, true]) {
+    const sockets: FakeSocket[] = []
+    let affordable = true
+    let paymentEvents = 0
+    const client = new SpeechmaticsProxyClient({
+      url: 'ws://dreamtrans.test/ws/speechmatics',
+      tokenProvider: () => 'token',
+      beforeReconnect: async () => {
+        if (!affordable) throw new SpeechmaticsPaymentRequiredError('insufficient balance')
+      },
+      socketFactory: () => {
+        const socket = new FakeSocket()
+        sockets.push(socket)
+        return socket
+      },
+      reconnect: { baseDelayMs: 1, maxDelayMs: 1, jitterMs: 0 },
+      audio: { sampleRate: 48_000, maxQueuedAudioSeconds: 30 },
+    })
+    client.on('paymentRequired', () => { paymentEvents += 1 })
+    const start = client.start()
+    await nextTurn()
+    sockets[0].open()
+    sockets[0].message({ message: 'RecognitionStarted' })
+    await start
+    client.store.appendTranscript({ text: 'Keep this final.', startTime: 0, endTime: 1 })
+    // Hold unsent PCM behind network backpressure when the balance runs out.
+    sockets[0].bufferedAmount = 1_000_000
+    client.sendAudio(new Float32Array(48_000))
+    sockets[0].message({
+      message: 'Error',
+      type: legacy ? 'proxy_error' : 'insufficient_balance',
+      reason: legacy ? 'usage charge failed or balance is insufficient' : 'insufficient balance',
+    })
+    await nextTurn()
+    affordable = false
+    assert(paymentEvents === 1, 'balance failure must emit one payment pause')
+    assert(client.getSnapshot().status === 'paused', 'balance failure must pause')
+    assert(!client.sendAudio(new Float32Array(48_000)), 'payment pause must reject new PCM')
+    const buffered = client.getDiagnostics().queuedAudioBytes
+    assert(buffered > 0, 'payment pause must retain unsent audio')
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert(sockets.length === 1, 'payment pause must not reconnect automatically')
+    await client.resume().then(
+      () => { throw new Error('unpaid resume must fail') },
+      () => {},
+    )
+    assert(client.getSnapshot().status === 'paused', 'unpaid resume must stay paused')
+    assert(sockets.length === 1, 'failed balance preflight must not open an upstream socket')
+    affordable = true
+    const resume = client.resume()
+    await nextTurn()
+    sockets[1].open()
+    sockets[1].message({ message: 'RecognitionStarted' })
+    await resume
+    assert(client.getSnapshot().status === 'running', 'explicit paid resume must work')
+    assert(client.store.getSnapshot().segmentCount === 1, 'resume must retain prior finals')
+    assert(client.getDiagnostics().queuedAudioBytes === 0, 'resume must drain retained PCM')
+    // A network loss followed by HTTP 402 must also hold, even without a WS error.
+    affordable = false
+    sockets[1].fail()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert(client.getSnapshot().status === 'paused', 'reconnect preflight 402 must pause')
+    const countBeforeStop = sockets.length
+    await client.stop()
+    assert(sockets.length === countBeforeStop, 'stopping while unpaid must not reconnect')
+    client.destroy()
+  }
+}
+
+await verifyPaymentPause()
+
+async function verifyCancelledPaymentResume(): Promise<void> {
+  const sockets: FakeSocket[] = []
+  let rejectPreflight!: (error: Error) => void
+  const client = new SpeechmaticsProxyClient({
+    url: 'ws://dreamtrans.test/ws/speechmatics',
+    tokenProvider: () => 'token',
+    beforeReconnect: () => new Promise<void>((_resolve, reject) => { rejectPreflight = reject }),
+    socketFactory: () => {
+      const socket = new FakeSocket()
+      sockets.push(socket)
+      return socket
+    },
+  })
+  const first = client.start()
+  await nextTurn()
+  sockets[0].open()
+  sockets[0].message({ message: 'RecognitionStarted' })
+  await first
+  client.suspendForPayment()
+  const resume = client.resume().catch(() => undefined)
+  await nextTurn()
+  await client.stop()
+  const next = client.start()
+  await nextTurn()
+  sockets[1].open()
+  sockets[1].message({ message: 'RecognitionStarted' })
+  await next
+  rejectPreflight(new SpeechmaticsPaymentRequiredError('late balance rejection'))
+  await resume
+  assert(client.getSnapshot().status === 'running', 'a cancelled payment check must not pause a new recording')
+  assert(sockets.length === 2, 'a cancelled resume must not resurrect an old connection')
+  client.destroy()
+}
+
+await verifyCancelledPaymentResume()
+
+async function verifyStartupPaymentRejection(): Promise<void> {
+  const socket = new FakeSocket()
+  const client = new SpeechmaticsProxyClient({
+    url: 'ws://dreamtrans.test/ws/speechmatics',
+    tokenProvider: () => 'token',
+    socketFactory: () => socket,
+  })
+  const result = client.start().then(() => null, (error: unknown) => error)
+  await nextTurn()
+  socket.open()
+  socket.message({ message: 'Error', type: 'insufficient_balance', reason: 'insufficient balance' })
+  const error = await result
+  assert(error instanceof Error && error.message === 'insufficient balance', 'a startup balance race must preserve the actionable error')
+  client.destroy()
+}
+
+await verifyStartupPaymentRejection()

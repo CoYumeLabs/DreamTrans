@@ -78,6 +78,8 @@ export interface SpeechmaticsAudioTransportOptions {
 }
 
 export interface SpeechmaticsProxyClientOptions {
+  /** Readable HTTP access check before reconnecting (WebSocket hides HTTP 402). */
+  readonly beforeReconnect?: () => Promise<void>
   /**
    * Defaults to /ws/speechmatics on the current browser origin.
    */
@@ -137,6 +139,7 @@ export interface SpeechmaticsTerminatedEvent {
 }
 
 export interface SpeechmaticsClientEventMap {
+  readonly paymentRequired: { readonly reason: string }
   readonly state: SpeechmaticsClientSnapshot
   readonly transcript: TranscriptSegment
   readonly partial: TranscriptPartial | null
@@ -156,6 +159,8 @@ interface AudioFrame {
   readonly startTime: number
   readonly endTime: number
 }
+
+export class SpeechmaticsPaymentRequiredError extends Error {}
 
 interface SocketContext {
   readonly serial: number
@@ -318,6 +323,10 @@ export class SpeechmaticsProxyClient {
   private readonly url: string | (() => string)
   private readonly tokenProvider: SpeechmaticsTokenProvider
   private readonly socketFactory: SpeechmaticsSocketFactory
+  private readonly beforeReconnect?: () => Promise<void>
+  private paymentBlocked = false
+  private paymentResumeInProgress = false
+  private connectionGeneration = 0
   private readonly protocolFactory: (token: string) => readonly string[]
   private readonly clock: () => number
   private readonly random: () => number
@@ -413,6 +422,7 @@ export class SpeechmaticsProxyClient {
   private hasActivePartial = false
 
   constructor(options: SpeechmaticsProxyClientOptions) {
+    this.beforeReconnect = options.beforeReconnect
     this.url = options.url ?? (() => resolveSpeechmaticsProxyUrl('/'))
     this.tokenProvider = options.tokenProvider
     this.store = options.store ?? new TranscriptStore({ clock: options.clock })
@@ -599,6 +609,28 @@ export class SpeechmaticsProxyClient {
     if (!this.desiredSession || this.stopping) {
       throw new Error('No paused transcription session to resume')
     }
+    if (this.paymentResumeInProgress) return
+    if (this.paymentBlocked) {
+      const generation = this.connectionGeneration
+      this.paymentResumeInProgress = true
+      this.paymentBlocked = false
+      try {
+        await this.connectSocket(true)
+        if (!this.desiredSession || this.stopping || this.destroyed || generation !== this.connectionGeneration) return
+        this.capturePaused = false
+        this.errorValue = null
+        this.setStatus('running')
+        this.drainAudioQueue()
+      } catch (error) {
+        if (this.desiredSession && !this.stopping && !this.destroyed && generation === this.connectionGeneration) {
+          this.suspendForPayment(socketMessage(error, 'Transcription resume failed'))
+        }
+        throw error
+      } finally {
+        this.paymentResumeInProgress = false
+      }
+      return
+    }
     if (!this.capturePaused && this.recognitionReady) return
 
     this.capturePaused = false
@@ -613,6 +645,25 @@ export class SpeechmaticsProxyClient {
     this.publishSnapshot()
     await this.waitForReady(timeoutMs)
     if (this.recognitionReady) this.setStatus('running')
+  }
+
+  /** Hold the same session and its unsent audio until an explicit resume. */
+  suspendForPayment(reason = 'insufficient balance'): void {
+    if (!this.desiredSession || this.destroyed || this.stopping) return
+    this.connectionGeneration += 1
+    this.paymentBlocked = true
+    this.capturePaused = true
+    this.recognitionReady = false
+    this.clearReconnectTimer()
+    if (this.context) {
+      this.settleStartup(this.context, new SpeechmaticsPaymentRequiredError(reason))
+    }
+    this.closeActiveSocket(4003, 'Payment required')
+    this.discardPendingPartials()
+    this.store.clearPartial()
+    this.store.clearTranslationPartials()
+    this.setStatus('paused')
+    this.emit('paymentRequired', { reason })
   }
 
   /**
@@ -683,6 +734,16 @@ export class SpeechmaticsProxyClient {
   async stop(timeoutMs = this.stopTimeoutMs): Promise<void> {
     this.assertUsable()
     if (this.stopPromise) return this.stopPromise
+    this.connectionGeneration += 1
+    if (this.paymentBlocked || this.paymentResumeInProgress) {
+      this.desiredSession = false
+      this.capturePaused = true
+      this.clearReconnectTimer()
+      this.closeActiveSocket(1000, 'Session complete')
+      this.clearAudioQueue()
+      this.setStatus('stopped')
+      return
+    }
     if (!this.desiredSession) {
       if (this.statusValue !== 'stopped') this.setStatus('stopped')
       return
@@ -884,13 +945,25 @@ export class SpeechmaticsProxyClient {
   }
 
   private async connectSocket(reconnect: boolean): Promise<void> {
+    const generation = this.connectionGeneration
     if (!this.desiredSession || this.destroyed) {
       throw new Error('Transcription session is no longer active')
     }
 
+    if (reconnect && this.beforeReconnect) {
+      try {
+        await this.beforeReconnect()
+      } catch (error) {
+        if (generation === this.connectionGeneration && error instanceof SpeechmaticsPaymentRequiredError) {
+          this.suspendForPayment(error.message)
+        }
+        throw error
+      }
+    }
+
     const token = (await this.tokenProvider()).trim()
     if (!token) throw new Error('Transcription token provider returned an empty token')
-    if (!this.desiredSession || this.destroyed) {
+    if (!this.desiredSession || this.destroyed || this.paymentBlocked || generation !== this.connectionGeneration) {
       throw new Error('Transcription session ended while refreshing authentication')
     }
 
@@ -1007,6 +1080,8 @@ export class SpeechmaticsProxyClient {
     const reason = event.reason || `WebSocket closed with code ${event.code}`
     this.settleStartup(context, new Error(reason))
 
+    if (this.paymentBlocked || this.paymentResumeInProgress) return
+
     if (this.stopping) {
       this.settleEnd(new Error('Connection closed before the final transcript'))
       return
@@ -1060,6 +1135,14 @@ export class SpeechmaticsProxyClient {
         break
       case 'Error': {
         const reason = asString(message.reason) || 'Transcription service returned an error'
+        if (
+          asString(message.type) === 'insufficient_balance'
+          || /insufficient balance|balance is insufficient/i.test(reason)
+        ) {
+          this.suspendForPayment(reason)
+          if (this.stopping) this.settleEnd(new Error(reason))
+          break
+        }
         // The stream was cut on purpose from another device or by an
         // administrator: never reconnect, surface a dedicated event so the
         // recording UI can wind down cleanly.
@@ -1442,6 +1525,8 @@ export class SpeechmaticsProxyClient {
 
   private scheduleReconnect(reason: string, immediate = false): void {
     if (
+      this.paymentBlocked ||
+      this.paymentResumeInProgress ||
       !this.desiredSession ||
       this.destroyed ||
       this.stopping ||
@@ -1469,7 +1554,7 @@ export class SpeechmaticsProxyClient {
     this.reconnectTimer = globalThis.setTimeout(() => {
       this.reconnectTimer = null
       void this.connectSocket(true).catch((error: unknown) => {
-        if (this.destroyed) return
+        if (this.destroyed || this.paymentBlocked) return
         const message = socketMessage(error, 'Transcription reconnect failed')
         this.reportError(message, false, error)
         this.scheduleReconnect(message)
@@ -1723,6 +1808,9 @@ export class SpeechmaticsProxyClient {
   }
 
   private resetRuntime(): void {
+    this.connectionGeneration += 1
+    this.paymentBlocked = false
+    this.paymentResumeInProgress = false
     this.clearAllTimers()
     this.closeActiveSocket(1000, 'Starting a new session')
     this.clearAudioQueue()

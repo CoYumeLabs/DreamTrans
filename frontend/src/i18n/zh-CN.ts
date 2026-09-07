@@ -352,6 +352,9 @@ export const zhCN = {
       titleSaveFailed: (error: string) => `标题保存失败：${error}`, titleNeedsAi: 'AI 标题需要登录并且服务端已配置 AI 能力。', titleNeedsText: '还没有可用于生成标题的转录内容。', titleEmpty: 'AI 没有返回标题，请稍后重试。', titleFailed: (error: string) => `AI 标题生成失败：${error}`, noDownloadSession: '当前没有可下载的会话。', noAudio: '当前会话没有保存本地音频。', audioDownloadFailed: (error: string) => `音频下载失败：${error}`, noText: '当前会话没有对应的文本内容。', textDownloadFailed: (error: string) => `文本下载失败：${error}`,
       resyncFailed: (error: string) => `网络已恢复，但云端补同步失败：${error}`, authChanged: '登录状态已变化，正在安全结束当前会话。', cloudResyncFailed: (error: string) => `云端补同步失败：${error}`, accountSwitchFailed: (error: string) => `账户数据切换失败：${error}`, congestionDropped: (kb: number) => `网络拥塞，已丢弃约 ${kb} KB 尚未发送的音频。`, remoteAdmin: '转录已被管理员远程结束，本次录音已停止。', remoteOther: '会话已在其他设备上被结束，本次录音已停止。', disconnectedRecording: '转录断线 · 本地录音中', connectionFailed: '转录连接失败', reconnecting: (attempt: number, max: number) => `重连 ${attempt}/${max}`, connected: '已连接', cloudReady: '云端就绪', localReady: '本地就绪',
       insufficientBalance: '余额不足，请先充值后再继续使用。',
+      paymentPaused: '余额不足 · 已暂停',
+      paymentPausedDetail: '录音、转录和翻译已暂停，已有内容已保留。暂停期间不会录音；中断附近的文字可能不完整。充值后点击恢复，继续本次会话。',
+      paymentResume: '充值后恢复',
       preflight: {
         balance: '余额不足，无法开始转录；请先充值，或联系管理员关闭计费。', origin: '转录连接被反向代理的 Origin 校验拒绝；管理员需保留公网 Host，或把当前站点加入 CORS_ALLOWED_ORIGINS。', quota: '本月转录额度已用尽；请联系管理员调整套餐，或等待额度重置。', auth: '登录状态已失效；请重新登录后再开始转录。', concurrent: '同时进行的转录数已达套餐上限；请先在“历史会话”中结束其他设备上的转录，或升级会员以提高并发数。', rateLimit: '请求过于频繁或转录连接数已满；请稍后再试。', unavailable: '转录服务暂时不可用；请稍后重试，若持续出现请联系管理员检查服务状态。', failed: (error: string) => `转录服务预检失败：${error}`, failedGeneric: '转录服务预检失败；请稍后重试。',
       },

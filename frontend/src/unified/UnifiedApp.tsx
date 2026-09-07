@@ -103,6 +103,7 @@ export default function UnifiedApp({ proEntry: explicitProEntry }: UnifiedAppPro
       historySessions={workspace.historySessions}
       legacyHistoryCount={workspace.legacyHistoryCount}
       pendingWrites={workspace.pendingWrites}
+      paymentRequired={workspace.paymentRequired}
       ragEnabled={auth.ragEnabled}
       recorderStatus={workspace.recorderStatus}
       sessionCost={workspace.sessionCost}

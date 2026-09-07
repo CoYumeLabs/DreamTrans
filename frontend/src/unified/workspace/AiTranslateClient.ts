@@ -71,6 +71,7 @@ export interface AiTranslateClientOptions {
   socketFactory?: (url: string, protocols: readonly string[]) => AiTranslateSocket
   onTranslation: (chunk: AiTranslateChunk, result: AiTranslationResult) => void
   onError?: (message: string) => void
+  onPaymentRequired?: () => void
   onRecovered?: () => void
   onChunkError?: (chunk: AiTranslateChunk, message: string) => void
   /** Per-segment settlement: the charge just made and the account balance. */
@@ -181,6 +182,7 @@ export class AiTranslateClient {
     result: AiTranslationResult,
   ) => void
   private readonly onError?: (message: string) => void
+  private readonly onPaymentRequired?: () => void
   private readonly onRecovered?: () => void
   private readonly onChunkError?: (chunk: AiTranslateChunk, message: string) => void
   private readonly onBalance?: (event: AiTranslateBalanceEvent) => void
@@ -238,6 +240,7 @@ export class AiTranslateClient {
     this.onTranslation = options.onTranslation
     this.onError = options.onError
     this.onRecovered = options.onRecovered
+    this.onPaymentRequired = options.onPaymentRequired
     this.onChunkError = options.onChunkError
     this.onBalance = options.onBalance
     this.idleFlushMs = options.idleFlushMs ?? DEFAULT_IDLE_FLUSH_MS
@@ -267,6 +270,11 @@ export class AiTranslateClient {
   /** True while a live translation session can accept segments. */
   isSessionActive(): boolean {
     return this.active && !this.destroyed && !this.draining && !this.terminalBlock
+  }
+
+  suspendForPayment(): void {
+    if (!this.active) return
+    this.blockForTerminalError('insufficient_balance', messages().workspace.runtime.insufficientBalance)
   }
 
   startSession(config: AiTranslateSessionConfig): void {
@@ -704,6 +712,7 @@ export class AiTranslateClient {
 
         if (terminalAccountError) {
           this.blockForTerminalError(errorType || 'connection_terminal', reason)
+          if (errorType === 'insufficient_balance') this.onPaymentRequired?.()
           break
         }
 

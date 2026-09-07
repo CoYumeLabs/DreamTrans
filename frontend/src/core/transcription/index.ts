@@ -15,6 +15,7 @@ export {
 
 export {
   SpeechmaticsProxyClient,
+  SpeechmaticsPaymentRequiredError,
   resolveSpeechmaticsProxyUrl,
 } from './SpeechmaticsProxyClient'
 export type {
