@@ -51,16 +51,36 @@ func NewBatchClient(apiKey string) *BatchClient {
 type TranscriptionConfig struct {
 	Language       string  `json:"language"`
 	Diarization    string  `json:"diarization,omitempty"`
-	EnablePartials bool    `json:"enable_partials,omitempty"`
+	EnablePartials bool    `json:"-"`
 	OperatingPoint string  `json:"operating_point,omitempty"`
-	MaxDelay       float64 `json:"max_delay,omitempty"`
+	MaxDelay       float64 `json:"-"`
 }
 
 // JobConfig represents the job configuration
 type JobConfig struct {
 	Type                string              `json:"type"`
-	Reference           string              `json:"reference,omitempty"`
+	Reference           string              `json:"-"`
 	TranscriptionConfig TranscriptionConfig `json:"transcription_config"`
+}
+
+// MarshalJSON keeps the public helper's reference while using the provider's
+// tracking object. Realtime-only partial/delay options are never sent to batch.
+func (c *JobConfig) MarshalJSON() ([]byte, error) {
+	type wireConfig JobConfig
+	var tracking *struct {
+		Reference string `json:"reference"`
+	}
+	if c.Reference != "" {
+		tracking = &struct {
+			Reference string `json:"reference"`
+		}{c.Reference}
+	}
+	return json.Marshal(struct {
+		wireConfig
+		Tracking *struct {
+			Reference string `json:"reference"`
+		} `json:"tracking,omitempty"`
+	}{wireConfig: wireConfig(*c), Tracking: tracking})
 }
 
 // JobResponse represents the response from job submission
@@ -69,8 +89,31 @@ type JobResponse struct {
 	Status string `json:"status"`
 }
 
+// UnmarshalJSON accepts the job envelope returned by GET /jobs/{id}, as
+// well as the flat ID returned by POST /jobs and older compatible providers.
+func (j *JobResponse) UnmarshalJSON(data []byte) error {
+	type jobFields JobResponse
+	var wire struct {
+		jobFields
+		Job *jobFields `json:"job"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	if wire.Job != nil {
+		*j = JobResponse(*wire.Job)
+	} else {
+		*j = JobResponse(wire.jobFields)
+	}
+	return nil
+}
+
 // TranscriptResponse represents the transcript retrieval response
 type TranscriptResponse struct {
+	Job *struct {
+		ID       string   `json:"id"`
+		Duration *float64 `json:"duration"`
+	} `json:"job,omitempty"`
 	Format   string `json:"format"`
 	Content  string `json:"content"`
 	Metadata struct {
@@ -378,6 +421,18 @@ func (c *BatchClient) GetTranscriptContext(ctx context.Context, jobID, format st
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
+	// json-v2 reports billable file duration under job, not recognition metadata.
+	if transcriptResp.Job != nil && transcriptResp.Job.Duration != nil {
+		if transcriptResp.Job.ID != "" && transcriptResp.Job.ID != jobID {
+			return nil, fmt.Errorf("transcript job id mismatch")
+		}
+		transcriptResp.Metadata.Duration = *transcriptResp.Job.Duration
+	} else if transcriptResp.Metadata.Duration <= 0 {
+		return nil, fmt.Errorf("transcript is missing the billable audio duration")
+	}
+	if math.IsNaN(transcriptResp.Metadata.Duration) || math.IsInf(transcriptResp.Metadata.Duration, 0) || transcriptResp.Metadata.Duration < 0 {
+		return nil, fmt.Errorf("transcript has invalid audio duration")
+	}
 	return &transcriptResp, nil
 }
 

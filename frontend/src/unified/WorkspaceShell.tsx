@@ -20,6 +20,7 @@ import {
 } from './feed'
 import { resolveAiPrompt, type UnifiedSettings } from './hooks/useUnifiedSettings'
 import type { SessionCostView, TransportDiagnostics } from './hooks/useUnifiedWorkspace'
+import { BatchTranscribePanel } from './components/BatchTranscribePanel'
 import { AccountPanel } from './components/AccountPanel'
 import { BrandMark } from './components/BrandMark'
 import { AssistantPanel } from './components/AssistantPanel'
@@ -101,7 +102,7 @@ export interface WorkspaceShellProps {
   onTrainingOptInChange: (optIn: boolean) => Promise<boolean>
 }
 
-type PanelName = 'assistant' | 'history' | 'insights' | 'settings' | 'tools' | 'account'
+type PanelName = 'batch' | 'assistant' | 'history' | 'insights' | 'settings' | 'tools' | 'account'
 
 const statusTone: Record<RecorderStatus, string> = {
   idle: 'neutral',
@@ -499,6 +500,10 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
             <span>{w.nav.live}</span>
             {active && <i className="dt-nav__live" aria-label={w.nav.recordingAria} />}
           </button>
+          <button onClick={() => setPanel('batch')} type="button">
+            <Icon name="paperclip" size={18} />
+            <span>{m.batch.title}</span><small>Pro</small>
+          </button>
           <button
             disabled={studyNavigationDisabled}
             onClick={() => { window.location.assign('/pro/study') }}
@@ -871,6 +876,17 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
         />
       </section>
 
+      <BatchTranscribePanel
+        key={user?.id ?? 'guest'}
+        ownerId={user?.id ?? null}
+        allowed={!!user && account?.effective_plan?.features?.batch === true}
+        open={panel === 'batch'}
+        sourceLanguage={settings.sourceLanguage}
+        onClose={closePanel}
+        onAccount={() => setPanel('account')}
+        onHistory={() => { void onRefreshHistory(); setPanel('history') }}
+        onSaved={async () => { await Promise.all([onRefreshHistory(), onRefreshAccount()]) }}
+      />
       <Sheet
         description={w.sheets.history.description}
         eyebrow={w.sheets.history.eyebrow}
@@ -892,6 +908,10 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
           <button onClick={() => setPanel('insights')} type="button">
             <Icon name="wave" size={18} />
             <span>{w.nav.insights}</span>
+          </button>
+          <button onClick={() => setPanel('batch')} type="button">
+            <Icon name="paperclip" size={18} />
+            <span>{m.batch.title}</span><small>Pro</small>
           </button>
           <button
             disabled={studyNavigationDisabled}

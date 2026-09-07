@@ -383,6 +383,7 @@ func buildHandler() (http.Handler, func()) {
 	mux.HandleFunc("/api/models/defaults", handlers.HandleModelDefaults)
 
 	// Batch transcription
+	mux.Handle("/api/transcribe/batch/quote", protect(http.HandlerFunc(batchHandler.HandleQuote)))
 	batchSubmit := http.Handler(http.HandlerFunc(batchHandler.HandleSubmit))
 	batchWait := http.Handler(http.HandlerFunc(batchHandler.HandleTranscribeAndWait))
 	batchStatus := http.Handler(http.HandlerFunc(batchHandler.HandleStatus))

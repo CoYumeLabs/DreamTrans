@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, type ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { useMessages } from '../../i18n'
 import { Icon } from './Icon'
 
@@ -22,7 +22,6 @@ export function Sheet({
   wide = false,
 }: SheetProps) {
   const m = useMessages()
-  const titleId = useId()
   const dialogRef = useRef<HTMLElement>(null)
 
   useEffect(() => {
@@ -89,7 +88,7 @@ export function Sheet({
     }}>
       <section
         ref={dialogRef}
-        aria-labelledby={titleId}
+        aria-label={title}
         aria-modal="true"
         className={`dt-sheet${wide ? ' dt-sheet--wide' : ''}`}
         role="dialog"
@@ -99,7 +98,7 @@ export function Sheet({
         <header className="dt-sheet__header">
           <div>
             {eyebrow && <p className="dt-eyebrow">{eyebrow}</p>}
-            <h2 id={titleId}>{title}</h2>
+            <h2>{title}</h2>
             {description && <p className="dt-muted">{description}</p>}
           </div>
           <button

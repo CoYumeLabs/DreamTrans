@@ -501,12 +501,13 @@ export async function authFetch<T>(
   endpoint: string,
   options: RequestInit = {},
   acceptedStatuses: readonly number[] = [],
+  timeoutMs = AUTH_REQUEST_TIMEOUT_MS,
 ): Promise<T> {
   const generation = authGeneration
   const token = getAccessToken()
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  }
+  const headers: Record<string, string> = options.body instanceof FormData
+    ? {}
+    : { 'Content-Type': 'application/json' }
 
   // Merge existing headers
   if (options.headers) {
@@ -521,7 +522,7 @@ export async function authFetch<T>(
   const request = await fetchWithAuthTimeout(`${baseUrl}${endpoint}`, {
     ...options,
     headers,
-  })
+  }, timeoutMs)
   const { response } = request
   if (!isCurrentAuthGeneration(generation)) {
     request.release()
@@ -550,7 +551,7 @@ export async function authFetch<T>(
       const retryRequest = await fetchWithAuthTimeout(`${baseUrl}${endpoint}`, {
         ...options,
         headers,
-      })
+      }, timeoutMs)
       try {
         const retryResponse = retryRequest.response
         if (!isCurrentAuthGeneration(generation)) {

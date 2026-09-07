@@ -2,6 +2,7 @@ package speechmatics
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"math"
@@ -211,5 +212,51 @@ func TestWaitForCompletionBoundsInFlightStatusRequest(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
 		t.Fatalf("in-flight status request exceeded wait bound: %v", elapsed)
+	}
+}
+
+// Fixtures follow the public Batch API schema in speechmatics-js-sdk,
+// packages/batch-client/schema/batch.yml (RetrieveJobResponse / JobInfo).
+func TestBatchProviderEnvelopeAndDuration(t *testing.T) {
+	client := NewBatchClient("test-key")
+	payload := `{"job":{"id":"job-1","status":"done","duration":244}}`
+	client.httpClient = &http.Client{Transport: batchRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(payload))}, nil
+	})}
+	job, err := client.GetJobStatusContext(context.Background(), "job-1")
+	if err != nil || job.ID != "job-1" || job.Status != "done" {
+		t.Fatalf("job=%+v err=%v", job, err)
+	}
+	payload = `{"format":"2.9","job":{"id":"job-1","duration":244},"metadata":{"created_at":"2026-09-07T00:00:00Z"},"results":[]}`
+	transcript, err := client.GetTranscriptContext(context.Background(), "job-1", "json-v2")
+	if err != nil || transcript.Metadata.Duration != 244 {
+		t.Fatalf("transcript=%+v err=%v", transcript, err)
+	}
+	payload = `{"format":"2.9","metadata":{},"results":[]}`
+	if _, err := client.GetTranscriptContext(context.Background(), "job-1", "json-v2"); err == nil {
+		t.Fatal("missing duration must not refund paid usage as zero")
+	}
+	payload = `{"job":{"id":"another-job","duration":244},"results":[]}`
+	if _, err := client.GetTranscriptContext(context.Background(), "job-1", "json-v2"); err == nil {
+		t.Fatal("accepted a different job's transcript")
+	}
+}
+
+func TestBatchWireConfigUsesTrackingAndOmitsRealtimeSettings(t *testing.T) {
+	config := JobConfig{Type: "transcription", Reference: "batch-submit:job-1", TranscriptionConfig: TranscriptionConfig{Language: "en", EnablePartials: true, MaxDelay: 5}}
+	data, err := json.Marshal(&config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Tracking struct {
+			Reference string `json:"reference"`
+		} `json:"tracking"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire.Tracking.Reference != config.Reference || strings.Contains(string(data), "enable_partials") || strings.Contains(string(data), "max_delay") {
+		t.Fatalf("invalid wire configuration: %s", data)
 	}
 }

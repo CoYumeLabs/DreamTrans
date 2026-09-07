@@ -231,10 +231,17 @@ func (h *BatchTranscribeHandler) HandleSubmit(w http.ResponseWriter, r *http.Req
 		TranscriptionConfig: speechmatics.TranscriptionConfig{
 			Language:       reqConfig.Language,
 			Diarization:    reqConfig.Diarization,
-			EnablePartials: true,
 			OperatingPoint: reqConfig.OperatingPoint,
-			MaxDelay:       reqConfig.MaxDelay,
 		},
+	}
+
+	if r.URL.Query().Get("audio_format") == "pcm16" {
+		minutes, durationErr := verifiedBatchPCMMinutes(file, handler.Size)
+		if durationErr != nil {
+			http.Error(w, "Invalid PCM audio: expected mono 16 kHz 16-bit WAV", http.StatusBadRequest)
+			return
+		}
+		r = r.WithContext(context.WithValue(r.Context(), batchDurationKey{}, minutes))
 	}
 
 	reservationKey, err := h.createBatchReservation(r)
@@ -434,10 +441,17 @@ func (h *BatchTranscribeHandler) HandleTranscribeAndWait(w http.ResponseWriter, 
 		TranscriptionConfig: speechmatics.TranscriptionConfig{
 			Language:       reqConfig.Language,
 			Diarization:    reqConfig.Diarization,
-			EnablePartials: true,
 			OperatingPoint: reqConfig.OperatingPoint,
-			MaxDelay:       reqConfig.MaxDelay,
 		},
+	}
+
+	if r.URL.Query().Get("audio_format") == "pcm16" {
+		minutes, durationErr := verifiedBatchPCMMinutes(file, handler.Size)
+		if durationErr != nil {
+			http.Error(w, "Invalid PCM audio: expected mono 16 kHz 16-bit WAV", http.StatusBadRequest)
+			return
+		}
+		r = r.WithContext(context.WithValue(r.Context(), batchDurationKey{}, minutes))
 	}
 
 	reservationKey, err := h.createBatchReservation(r)
@@ -655,8 +669,12 @@ func (h *BatchTranscribeHandler) preflightBatchBilling(w http.ResponseWriter, r 
 		http.Error(w, `{"error":"authenticated user required for billing"}`, http.StatusUnauthorized)
 		return false
 	}
+	if err := requirePlanFeature(r.Context(), h.billing, claims.UserID, billing.FeatureBatch); err != nil {
+		writeBatchReservationError(w, err)
+		return false
+	}
 	allowed, err := h.billing.CanAffordUsage(r.Context(), claims.UserID, &billing.UsageRecord{
-		Action: "transcription", Model: "speechmatics-batch-enhanced", Quantity: h.reservationMinutes,
+		Action: "transcription", Model: "speechmatics-batch-enhanced", Quantity: h.preflightReservationMinutes(r),
 	})
 	if err != nil {
 		http.Error(w, `{"error":"billing service unavailable"}`, http.StatusServiceUnavailable)
@@ -665,7 +683,7 @@ func (h *BatchTranscribeHandler) preflightBatchBilling(w http.ResponseWriter, r 
 	if !allowed {
 		http.Error(
 			w,
-			`{"error":"batch transcription requires balance for the configured worst-case duration reservation"}`,
+			`{"error":"insufficient balance for batch transcription reservation"}`,
 			http.StatusPaymentRequired,
 		)
 		return false
@@ -680,7 +698,7 @@ func writeBatchReservationError(w http.ResponseWriter, err error) {
 	}
 	http.Error(
 		w,
-		`{"error":"batch transcription requires balance for the configured worst-case duration reservation"}`,
+		`{"error":"insufficient balance for batch transcription reservation"}`,
 		http.StatusPaymentRequired,
 	)
 }
@@ -704,7 +722,7 @@ func (h *BatchTranscribeHandler) createBatchReservation(r *http.Request) (string
 	_, err = h.billing.RecordUsage(r.Context(), &billing.UsageRecord{
 		UserID: claims.UserID, TenantID: claims.TenantID,
 		Action: "transcription", Model: "speechmatics-batch-enhanced",
-		Quantity:       h.reservationMinutes,
+		Quantity:       h.batchReservationMinutes(r),
 		IdempotencyKey: reservationKey,
 	})
 	return reservationKey, err

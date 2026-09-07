@@ -1,0 +1,13 @@
+.dt-batch { display: grid; gap: 16px; }
+.dt-batch p { margin: 0; line-height: 1.6; }
+.dt-batch__controls, .dt-batch__actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.dt-batch__controls label { display: grid; gap: 8px; min-width: 0; }
+.dt-batch input { max-width: 100%; }
+.dt-batch select, .dt-batch button { padding: 9px 14px; border: 1px solid var(--dt-border); border-radius: 12px; background: var(--dt-surface); color: inherit; }
+.dt-batch button:not(:disabled) { cursor: pointer; }
+.dt-batch button:disabled { opacity: .5; }
+.dt-batch__jobs { display: grid; gap: 12px; list-style: none; padding: 0; margin: 0; }
+.dt-batch__jobs li { display: grid; gap: 8px; padding: 16px; border: 1px solid var(--dt-border); border-radius: 16px; overflow-wrap: anywhere; }
+.dt-batch__jobs li > div:first-child { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+.dt-batch small { color: var(--dt-muted); }
+.dt-batch [role="alert"] { color: #c45035; }

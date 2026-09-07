@@ -78,7 +78,13 @@ CLASSIC_TOKEN_BILLING_MINUTES=10
   `ALLOW_UNMETERED_CLASSIC_TOKEN_WITH_BILLING=true` 才会恢复旧行为；
   `CLASSIC_TOKEN_BILLING_MINUTES` 的固定扣费并不代表真实用量，运营方需
   自行承担余额和上游成本风险。
-- 压缩批量音频在提交前无法可靠推导时长。默认
+- Pro 工作区的「批量转录」支持多文件队列。浏览器将可解码音频转成
+  16 kHz 单声道 PCM WAV；`audio_format=pcm16` 提交由服务端验证完整
+  WAV 结构和字节长度，按向上取整到秒的时长预扣，完成后结算实际用量。
+  `/api/transcribe/batch/quote` 提供当前会员价格的只读预估。每批最多
+  10 个文件，总计 100 MiB；转换后也受 100 MiB 限制。任务标识按账户
+  保存在浏览器，重新打开会继续查询并幂等保存云端历史；未上传文件需重选。
+- 旧客户端直接提交的压缩批量音频在提交前无法可靠推导时长。默认
   `BATCH_BILLING_RESERVATION_MINUTES=10080`，即先预留接口允许的最坏
   7 天，再在完成时用同一笔 reservation 按 Speechmatics 返回的真实时长
   原子结算并退回差额。账户余额（赠送额度 + 钱包）若无法覆盖该最坏
