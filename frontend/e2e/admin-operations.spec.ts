@@ -57,7 +57,7 @@ test('agent portal exposes own codes and settlement request without administrati
   await route.fulfill({ json: data })
  })
  await page.goto('/pro/admin')
- await expect(page.getByRole('heading', { name: '我的代理账户' })).toBeVisible()
+ await expect(page.getByRole('heading', { name: '我的代理账户', level: 1 })).toBeVisible()
  await expect(page.getByRole('button', { name: '用户', exact: true })).toHaveCount(0)
  await expect(page.getByRole('button', { name: '代理与结算', exact: true })).toHaveCount(0)
  page.once('dialog', dialog => dialog.accept())
