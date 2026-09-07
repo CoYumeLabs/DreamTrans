@@ -123,7 +123,7 @@
 
 ### A11 · P2 · 历史会话费用与实际账本不一致
 
-**批量关联缺失：** 批量预扣/结算记录没有 `SessionID`，前端后来创建云端会话时也没有把 job 与 usage 绑定。因此历史的按 session ID 汇总无法读到批量费用，显示为没有费用标记，而非证明该转录免费。证据：[批量结算](../../backend/internal/handlers/batch_transcribe.go#L885)、[结果保存](../../frontend/src/unified/workspace/batchTranscription.ts#L81)、[历史展示](../../frontend/src/unified/components/HistoryPanel.tsx#L155)。
+**批量关联缺失：** 批量预扣/结算记录没有 `SessionID`，前端后来创建云端会话时也没有把 job 与 usage 绑定。因此历史的按 session ID 汇总无法读到批量费用，显示为没有费用标记，而非证明该转录免费。证据：[批量结算](../../backend/internal/handlers/batch_transcribe.go#L885)、[结果保存](../../frontend/src/unified/workspace/batchTranscription.ts#L68)、[历史展示](../../frontend/src/unified/components/HistoryPanel.tsx#L155)。
 
 **退差额遗漏：** 会话汇总只 `SUM(charge_usd)`，没有减 `route_discount_refunds`；新的管理数据面板已经减了，两处统计口径不同。证据：[GetSessionCostSummaries](../../backend/internal/billing/analytics.go#L300)、[管理汇总](../../backend/internal/handlers/console_dashboard.go#L27)。
 
