@@ -480,10 +480,16 @@ export function AccountPanel({
             <dt>{b.grant}</dt>
             <dd>{formatUSD(grantUsd)}</dd>
           </div>
+          {(account.gift_usd ?? 0) > 0 && (
+            <div className="dt-billing-rows__sub">
+              <dt>{b.giftBalance}<small>{b.giftHint}</small></dt>
+              <dd>{formatUSD(account.gift_usd ?? 0)}</dd>
+            </div>
+          )}
           {account.grants.filter((grant) => grant.remaining_usd > 0).map((grant) => (
             <div className="dt-billing-rows__sub" key={grant.id}>
               <dt>
-                {b.grants[grant.kind] ?? grant.kind}
+                {b.grants[grant.kind] ?? grant.kind}{grant.funding === 'gift' ? ` · ${b.giftBalance}` : ''}
                 {grant.expires_at
                   ? <small>{b.expires(formatDate(grant.expires_at))}</small>
                   : <small>{b.neverExpires}</small>}
@@ -498,6 +504,15 @@ export function AccountPanel({
               {discount && <small>{discount}</small>}
               {(account.promotion_discount_percent ?? 0) > 0 && account.promotion_discount_until && (
                 <small>{b.referral.discount(account.promotion_discount_percent!, formatDate(account.promotion_discount_until))}</small>
+              )}
+              {account.route && (
+                <small>
+                  {account.route.gift_funded
+                    ? b.routeGift
+                    : account.route.training
+                      ? b.routeTraining(account.training_discount_percent)
+                      : b.routeStandard}
+                </small>
               )}
             </dd>
           </div>

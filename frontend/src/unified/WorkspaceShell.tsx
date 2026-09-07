@@ -34,7 +34,6 @@ import { Icon } from './components/Icon'
 import { InsightsPanel } from './components/InsightsPanel'
 import { AnnouncementBanner } from './components/AnnouncementBanner'
 import { OnboardingDialog } from './components/OnboardingDialog'
-import { TrainingProgramDialog } from './components/TrainingProgramDialog'
 import { RecorderBar, type RecorderStatus } from './components/RecorderBar'
 import { SettingsPanel } from './components/SettingsPanel'
 import { Sheet } from './components/Sheet'
@@ -165,26 +164,6 @@ function consumeBillingReturn(): BillingReturn {
 const BILLING_RETURN_REFRESH_DELAYS_MS = [0, 3_000, 6_000]
 
 /** Reads and strips `?session=<id>` left by 学习空间 deep links. */
-function trainingPromptKey(ownerId: string | null): string {
-  return `yufolo.training-prompt-dismissed:${ownerId ?? 'guest'}`
-}
-
-function readTrainingPromptDismissed(ownerId: string | null): boolean {
-  try {
-    return window.localStorage.getItem(trainingPromptKey(ownerId)) === '1'
-  } catch {
-    return false
-  }
-}
-
-function writeTrainingPromptDismissed(ownerId: string | null): void {
-  try {
-    window.localStorage.setItem(trainingPromptKey(ownerId), '1')
-  } catch {
-    // Storage may be unavailable; the prompt simply returns next visit.
-  }
-}
-
 function consumeSessionDeepLink(): string | null {
   if (typeof window === 'undefined') return null
   const url = new URL(window.location.href)
@@ -408,25 +387,6 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
     const steps = workspaceTourSteps(m)
     return ragEnabled ? steps : steps.filter((step) => step.id !== 'assistant')
   }, [ragEnabled, m])
-  // Accounts that finished onboarding before the programme existed get asked
-  // once; "later" is remembered per account in this browser, and Settings
-  // keeps the switch.
-  const [trainingPromptDismissed, setTrainingPromptDismissed] = useState(false)
-  useEffect(() => {
-    setTrainingPromptDismissed(readTrainingPromptDismissed(user?.id ?? null))
-  }, [user?.id])
-  const dismissTrainingPrompt = useCallback(() => {
-    writeTrainingPromptDismissed(user?.id ?? null)
-    setTrainingPromptDismissed(true)
-  }, [user?.id])
-  const trainingPromptOpen = Boolean(user)
-    && trainingProgram.available
-    && user?.training_opt_in === null
-    && onboarding.phase === 'done'
-    && recorderStatus === 'idle'
-    && panel === null
-    && !trainingPromptDismissed
-
   const replayOnboarding = useCallback(() => {
     closePanel()
     onboarding.openWizard()
@@ -1024,6 +984,7 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
           ragEnabled={ragEnabled}
           recorderStatus={recorderStatus}
           settings={settings}
+          trainingRoute={account?.route}
           trainingOptIn={user?.training_opt_in ?? null}
           trainingProgram={trainingProgram}
         />
@@ -1155,13 +1116,6 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
           }}
           onSettingsChange={onSettingsChange}
           onTrainingOptInChange={props.onTrainingOptInChange}
-        />
-      )}
-      {trainingPromptOpen && (
-        <TrainingProgramDialog
-          onAnswer={props.onTrainingOptInChange}
-          onDismiss={dismissTrainingPrompt}
-          program={trainingProgram}
         />
       )}
       {onboarding.phase === 'tour' && (

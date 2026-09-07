@@ -155,11 +155,11 @@ func (s *Service) RecordTopup(ctx context.Context, input *TopupInput) (*AccountB
 		stripeObjectID = input.StripeObjectID
 	}
 	err = tx.QueryRowContext(ctx, `
-		INSERT INTO payments (account_id, kind, amount_usd, bonus_usd, stripe_object_id, status, description)
-		VALUES ($1, 'topup', $2, $3, $4, 'succeeded', $5)
+		INSERT INTO payments (account_id, kind, amount_usd, bonus_usd, stripe_object_id, status, description, training_opt_in)
+		VALUES ($1, 'topup', $2, $3, $4, 'succeeded', $5, $6)
 		ON CONFLICT (stripe_object_id) WHERE stripe_object_id IS NOT NULL DO NOTHING
 		RETURNING id
-	`, acct.ID, input.AmountUSD, input.BonusUSD, stripeObjectID, strings.TrimSpace(input.Description)).Scan(&paymentID)
+	`, acct.ID, input.AmountUSD, input.BonusUSD, stripeObjectID, strings.TrimSpace(input.Description), acct.TrainingOptIn).Scan(&paymentID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrDuplicatePayment
 	}

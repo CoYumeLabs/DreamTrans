@@ -8,15 +8,19 @@ import (
 
 // Tenant represents an organization/company in the multi-tenant system
 type Tenant struct {
-	ID              string    `json:"id"`
-	Name            string    `json:"name"`
-	Slug            string    `json:"slug"`
-	Plan            string    `json:"plan"` // free, pro, enterprise
-	APIQuotaMonthly int       `json:"api_quota_monthly"`
-	StorageQuotaGB  int       `json:"storage_quota_gb"`
-	MaxSessions     int       `json:"max_sessions"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+	Plan string `json:"plan"` // free, pro, enterprise
+	// Kind is personal or institution; institutions never reach the
+	// training provider account. SpeechmaticsRoute pins the whole tenant.
+	Kind              string    `json:"kind"`
+	SpeechmaticsRoute string    `json:"speechmatics_route"`
+	APIQuotaMonthly   int       `json:"api_quota_monthly"`
+	StorageQuotaGB    int       `json:"storage_quota_gb"`
+	MaxSessions       int       `json:"max_sessions"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // User represents a user account
@@ -31,10 +35,13 @@ type User struct {
 	EmailVerified bool   `json:"email_verified"`
 	// TrainingOptIn records the user's answer to the Speechmatics training
 	// program: nil = not asked yet, false = declined, true = joined.
-	TrainingOptIn *bool      `json:"training_opt_in"`
-	LastLoginAt   *time.Time `json:"last_login_at,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	TrainingOptIn *bool `json:"training_opt_in"`
+	// SpeechmaticsRoute is an administrator pin ("training"/"standard"),
+	// empty when the account follows the normal rules.
+	SpeechmaticsRoute string     `json:"speechmatics_route"`
+	LastLoginAt       *time.Time `json:"last_login_at,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 // UserWithTenant includes tenant information

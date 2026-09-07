@@ -28,6 +28,11 @@ type accountRow struct {
 	CustomMarkup       sql.NullFloat64
 	StorageBytes       int64
 	TrainingOptIn      sql.NullBool
+	// UserRoute / TenantRoute are administrator pins to one provider
+	// account; TenantKind "institution" never trains.
+	UserRoute   sql.NullString
+	TenantKind  string
+	TenantRoute sql.NullString
 
 	plan           *Plan
 	freePlan       *Plan
@@ -43,14 +48,15 @@ const accountSelectColumns = `a.id, a.owner_type, a.owner_id, a.plan_code, a.wal
 	a.lifetime_charged_usd, a.member_until, a.status, a.stripe_customer_id,
 	a.auto_topup_threshold_usd, a.auto_topup_amount_usd, a.custom_discount_percent,
 	a.custom_markup_percent, a.storage_bytes, u.id, COALESCE(CAST(u.tenant_id AS TEXT), ''),
-	u.training_opt_in`
+	u.training_opt_in, u.speechmatics_route, COALESCE(t.kind, 'personal'), t.speechmatics_route`
 
 func scanAccountRow(row planScanner) (*accountRow, error) {
 	var acct accountRow
 	if err := row.Scan(&acct.ID, &acct.OwnerType, &acct.OwnerID, &acct.PlanCode, &acct.WalletUSD,
 		&acct.LifetimeChargedUSD, &acct.MemberUntil, &acct.Status, &acct.StripeCustomerID,
 		&acct.AutoTopupThreshold, &acct.AutoTopupAmount, &acct.CustomDiscount,
-		&acct.CustomMarkup, &acct.StorageBytes, &acct.UserID, &acct.TenantID, &acct.TrainingOptIn); err != nil {
+		&acct.CustomMarkup, &acct.StorageBytes, &acct.UserID, &acct.TenantID, &acct.TrainingOptIn,
+		&acct.UserRoute, &acct.TenantKind, &acct.TenantRoute); err != nil {
 		return nil, err
 	}
 	return &acct, nil
@@ -175,6 +181,7 @@ func lockAccountForUserTx(ctx context.Context, tx *sql.Tx, userID string) (*acco
 		SELECT ` + accountSelectColumns + `
 		FROM users u
 		JOIN billing_accounts a ON a.id = u.billing_account_id
+		LEFT JOIN tenants t ON t.id = u.tenant_id
 		WHERE u.id = $1
 		FOR UPDATE OF a`
 	acct, err := scanAccountRow(tx.QueryRowContext(ctx, query, userID))
@@ -203,6 +210,7 @@ func (s *Service) accountForUser(ctx context.Context, userID string) (*accountRo
 		SELECT ` + accountSelectColumns + `
 		FROM users u
 		JOIN billing_accounts a ON a.id = u.billing_account_id
+		LEFT JOIN tenants t ON t.id = u.tenant_id
 		WHERE u.id = $1`
 	acct, err := scanAccountRow(s.db.QueryRowContext(ctx, query, userID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -235,15 +243,18 @@ type grantLot struct {
 	ID        string
 	Remaining float64
 	ExpiresAt sql.NullTime
+	Funding   string
 }
 
+// openGrantsTx lists spendable lots: gift money first, then paid bonuses,
+// each earliest-expiry first.
 func openGrantsTx(ctx context.Context, tx txQueryer, accountID string, now time.Time) ([]grantLot, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, remaining_usd, expires_at
+		SELECT id, remaining_usd, expires_at, funding
 		FROM grants
 		WHERE account_id = $1 AND remaining_usd > 0
 		  AND (expires_at IS NULL OR expires_at > $2)
-		ORDER BY expires_at ASC NULLS LAST, created_at ASC
+		ORDER BY CASE WHEN funding = 'gift' THEN 0 ELSE 1 END, expires_at ASC NULLS LAST, created_at ASC
 		FOR UPDATE
 	`, accountID, now)
 	if err != nil {
@@ -253,20 +264,12 @@ func openGrantsTx(ctx context.Context, tx txQueryer, accountID string, now time.
 	var lots []grantLot
 	for rows.Next() {
 		var lot grantLot
-		if err := rows.Scan(&lot.ID, &lot.Remaining, &lot.ExpiresAt); err != nil {
+		if err := rows.Scan(&lot.ID, &lot.Remaining, &lot.ExpiresAt, &lot.Funding); err != nil {
 			return nil, err
 		}
 		lots = append(lots, lot)
 	}
 	return lots, rows.Err()
-}
-
-func sumOpenGrants(lots []grantLot) float64 {
-	total := 0.0
-	for _, lot := range lots {
-		total += lot.Remaining
-	}
-	return total
 }
 
 type ledgerEntry struct {
@@ -314,8 +317,18 @@ func (e *insufficientBalanceError) Error() string {
 
 func (e *insufficientBalanceError) Unwrap() error { return ErrInsufficientBalance }
 
-// debitAccountTx takes amount from grants (earliest expiry first) then the
-// wallet, recording one ledger row per bucket touched.
+// debitSplit is how one charge was funded.
+type debitSplit struct {
+	Grant  float64 // all grants, gift and paid
+	Gift   float64 // the gift part of Grant
+	Wallet float64
+}
+
+// debitAccountTx takes amount from grants then the wallet, recording one
+// ledger row per bucket touched. Gift lots go first so free money is spent
+// before paid money. A record priced for a paid session (preferPaid) skips
+// gift lots. If paid funds run out the reservation fails before provider work;
+// discounted prices must never fall back to gift balance.
 func debitAccountTx(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -324,27 +337,33 @@ func debitAccountTx(
 	usageID string,
 	description string,
 	allowNegative bool,
+	preferPaid bool,
 	now time.Time,
-) (fromGrant, fromWallet float64, err error) {
+) (debitSplit, error) {
+	var split debitSplit
 	if amount <= balanceEpsilon {
-		return 0, 0, nil
+		return split, nil
 	}
 	lots, err := openGrantsTx(ctx, tx, acct.ID, now)
 	if err != nil {
-		return 0, 0, err
+		return split, err
 	}
 	remaining := amount
-	available := sumOpenGrants(lots) + acct.WalletUSD
+	available := acct.WalletUSD
+	for _, lot := range lots {
+		if !preferPaid || lot.Funding == FundingPaid {
+			available += lot.Remaining
+		}
+	}
 	if !allowNegative && available+balanceEpsilon < amount {
-		return 0, 0, &insufficientBalanceError{
+		return split, &insufficientBalanceError{
 			Available: roundUSD(available), Required: amount, Topup: acct.autoTopupRequest(),
 		}
 	}
-	for i := range lots {
-		if remaining <= balanceEpsilon {
-			break
+	takeLot := func(lot *grantLot) error {
+		if remaining <= balanceEpsilon || lot.Remaining <= balanceEpsilon {
+			return nil
 		}
-		lot := &lots[i]
 		take := lot.Remaining
 		if take > remaining {
 			take = remaining
@@ -352,7 +371,7 @@ func debitAccountTx(
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE grants SET remaining_usd = remaining_usd - $1 WHERE id = $2
 		`, take, lot.ID); err != nil {
-			return 0, 0, err
+			return err
 		}
 		lotID := lot.ID
 		if err := insertLedgerEntryTx(ctx, tx, acct, &ledgerEntry{
@@ -360,20 +379,60 @@ func debitAccountTx(
 			BalanceAfter: lot.Remaining - take, Type: "debit",
 			ReferenceType: "usage", ReferenceID: &usageID, Description: description,
 		}); err != nil {
-			return 0, 0, err
+			return err
 		}
-		fromGrant += take
+		lot.Remaining -= take
+		split.Grant += take
+		if lot.Funding == FundingGift {
+			split.Gift += take
+		}
 		remaining -= take
+		return nil
 	}
-	if remaining > balanceEpsilon {
-		acct.WalletUSD = roundUSD(acct.WalletUSD - remaining)
+	takeWallet := func(all bool) error {
+		if remaining <= balanceEpsilon {
+			return nil
+		}
+		take := remaining
+		if !all && take > acct.WalletUSD {
+			take = acct.WalletUSD
+		}
+		if take <= balanceEpsilon {
+			return nil
+		}
+		acct.WalletUSD = roundUSD(acct.WalletUSD - take)
 		if err := insertLedgerEntryTx(ctx, tx, acct, &ledgerEntry{
-			Bucket: BucketWallet, Amount: -remaining, BalanceAfter: acct.WalletUSD,
+			Bucket: BucketWallet, Amount: -take, BalanceAfter: acct.WalletUSD,
 			Type: "debit", ReferenceType: "usage", ReferenceID: &usageID, Description: description,
 		}); err != nil {
-			return 0, 0, err
+			return err
 		}
-		fromWallet = remaining
+		split.Wallet += take
+		remaining -= take
+		return nil
+	}
+	if preferPaid {
+		for i := range lots {
+			if lots[i].Funding == FundingPaid {
+				if err := takeLot(&lots[i]); err != nil {
+					return split, err
+				}
+			}
+		}
+		if err := takeWallet(false); err != nil {
+			return split, err
+		}
+	}
+	for i := range lots {
+		if preferPaid && lots[i].Funding == FundingGift {
+			continue
+		}
+		if err := takeLot(&lots[i]); err != nil {
+			return split, err
+		}
+	}
+	if err := takeWallet(true); err != nil {
+		return split, err
 	}
 	acct.LifetimeChargedUSD += amount
 	if _, err := tx.ExecContext(ctx, `
@@ -381,9 +440,9 @@ func debitAccountTx(
 		SET wallet_usd = $1, lifetime_charged_usd = lifetime_charged_usd + $2, updated_at = NOW()
 		WHERE id = $3
 	`, acct.WalletUSD, amount, acct.ID); err != nil {
-		return 0, 0, err
+		return split, err
 	}
-	return fromGrant, fromWallet, nil
+	return split, nil
 }
 
 // creditUsageRefundTx returns money for one usage row: the wallet part back
@@ -398,10 +457,10 @@ func creditUsageRefundTx(
 	grantUSD, walletUSD float64,
 	description string,
 	now time.Time,
-) error {
+) (giftReturned float64, err error) {
 	total := grantUSD + walletUSD
 	if total <= balanceEpsilon {
-		return nil
+		return 0, nil
 	}
 	if walletUSD > balanceEpsilon {
 		acct.WalletUSD = roundUSD(acct.WalletUSD + walletUSD)
@@ -409,37 +468,38 @@ func creditUsageRefundTx(
 			Bucket: BucketWallet, Amount: walletUSD, BalanceAfter: acct.WalletUSD,
 			Type: "refund", ReferenceType: "usage", ReferenceID: &usageID, Description: description,
 		}); err != nil {
-			return err
+			return 0, err
 		}
 	}
 	if grantUSD > balanceEpsilon {
 		rows, err := tx.QueryContext(ctx, `
-			SELECT grant_id, -SUM(amount)
-			FROM balance_transactions
-			WHERE reference_type = 'usage' AND reference_id = $1
-			  AND bucket = 'grant' AND grant_id IS NOT NULL
-			GROUP BY grant_id
-			ORDER BY MIN(created_at) DESC
+			SELECT bt.grant_id, -SUM(bt.amount), MIN(g.funding)
+			FROM balance_transactions bt JOIN grants g ON g.id = bt.grant_id
+			WHERE bt.reference_type = 'usage' AND bt.reference_id = $1
+			  AND bt.bucket = 'grant' AND bt.grant_id IS NOT NULL
+			GROUP BY bt.grant_id
+			ORDER BY MIN(bt.created_at) DESC
 		`, usageID)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		type allocation struct {
 			grantID string
 			net     float64
+			funding string
 		}
 		var allocations []allocation
 		for rows.Next() {
 			var item allocation
-			if err := rows.Scan(&item.grantID, &item.net); err != nil {
+			if err := rows.Scan(&item.grantID, &item.net, &item.funding); err != nil {
 				_ = rows.Close()
-				return err
+				return 0, err
 			}
 			allocations = append(allocations, item)
 		}
 		_ = rows.Close()
 		if err := rows.Err(); err != nil {
-			return err
+			return 0, err
 		}
 		remaining := grantUSD
 		for _, item := range allocations {
@@ -458,30 +518,34 @@ func creditUsageRefundTx(
 			if err := tx.QueryRowContext(ctx, `
 				SELECT expires_at, remaining_usd FROM grants WHERE id = $1 FOR UPDATE
 			`, item.grantID).Scan(&expiresAt, &current); err != nil {
-				return err
+				return 0, err
 			}
 			targetGrant := item.grantID
 			if expiresAt.Valid && !expiresAt.Time.After(now) {
+				// The replacement keeps the funding class so gift money stays gift.
 				if err := tx.QueryRowContext(ctx, `
-					INSERT INTO grants (account_id, kind, amount_usd, remaining_usd, expires_at, note)
-					VALUES ($1, $2, $3, $3, $4, $5)
+					INSERT INTO grants (account_id, kind, amount_usd, remaining_usd, expires_at, note, funding)
+					VALUES ($1, $2, $3, $3, $4, $5, $6)
 					RETURNING id
 				`, acct.ID, GrantSettleReturn, restore, now.Add(30*24*time.Hour),
-					"returned from an expired grant: "+description).Scan(&targetGrant); err != nil {
-					return err
+					"returned from an expired grant: "+description, item.funding).Scan(&targetGrant); err != nil {
+					return 0, err
 				}
 				current = 0
 			} else if _, err := tx.ExecContext(ctx, `
 				UPDATE grants SET remaining_usd = remaining_usd + $1 WHERE id = $2
 			`, restore, item.grantID); err != nil {
-				return err
+				return 0, err
 			}
 			grantID := targetGrant
 			if err := insertLedgerEntryTx(ctx, tx, acct, &ledgerEntry{
 				Bucket: BucketGrant, GrantID: &grantID, Amount: restore, BalanceAfter: current + restore,
 				Type: "refund", ReferenceType: "usage", ReferenceID: &usageID, Description: description,
 			}); err != nil {
-				return err
+				return 0, err
+			}
+			if item.funding == FundingGift {
+				giftReturned += restore
 			}
 			remaining -= restore
 		}
@@ -493,7 +557,7 @@ func creditUsageRefundTx(
 				Bucket: BucketWallet, Amount: remaining, BalanceAfter: acct.WalletUSD,
 				Type: "refund", ReferenceType: "usage", ReferenceID: &usageID, Description: description,
 			}); err != nil {
-				return err
+				return 0, err
 			}
 		}
 	}
@@ -502,12 +566,12 @@ func creditUsageRefundTx(
 	} else {
 		acct.LifetimeChargedUSD = 0
 	}
-	_, err := tx.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		UPDATE billing_accounts
 		SET wallet_usd = $1, lifetime_charged_usd = GREATEST(0, lifetime_charged_usd - $2), updated_at = NOW()
 		WHERE id = $3
 	`, acct.WalletUSD, total, acct.ID)
-	return err
+	return giftReturned, err
 }
 
 // ---------------------------------------------------------------------------
@@ -599,12 +663,34 @@ func (s *Service) recordUsageBatchOnce(ctx context.Context, records []*UsageReco
 		return nil, err
 	}
 	policy := &snapshotPolicy{BillingEnabled: enabled, AllowNegativeBalance: allowNegative}
-	pricing := acct.pricing()
+	basePricing := acct.pricing()
+	// One decision per session: handlers attach it; records without one
+	// (batch uploads, legacy tokens, AI features) decide on the spot.
+	var autoRoute *RouteDecision
+	routeFor := func(rec *UsageRecord) (RouteDecision, error) {
+		if rec.Route != nil {
+			return *rec.Route, nil
+		}
+		if autoRoute == nil {
+			d, err := s.routeDecisionTx(ctx, tx, acct, now)
+			if err != nil {
+				return RouteDecision{}, err
+			}
+			autoRoute = &d
+		}
+		return *autoRoute, nil
+	}
 
 	costs := make([]float64, len(records))
 	breakdowns := make([]usageCostBreakdown, len(records))
+	routes := make([]RouteDecision, len(records))
 	for i, rec := range records {
-		breakdown, err := priceUsage(rec, view, pricing)
+		route, err := routeFor(rec)
+		if err != nil {
+			return nil, err
+		}
+		routes[i] = route
+		breakdown, err := priceUsage(rec, view, applyRoute(basePricing, route))
 		if err != nil {
 			return nil, fmt.Errorf("usage record %d pricing: %w", i, err)
 		}
@@ -616,7 +702,9 @@ func (s *Service) recordUsageBatchOnce(ctx context.Context, records []*UsageReco
 			breakdown.MarginUSD -= breakdown.ChargeUSD
 			breakdown.ChargeUSD = 0
 		}
-		breakdown.Snapshot = annotatePricingSnapshot(breakdown.Snapshot, breakdown.ChargeUSD, policy)
+		recordPolicy := *policy
+		recordPolicy.GiftDiscountAllowed = route.GiftDiscountAllowed
+		breakdown.Snapshot = annotatePricingSnapshot(breakdown.Snapshot, breakdown.ChargeUSD, &recordPolicy)
 		breakdowns[i] = breakdown
 		costs[i] = breakdown.ChargeUSD
 	}
@@ -625,10 +713,21 @@ func (s *Service) recordUsageBatchOnce(ctx context.Context, records []*UsageReco
 		id     string
 		action string
 		cost   float64
+		route  RouteDecision
+		// discounted records are paid for with paid money first so gift
+		// balance never buys a discounted price.
+		discounted bool
+	}
+	discountedRecord := func(route RouteDecision) bool {
+		if route.GiftFunded || route.GiftDiscountAllowed {
+			return false
+		}
+		return route.Training || basePricing.PromotionDiscountPercent > 0
 	}
 	inserted := make([]insertedUsage, 0, len(records))
 	for i, rec := range records {
 		breakdown := breakdowns[i]
+		route := routes[i]
 		var idempotencyKey any
 		if rec.IdempotencyKey != "" {
 			idempotencyKey = rec.IdempotencyKey
@@ -640,15 +739,15 @@ func (s *Service) recordUsageBatchOnce(ctx context.Context, records []*UsageReco
 				 input_tokens, cached_input_tokens, cache_write_tokens, output_tokens,
 				 charge_usd, upstream_cost_usd, margin_usd, pricing_snapshot,
 				 cost_attribution, month_key, idempotency_key, provider_operation_fingerprint,
-				 feature, project_id)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+				 feature, project_id, funding_route, training_route)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
 			ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
 			RETURNING id
 		`, rec.TenantID, rec.UserID, acct.ID, rec.Action, rec.Quantity, rec.SessionID, rec.Model,
 			rec.InputTokens, rec.CachedInputTokens, rec.CacheWriteTokens, rec.OutputTokens,
 			breakdown.ChargeUSD, breakdown.UpstreamUSD, breakdown.MarginUSD, breakdown.Snapshot,
 			breakdown.Attribution, monthKey, idempotencyKey, rec.OperationFingerprint,
-			strings.TrimSpace(rec.Feature), rec.ProjectID,
+			strings.TrimSpace(rec.Feature), rec.ProjectID, route.fundingLabel(), route.routeLabel(),
 		).Scan(&usageID)
 		if errors.Is(insertErr, sql.ErrNoRows) && idempotencyKey != nil {
 			var (
@@ -681,15 +780,17 @@ func (s *Service) recordUsageBatchOnce(ctx context.Context, records []*UsageReco
 					    input_tokens = $5, cached_input_tokens = $6, cache_write_tokens = $7,
 					    output_tokens = $8, charge_usd = $9, upstream_cost_usd = $10, margin_usd = $11,
 					    pricing_snapshot = $12, cost_attribution = $13, month_key = $14,
-					    grant_usd = 0, wallet_usd = 0, refunded_at = NULL, settled_at = NULL
+					    grant_usd = 0, wallet_usd = 0, gift_usd = 0, refunded_at = NULL, settled_at = NULL,
+					    funding_route = $16, training_route = $17
 					WHERE id = $15 AND refunded_at IS NOT NULL
 				`, acct.ID, rec.Quantity, rec.SessionID, rec.Model, rec.InputTokens,
 					rec.CachedInputTokens, rec.CacheWriteTokens, rec.OutputTokens,
 					breakdown.ChargeUSD, breakdown.UpstreamUSD, breakdown.MarginUSD,
-					breakdown.Snapshot, breakdown.Attribution, monthKey, existingID); err != nil {
+					breakdown.Snapshot, breakdown.Attribution, monthKey, existingID,
+					route.fundingLabel(), route.routeLabel()); err != nil {
 					return nil, err
 				}
-				inserted = append(inserted, insertedUsage{id: existingID, action: rec.Action, cost: breakdown.ChargeUSD})
+				inserted = append(inserted, insertedUsage{id: existingID, action: rec.Action, cost: breakdown.ChargeUSD, route: route, discounted: discountedRecord(route)})
 				continue
 			}
 			costs[i] = existingCost
@@ -699,20 +800,20 @@ func (s *Service) recordUsageBatchOnce(ctx context.Context, records []*UsageReco
 		if insertErr != nil {
 			return nil, insertErr
 		}
-		inserted = append(inserted, insertedUsage{id: usageID, action: rec.Action, cost: breakdown.ChargeUSD})
+		inserted = append(inserted, insertedUsage{id: usageID, action: rec.Action, cost: breakdown.ChargeUSD, route: route, discounted: discountedRecord(route)})
 	}
 
 	for _, usage := range inserted {
 		if usage.cost <= balanceEpsilon {
 			continue
 		}
-		fromGrant, fromWallet, err := debitAccountTx(ctx, tx, acct, usage.cost, usage.id, usage.action, allowNegative, now)
+		split, err := debitAccountTx(ctx, tx, acct, usage.cost, usage.id, usage.action, allowNegative, usage.discounted && usage.action == "transcription", now)
 		if err != nil {
 			return nil, err
 		}
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE usage_logs SET grant_usd = $1, wallet_usd = $2 WHERE id = $3
-		`, fromGrant, fromWallet, usage.id); err != nil {
+			UPDATE usage_logs SET grant_usd = $1, wallet_usd = $2, gift_usd = $3 WHERE id = $4
+		`, split.Grant, split.Wallet, split.Gift, usage.id); err != nil {
 			return nil, err
 		}
 	}
@@ -766,19 +867,20 @@ func settleUsageTx(ctx context.Context, tx *sql.Tx, idempotencyKey string, actua
 		usageID, reservedUser, reservedTenant, reservedAction   string
 		reservedModel, reservedAttribution, reservedFingerprint string
 		reservedCharge, reservedGrant, reservedWallet           float64
-		reservedUpstream, reservedMargin                        float64
+		reservedGift, reservedUpstream, reservedMargin          float64
 		reservedSnapshot                                        []byte
+		reservedFunding                                         sql.NullString
 		refundedAt, settledAt                                   sql.NullTime
 	)
 	if err := tx.QueryRowContext(ctx, `
 		SELECT id, user_id, tenant_id, action, COALESCE(model, ''), cost_attribution,
-		       RTRIM(provider_operation_fingerprint), charge_usd, grant_usd, wallet_usd,
-		       upstream_cost_usd, margin_usd, pricing_snapshot, refunded_at, settled_at
+		       RTRIM(provider_operation_fingerprint), charge_usd, grant_usd, wallet_usd, gift_usd,
+		       upstream_cost_usd, margin_usd, pricing_snapshot, funding_route, refunded_at, settled_at
 		FROM usage_logs WHERE idempotency_key = $1 FOR UPDATE
 	`, idempotencyKey).Scan(&usageID, &reservedUser, &reservedTenant, &reservedAction,
 		&reservedModel, &reservedAttribution, &reservedFingerprint, &reservedCharge,
-		&reservedGrant, &reservedWallet, &reservedUpstream, &reservedMargin,
-		&reservedSnapshot, &refundedAt, &settledAt); err != nil {
+		&reservedGrant, &reservedWallet, &reservedGift, &reservedUpstream, &reservedMargin,
+		&reservedSnapshot, &reservedFunding, &refundedAt, &settledAt); err != nil {
 		return 0, err
 	}
 	if refundedAt.Valid {
@@ -824,12 +926,13 @@ func settleUsageTx(ctx context.Context, tx *sql.Tx, idempotencyKey string, actua
 		breakdown.MarginUSD -= charge
 		charge = 0
 	}
-	grantUSD, walletUSD := reservedGrant, reservedWallet
+	grantUSD, walletUSD, giftUSD := reservedGrant, reservedWallet, reservedGift
 	delta := charge - reservedCharge
 	description := actual.Action + " usage settlement"
+	preferPaid := reservedFunding.Valid && reservedFunding.String == FundingPaid && actual.Action == "transcription" && !policy.GiftDiscountAllowed
 	switch {
 	case delta > balanceEpsilon:
-		fromGrant, fromWallet, debitErr := debitAccountTx(ctx, tx, acct, delta, usageID, description, policy.AllowNegativeBalance, now)
+		split, debitErr := debitAccountTx(ctx, tx, acct, delta, usageID, description, policy.AllowNegativeBalance, preferPaid, now)
 		if debitErr != nil {
 			if !errors.Is(debitErr, ErrInsufficientBalance) || !actual.AbsorbSettlementShortfall {
 				return 0, debitErr
@@ -839,8 +942,9 @@ func settleUsageTx(ctx context.Context, tx *sql.Tx, idempotencyKey string, actua
 			breakdown.MarginUSD -= delta
 			charge = reservedCharge
 		} else {
-			grantUSD += fromGrant
-			walletUSD += fromWallet
+			grantUSD += split.Grant
+			walletUSD += split.Wallet
+			giftUSD += split.Gift
 		}
 	case delta < -balanceEpsilon:
 		refund := -delta
@@ -852,11 +956,16 @@ func settleUsageTx(ctx context.Context, tx *sql.Tx, idempotencyKey string, actua
 		if grantPart > grantUSD {
 			grantPart = grantUSD
 		}
-		if err := creditUsageRefundTx(ctx, tx, acct, usageID, grantPart, walletPart, description, now); err != nil {
+		giftReturned, err := creditUsageRefundTx(ctx, tx, acct, usageID, grantPart, walletPart, description, now)
+		if err != nil {
 			return 0, err
 		}
 		walletUSD -= walletPart
 		grantUSD -= grantPart
+		giftUSD -= giftReturned
+		if giftUSD < 0 {
+			giftUSD = 0
+		}
 	}
 	breakdown.ChargeUSD = charge
 	if err := validateUsageCostBreakdown(breakdown); err != nil {
@@ -869,12 +978,12 @@ func settleUsageTx(ctx context.Context, tx *sql.Tx, idempotencyKey string, actua
 		    cached_input_tokens = $5, cache_write_tokens = $6, output_tokens = $7,
 		    charge_usd = $8, grant_usd = $9, wallet_usd = $10, upstream_cost_usd = $11,
 		    margin_usd = $12, pricing_snapshot = $13, cost_attribution = $14,
-		    settled_at = NOW()
+		    settled_at = NOW(), gift_usd = $16
 		WHERE id = $15
 	`, actual.Quantity, actual.SessionID, actual.Model, actual.InputTokens,
 		actual.CachedInputTokens, actual.CacheWriteTokens, actual.OutputTokens,
 		roundUSD(charge), roundUSD(grantUSD), roundUSD(walletUSD), breakdown.UpstreamUSD,
-		breakdown.MarginUSD, breakdown.Snapshot, breakdown.Attribution, usageID); err != nil {
+		breakdown.MarginUSD, breakdown.Snapshot, breakdown.Attribution, usageID, roundUSD(giftUSD)); err != nil {
 		return 0, err
 	}
 	return charge, nil
@@ -942,7 +1051,7 @@ func refundUsageByKeyTx(ctx context.Context, tx *sql.Tx, idempotencyKey, expecte
 	if description == "" {
 		description = action + " reservation refunded"
 	}
-	if err := creditUsageRefundTx(ctx, tx, acct, usageID, grant, wallet, description, time.Now().UTC()); err != nil {
+	if _, err := creditUsageRefundTx(ctx, tx, acct, usageID, grant, wallet, description, time.Now().UTC()); err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `

@@ -15,22 +15,26 @@ import (
 
 // AccountBalance is the compact balance pushed to clients after each charge.
 type AccountBalance struct {
-	UserID             string     `json:"user_id"`
-	AccountID          string     `json:"account_id"`
-	WalletUSD          float64    `json:"wallet_usd"`
-	GrantUSD           float64    `json:"grant_usd"`
-	AvailableUSD       float64    `json:"available_usd"`
-	LifetimeChargedUSD float64    `json:"lifetime_charged_usd"`
-	PlanCode           string     `json:"plan_code"`
-	MemberActive       bool       `json:"member_active"`
-	MemberUntil        *time.Time `json:"member_until,omitempty"`
-	AutoTopupEnabled   bool       `json:"auto_topup_enabled"`
+	UserID             string  `json:"user_id"`
+	AccountID          string  `json:"account_id"`
+	WalletUSD          float64 `json:"wallet_usd"`
+	GrantUSD           float64 `json:"grant_usd"`
+	AvailableUSD       float64 `json:"available_usd"`
+	LifetimeChargedUSD float64 `json:"lifetime_charged_usd"`
+	// GiftUSD is the part of GrantUSD the customer did not pay for; it is
+	// spent first, at the standard price.
+	GiftUSD          float64    `json:"gift_usd"`
+	PlanCode         string     `json:"plan_code"`
+	MemberActive     bool       `json:"member_active"`
+	MemberUntil      *time.Time `json:"member_until,omitempty"`
+	AutoTopupEnabled bool       `json:"auto_topup_enabled"`
 }
 
 // GrantItem is one expiring credit lot.
 type GrantItem struct {
 	ID           string     `json:"id"`
 	Kind         string     `json:"kind"`
+	Funding      string     `json:"funding"`
 	AmountUSD    float64    `json:"amount_usd"`
 	RemainingUSD float64    `json:"remaining_usd"`
 	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
@@ -69,12 +73,14 @@ type AccountSummary struct {
 	// force (0 when none) and PromotionDiscountUntil when it ends.
 	PromotionDiscountPercent float64    `json:"promotion_discount_percent"`
 	PromotionDiscountUntil   *time.Time `json:"promotion_discount_until,omitempty"`
+	// Route is how the next session will be served and priced.
+	Route RouteDecision `json:"route"`
 }
 
-func (a *accountRow) balance(now time.Time, grantTotal float64) AccountBalance {
+func (a *accountRow) balance(now time.Time, grantTotal, giftTotal float64) AccountBalance {
 	balance := AccountBalance{
 		UserID: a.UserID, AccountID: a.ID,
-		WalletUSD: roundUSD(a.WalletUSD), GrantUSD: roundUSD(grantTotal),
+		WalletUSD: roundUSD(a.WalletUSD), GrantUSD: roundUSD(grantTotal), GiftUSD: roundUSD(giftTotal),
 		AvailableUSD:       roundUSD(a.WalletUSD + grantTotal),
 		LifetimeChargedUSD: roundUSD(a.LifetimeChargedUSD),
 		PlanCode:           FreePlanCode,
@@ -95,13 +101,12 @@ func (a *accountRow) balance(now time.Time, grantTotal float64) AccountBalance {
 	return balance
 }
 
-func (s *Service) openGrantTotal(ctx context.Context, accountID string) (float64, error) {
-	var total float64
-	err := s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(remaining_usd), 0) FROM grants
+func (s *Service) openGrantTotal(ctx context.Context, accountID string) (total, gift float64, err error) {
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(remaining_usd), 0), COALESCE(SUM(remaining_usd) FILTER (WHERE funding = 'gift'), 0) FROM grants
 		WHERE account_id = $1 AND remaining_usd > 0 AND (expires_at IS NULL OR expires_at > NOW())
-	`, accountID).Scan(&total)
-	return total, err
+	`, accountID).Scan(&total, &gift)
+	return total, gift, err
 }
 
 // GetUserBalance returns the compact balance for a user.
@@ -110,11 +115,11 @@ func (s *Service) GetUserBalance(ctx context.Context, userID string) (*AccountBa
 	if err != nil {
 		return nil, err
 	}
-	grantTotal, err := s.openGrantTotal(ctx, acct.ID)
+	grantTotal, giftTotal, err := s.openGrantTotal(ctx, acct.ID)
 	if err != nil {
 		return nil, err
 	}
-	balance := acct.balance(time.Now().UTC(), grantTotal)
+	balance := acct.balance(time.Now().UTC(), grantTotal, giftTotal)
 	return &balance, nil
 }
 
@@ -127,20 +132,20 @@ func (s *Service) GetAccountSummary(ctx context.Context, userID string) (*Accoun
 	}
 	now := time.Now().UTC()
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, kind, amount_usd, remaining_usd, expires_at, note, CAST(created_at AS TEXT)
+		SELECT id, kind, funding, amount_usd, remaining_usd, expires_at, note, CAST(created_at AS TEXT)
 		FROM grants
 		WHERE account_id = $1 AND remaining_usd > 0 AND (expires_at IS NULL OR expires_at > $2)
-		ORDER BY expires_at ASC NULLS LAST, created_at ASC
+		ORDER BY CASE WHEN funding = 'gift' THEN 0 ELSE 1 END, expires_at ASC NULLS LAST, created_at ASC
 	`, acct.ID, now)
 	if err != nil {
 		return nil, err
 	}
 	grants := make([]GrantItem, 0)
-	grantTotal := 0.0
+	grantTotal, giftTotal := 0.0, 0.0
 	for rows.Next() {
 		var item GrantItem
 		var expiresAt sql.NullTime
-		if err := rows.Scan(&item.ID, &item.Kind, &item.AmountUSD, &item.RemainingUSD, &expiresAt, &item.Note, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Kind, &item.Funding, &item.AmountUSD, &item.RemainingUSD, &expiresAt, &item.Note, &item.CreatedAt); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
@@ -149,6 +154,9 @@ func (s *Service) GetAccountSummary(ctx context.Context, userID string) (*Accoun
 			item.ExpiresAt = &expires
 		}
 		grantTotal += item.RemainingUSD
+		if item.Funding == FundingGift {
+			giftTotal += item.RemainingUSD
+		}
 		grants = append(grants, item)
 	}
 	_ = rows.Close()
@@ -156,7 +164,7 @@ func (s *Service) GetAccountSummary(ctx context.Context, userID string) (*Accoun
 		return nil, err
 	}
 	summary := &AccountSummary{
-		AccountBalance: acct.balance(now, grantTotal),
+		AccountBalance: acct.balance(now, grantTotal, giftTotal),
 		Status:         acct.Status,
 		Plan:           acct.plan,
 		EffectivePlan:  acct.effectivePlan(now),
@@ -176,8 +184,13 @@ func (s *Service) GetAccountSummary(ctx context.Context, userID string) (*Accoun
 		optIn := acct.TrainingOptIn.Bool
 		summary.TrainingOptIn = &optIn
 	}
-	summary.TrainingProgramAvailable = s.TrainingProgramAvailable()
+	summary.TrainingProgramAvailable = s.TrainingProgramEnabled(ctx)
 	summary.TrainingDiscountPercent = s.TrainingDiscountPercent(ctx)
+	if route, routeErr := s.routeDecisionTx(ctx, s.db, acct, now); routeErr == nil {
+		summary.Route = route
+	} else {
+		return nil, routeErr
+	}
 	if acct.promotionDiscountPercent > 0 && acct.promotionDiscountUntil.After(now) {
 		until := acct.promotionDiscountUntil.UTC()
 		summary.PromotionDiscountPercent = acct.promotionDiscountPercent
@@ -244,6 +257,19 @@ type GrantInput struct {
 	Note            string
 	CreatedBy       string
 	SourcePaymentID string
+	// Funding defaults from Kind: top-up bonuses are paid money, everything
+	// else is a gift.
+	Funding string
+}
+
+func grantFunding(input *GrantInput) string {
+	if input.Funding == FundingPaid || input.Funding == FundingGift {
+		return input.Funding
+	}
+	if input.Kind == GrantTopupBonus {
+		return FundingPaid
+	}
+	return FundingGift
 }
 
 func (s *Service) AddGrant(ctx context.Context, input *GrantInput) (*GrantItem, error) {
@@ -282,13 +308,13 @@ func (s *Service) AddGrant(ctx context.Context, input *GrantInput) (*GrantItem, 
 }
 
 func addGrantTx(ctx context.Context, tx *sql.Tx, acct *accountRow, input *GrantInput) (*GrantItem, error) {
-	item := GrantItem{Kind: input.Kind, AmountUSD: input.AmountUSD, RemainingUSD: input.AmountUSD, Note: input.Note}
+	item := GrantItem{Kind: input.Kind, Funding: grantFunding(input), AmountUSD: input.AmountUSD, RemainingUSD: input.AmountUSD, Note: input.Note}
 	if err := tx.QueryRowContext(ctx, `
-		INSERT INTO grants (account_id, kind, amount_usd, remaining_usd, expires_at, source_payment_id, note, created_by)
-		VALUES ($1, $2, $3, $3, $4, $5, $6, $7)
+		INSERT INTO grants (account_id, kind, amount_usd, remaining_usd, expires_at, source_payment_id, note, created_by, funding)
+		VALUES ($1, $2, $3, $3, $4, $5, $6, $7, $8)
 		RETURNING id, CAST(created_at AS TEXT)
 	`, acct.ID, input.Kind, input.AmountUSD, nullTime(input.ExpiresAt), nullUUID(input.SourcePaymentID),
-		input.Note, nullUUID(input.CreatedBy)).Scan(&item.ID, &item.CreatedAt); err != nil {
+		input.Note, nullUUID(input.CreatedBy), item.Funding).Scan(&item.ID, &item.CreatedAt); err != nil {
 		return nil, err
 	}
 	if input.ExpiresAt != nil {

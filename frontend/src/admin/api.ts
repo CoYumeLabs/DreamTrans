@@ -22,6 +22,8 @@ export interface User {
   last_login_at?: string
   created_at: string
   updated_at: string
+  /** Administrator pin to one provider account; '' follows the normal rules. */
+  speechmatics_route?: '' | 'training' | 'standard'
 }
 
 export interface Tenant {
@@ -29,6 +31,10 @@ export interface Tenant {
   name: string
   slug: string
   plan: 'free' | 'pro' | 'enterprise'
+  /** Institutions never reach the training provider account. */
+  kind: 'personal' | 'institution'
+  /** Administrator pin to one provider account; '' follows the normal rules. */
+  speechmatics_route: '' | 'training' | 'standard'
   storage_quota_gb: number
   created_at: string
   updated_at: string
@@ -445,6 +451,10 @@ export interface SystemSettingsValues {
   trial_credit_days: number
   /** Transcription discount for users who join the training programme. */
   training_discount_percent: number
+  /** Global pause switch for the programme. */
+  training_program_enabled: boolean
+  /** Whether gift balance may earn the programme discount (default off). */
+  gift_training_discount: boolean
 }
 
 export interface SystemSettingsResponse {
@@ -472,7 +482,9 @@ const defaultSystemSettings: SystemSettingsValues = {
   allow_user_api_key: false,
   trial_credit_usd: 1,
   trial_credit_days: 30,
-  training_discount_percent: 30,
+  training_discount_percent: 20,
+  training_program_enabled: true,
+  gift_training_discount: false,
 }
 
 // ---------------------------------------------------------------------------
@@ -561,7 +573,7 @@ export function validateMarkupInput(input: MarkupInput): string | null {
     ) {
       return '分级加价率必须在 0 到 100000 之间'
     }
-    const key = `${override.scope_type} ${scopeKey}`
+    const key = `${override.scope_type}\0${scopeKey}`
     if (seen.has(key)) return '同一范围不能添加重复的分级加价'
     seen.add(key)
   }
@@ -782,6 +794,8 @@ function normalizeSettingsValues(
     trial_credit_usd: asFiniteNumber(raw?.trial_credit_usd, fallback.trial_credit_usd),
     trial_credit_days: asFiniteNumber(raw?.trial_credit_days, fallback.trial_credit_days),
     training_discount_percent: asFiniteNumber(raw?.training_discount_percent, fallback.training_discount_percent),
+    training_program_enabled: asBoolean(raw?.training_program_enabled, fallback.training_program_enabled),
+    gift_training_discount: asBoolean(raw?.gift_training_discount, fallback.gift_training_discount),
   }
 }
 
@@ -825,7 +839,7 @@ export async function createUser(input: {
 
 export async function updateUser(
   id: string,
-  data: { name?: string; role?: string; is_active?: boolean; email_verified?: boolean },
+  data: { name?: string; role?: string; is_active?: boolean; email_verified?: boolean; speechmatics_route?: '' | 'training' | 'standard' },
 ): Promise<User> {
   return adminFetch(`/api/admin/users/${id}`, {
     method: 'PUT',
@@ -856,7 +870,7 @@ export async function listAllTenants(pageSize = 100): Promise<Tenant[]> {
 
 export async function updateTenant(
   id: string,
-  data: { name?: string; plan?: string; storage_quota_gb?: number },
+  data: { name?: string; plan?: string; storage_quota_gb?: number; kind?: 'personal' | 'institution'; speechmatics_route?: '' | 'training' | 'standard' },
 ): Promise<Tenant> {
   return adminFetch(`/api/admin/tenants/${id}`, {
     method: 'PUT',
@@ -1079,4 +1093,26 @@ export async function resetSystemSettings(): Promise<SystemSettingsResponse> {
     },
   )
   return normalizeSystemSettings(raw)
+}
+
+/** Programme membership at the moments the business tracks. */
+export interface TrainingProgramStats {
+  enabled: boolean
+  discount_percent: number
+  users_opted_in: number
+  users_declined: number
+  users_unanswered: number
+  claimed_total: number
+  claimed_opted_in: number
+  first_topup_total: number
+  first_topup_opted_in: number
+  changed_after_first_topup: number
+  gift_routed_hours: number
+  training_hours: number
+  standard_hours: number
+  route_refunds_usd: number
+}
+
+export async function getTrainingProgramStats(): Promise<TrainingProgramStats> {
+  return adminFetch('/api/admin/training-program')
 }

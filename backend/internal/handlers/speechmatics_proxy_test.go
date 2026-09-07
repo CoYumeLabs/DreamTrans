@@ -554,3 +554,11 @@ func TestSpeechmaticsMidStreamReservationFailureKeepsPaymentClassification(t *te
 		})
 	}
 }
+
+func (s *speechmaticsBillingStub) RefundRouteDiscount(context.Context, string, string) (*billing.RouteDiscountRefund, error) {
+	return nil, nil
+}
+
+func (s *speechmaticsBillingStub) RouteForUser(context.Context, string) (billing.RouteDecision, error) {
+	return billing.RouteDecision{}, nil
+}

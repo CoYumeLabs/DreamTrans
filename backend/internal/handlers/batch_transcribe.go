@@ -56,6 +56,7 @@ type batchBillingService interface {
 	RecordUsage(context.Context, *billing.UsageRecord) (float64, error)
 	SettleUsageReservation(context.Context, string, *billing.UsageRecord) (float64, error)
 	RefundUsage(context.Context, string, string) error
+	RefundRouteDiscount(context.Context, string, string) (*billing.RouteDiscountRefund, error)
 }
 
 type batchJobOwner struct {
@@ -133,6 +134,9 @@ func (h *BatchTranscribeHandler) clientFor(trainingRoute bool) *speechmatics.Bat
 
 // submitClient picks the account for a new upload from the caller's answer.
 func (h *BatchTranscribeHandler) submitClient(r *http.Request) (*speechmatics.BatchClient, bool) {
+	if route := batchReservationRoute(r); route != nil {
+		return h.clientFor(route.Training), route.Training
+	}
 	trainingRoute := h.routing.useTrainingRoute(r.Context(), auth.GetUserClaims(r.Context()))
 	return h.clientFor(trainingRoute), trainingRoute
 }
@@ -244,6 +248,11 @@ func (h *BatchTranscribeHandler) HandleSubmit(w http.ResponseWriter, r *http.Req
 		r = r.WithContext(context.WithValue(r.Context(), batchDurationKey{}, minutes))
 	}
 
+	r, err = h.withBatchRoute(r)
+	if err != nil {
+		http.Error(w, "Batch routing unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	reservationKey, err := h.createBatchReservation(r)
 	if err != nil {
 		log.Printf("failed to reserve batch usage: %v", err)
@@ -454,6 +463,11 @@ func (h *BatchTranscribeHandler) HandleTranscribeAndWait(w http.ResponseWriter, 
 		r = r.WithContext(context.WithValue(r.Context(), batchDurationKey{}, minutes))
 	}
 
+	r, err = h.withBatchRoute(r)
+	if err != nil {
+		http.Error(w, "Batch routing unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	reservationKey, err := h.createBatchReservation(r)
 	if err != nil {
 		log.Printf("failed to reserve batch usage: %v", err)
@@ -723,6 +737,7 @@ func (h *BatchTranscribeHandler) createBatchReservation(r *http.Request) (string
 		UserID: claims.UserID, TenantID: claims.TenantID,
 		Action: "transcription", Model: "speechmatics-batch-enhanced",
 		Quantity:       h.batchReservationMinutes(r),
+		Route:          batchReservationRoute(r),
 		IdempotencyKey: reservationKey,
 	})
 	return reservationKey, err
@@ -876,7 +891,17 @@ func (h *BatchTranscribeHandler) recordBatchCompletion(r *http.Request, jobID st
 			Quantity: durationSeconds / 60,
 		},
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	// A gift-routed upload was priced at the standard rate; the paid part
+	// gets the customer's own discount back now.
+	if refund, refundErr := h.billing.RefundRouteDiscount(r.Context(), claims.UserID, reservationKey); refundErr != nil {
+		log.Printf("batch route discount refund %s: %v", strconv.Quote(reservationKey), refundErr)
+	} else if refund != nil {
+		log.Print("batch route discount refund completed")
+	}
+	return nil
 }
 
 func validateBatchConfig(config BatchTranscribeRequest) error {

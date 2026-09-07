@@ -155,6 +155,8 @@ export interface User {
   email_verified: boolean
   /** Training-programme answer: null = not asked yet, false = declined, true = joined. */
   training_opt_in: boolean | null
+  /** Administrator pin to one provider account; '' follows the normal rules. */
+  speechmatics_route?: '' | 'training' | 'standard'
   last_login_at?: string
   created_at: string
   updated_at: string

@@ -5,6 +5,7 @@ import {
   saveUserModelPreferences,
   type AvailableModel,
   type TrainingProgramInfo,
+  type RouteDecision,
   type UserModelPreferences,
 } from '../../api'
 import { listTermDomains, type TermDomain } from '../../learning'
@@ -19,6 +20,7 @@ interface SettingsPanelProps {
   authenticated: boolean
   ragEnabled: boolean
   settings: UnifiedSettings
+  trainingRoute?: RouteDecision
   trainingProgram: TrainingProgramInfo
   /** The account's training-programme answer; null until asked. */
   trainingOptIn: boolean | null
@@ -42,6 +44,7 @@ export function SettingsPanel({
   authenticated,
   ragEnabled,
   settings,
+  trainingRoute,
   trainingProgram,
   trainingOptIn,
   onChange,
@@ -392,7 +395,7 @@ export function SettingsPanel({
         />
       </section>
 
-      {authenticated && trainingProgram.available && (
+      {authenticated && (trainingProgram.available || trainingRoute?.reason === 'program_off') && (
         <section className="dt-settings__section">
           <div>
             <h3>{s.training.title}</h3>
@@ -402,12 +405,18 @@ export function SettingsPanel({
               <a href="/privacy#share" rel="noreferrer" target="_blank">{s.training.privacyLink}</a>
             </p>
           </div>
-          <Toggle
+          {trainingRoute && <p className="dt-muted" role="status">{
+            trainingRoute.reason === 'program_off' ? s.training.routeOff
+              : trainingRoute.reason === 'institution' ? s.training.routeInstitution
+                : trainingRoute.reason === 'tenant_pinned' || trainingRoute.reason === 'user_pinned' ? s.training.routePinned
+                  : trainingRoute.gift_funded ? s.training.routeGift : ''
+          }</p>}
+          {trainingProgram.available && <Toggle
             checked={trainingOptIn === true}
             description={trainingOptIn === null ? s.training.unanswered : s.training.toggleBody}
             label={s.training.toggle(trainingProgram.discountPercent)}
             onChange={(optIn) => void changeTrainingOptIn(optIn)}
-          />
+          />}
           {trainingStatus && <p className="dt-muted" role="status">{trainingStatus}</p>}
         </section>
       )}

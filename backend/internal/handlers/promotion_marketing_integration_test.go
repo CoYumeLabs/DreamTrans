@@ -136,6 +136,10 @@ func TestPromotionLandingVisitsAndStagedRewards(t *testing.T) {
 	if _, err := db.ExecContext(t.Context(), `UPDATE promotion_registrations SET discount_until=NOW()-INTERVAL '1 hour' WHERE user_id=$1`, u.ID); err != nil {
 		t.Fatal(err)
 	}
+	// Campaign discounts apply only after gift funding is exhausted.
+	if _, err := db.ExecContext(t.Context(), `UPDATE grants SET remaining_usd=0 WHERE account_id=(SELECT id FROM billing_accounts WHERE owner_id=$1) AND funding='gift'`, u.ID); err != nil {
+		t.Fatal(err)
+	}
 	full, err := h.billing.EstimateCharge(t.Context(), u.ID, &billing.UsageRecord{Action: "transcription", Provider: "speechmatics", Model: billing.RealtimeTranscriptionSKU, Quantity: 60})
 	if err != nil {
 		t.Fatal(err)

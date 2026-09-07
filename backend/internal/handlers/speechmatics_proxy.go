@@ -57,7 +57,10 @@ type audioUsageSnapshot struct {
 // Wall-clock connection time is not a useful proxy because clients can pause,
 // buffer, or send audio faster/slower than real time.
 type audioUsageMeter struct {
-	mu             sync.Mutex
+	mu sync.Mutex
+	// route is the session's routing decision, fixed at connect so every
+	// reservation is priced alike; nil lets the ledger decide per record.
+	route          *billing.RouteDecision
 	configured     bool
 	bytesPerSecond uint64
 	totalBytes     uint64
@@ -299,6 +302,10 @@ type speechmaticsBillingService interface {
 	SettleUsageReservation(context.Context, string, *billing.UsageRecord) (float64, error)
 	GetUserBalance(context.Context, string) (*billing.AccountBalance, error)
 	SessionLimitForUser(context.Context, string) (int, error)
+	// RouteForUser decides account and pricing for the whole stream;
+	// RefundRouteDiscount closes a gift-routed stream.
+	RouteForUser(context.Context, string) (billing.RouteDecision, error)
+	RefundRouteDiscount(context.Context, string, string) (*billing.RouteDiscountRefund, error)
 }
 
 const speechmaticsConcurrentLimitMessage = "concurrent transcription limit reached"
@@ -351,12 +358,23 @@ func (h *SpeechmaticsProxyHandler) SetTrainingOptInLookup(lookup TrainingOptInLo
 	}
 }
 
-func (h *SpeechmaticsProxyHandler) tokenGeneratorFor(ctx context.Context, claims *internalAuth.UserClaims) (*internalAuth.TokenGenerator, bool) {
-	training := h.routing.useTrainingRoute(ctx, claims)
-	if !training && h.noTrainingTokenGenerator != nil {
-		return h.noTrainingTokenGenerator, false
+func (h *SpeechmaticsProxyHandler) tokenGeneratorFor(ctx context.Context, claims *internalAuth.UserClaims) (*internalAuth.TokenGenerator, bool, *billing.RouteDecision) {
+	var route *billing.RouteDecision
+	training := false
+	if h.billing != nil && claims != nil && h.routing.available() {
+		if decision, err := h.billing.RouteForUser(ctx, claims.UserID); err == nil {
+			route = &decision
+			training = decision.Training
+		} else {
+			log.Printf("route decision failed for user=%s; using no-training account: %v", claims.UserID, err)
+		}
+	} else {
+		training = h.routing.useTrainingRoute(ctx, claims)
 	}
-	return h.tokenGenerator, true
+	if !training && h.noTrainingTokenGenerator != nil {
+		return h.noTrainingTokenGenerator, false, route
+	}
+	return h.tokenGenerator, true, route
 }
 
 func (h *SpeechmaticsProxyHandler) streamRegistry() *liveTranscriptionRegistry {
@@ -521,7 +539,7 @@ func (h *SpeechmaticsProxyHandler) HandleProxy(w http.ResponseWriter, r *http.Re
 
 	// Generate Speechmatics token on the account the user's training-program
 	// answer selects.
-	tokenGenerator, trainingRoute := h.tokenGeneratorFor(r.Context(), claims)
+	tokenGenerator, trainingRoute, routeDecision := h.tokenGeneratorFor(r.Context(), claims)
 	token, err := tokenGenerator.GenerateTokenContext(r.Context())
 	if err != nil {
 		log.Printf("Failed to generate Speechmatics token: %v", err)
@@ -567,7 +585,11 @@ func (h *SpeechmaticsProxyHandler) HandleProxy(w http.ResponseWriter, r *http.Re
 		return smConn.SetReadDeadline(time.Now().Add(pongWait))
 	})
 
-	log.Printf("Speechmatics proxy connected for user=%s tenant=%s training_route=%t", userID, tenantID, trainingRoute)
+	routeReason := ""
+	if routeDecision != nil {
+		routeReason = routeDecision.Reason
+	}
+	log.Printf("Speechmatics proxy connected for user=%s tenant=%s training_route=%t route_reason=%s", userID, tenantID, trainingRoute, routeReason)
 
 	// Create context for managing goroutines
 	ctx, cancel := context.WithCancel(r.Context())
@@ -582,7 +604,7 @@ func (h *SpeechmaticsProxyHandler) HandleProxy(w http.ResponseWriter, r *http.Re
 
 	var wg sync.WaitGroup
 	errChan := make(chan error, 4)
-	audioMeter := &audioUsageMeter{}
+	audioMeter := &audioUsageMeter{route: routeDecision}
 	reserveAudio := func(chargeCtx context.Context, count int) error {
 		return h.reserveSpeechmaticsAudio(
 			chargeCtx,
@@ -686,6 +708,20 @@ func (h *SpeechmaticsProxyHandler) HandleProxy(w http.ResponseWriter, r *http.Re
 	// A detached context makes client disconnects unable to cancel the refund.
 	if userID != "" && tenantID != "" && h.billing != nil {
 		h.settleSpeechmaticsReservations(safeClientConn, audioMeter, userID, tenantID, billingSessionRef)
+		// A gift-routed stream was priced at the standard rate; hand the paid
+		// part's discount back now that the stream is closed.
+		if routeDecision != nil && routeDecision.GiftFunded {
+			c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if refund, err := h.billing.RefundRouteDiscount(c, userID, "speechmatics:"+billingConnectionID+":"); err != nil {
+				log.Printf("route discount refund for %s: %v", billingConnectionID, err)
+			} else if refund != nil {
+				log.Printf("route discount refund for %s: $%.4f of $%.4f paid", billingConnectionID, refund.AmountUSD, refund.PaidUSD)
+				if balance, balanceErr := h.billing.GetUserBalance(c, userID); balanceErr == nil && balance != nil {
+					h.sendSpeechmaticsBalanceUpdate(safeClientConn, balance, -refund.AmountUSD)
+				}
+			}
+			cancel()
+		}
 	}
 
 	// Closing both sockets is required to unblock a peer goroutine that is
@@ -723,6 +759,7 @@ func (h *SpeechmaticsProxyHandler) reserveSpeechmaticsAudio(
 		sessionID,
 		reservation.minutes,
 		reservation.key,
+		audioMeter.route,
 	); err != nil {
 		return wrapWebSocketAccountingError(classifyBillingAccountingFailure(err), err)
 	}
@@ -926,6 +963,7 @@ func (h *SpeechmaticsProxyHandler) recordSpeechmaticsUsage(
 	sessionID *string,
 	minutes float64,
 	idempotencyKey string,
+	route *billing.RouteDecision,
 ) error {
 	if minutes <= 0 || h.billing == nil || userID == "" || tenantID == "" {
 		return fmt.Errorf("audio billing is unavailable")
@@ -941,6 +979,7 @@ func (h *SpeechmaticsProxyHandler) recordSpeechmaticsUsage(
 		Model:          "speechmatics-realtime-enhanced",
 		Quantity:       minutes,
 		IdempotencyKey: idempotencyKey,
+		Route:          route,
 	})
 	if err != nil {
 		log.Printf("failed to record Speechmatics usage: %v", err)

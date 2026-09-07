@@ -104,6 +104,10 @@ type UsageRecord struct {
 	// debit was written. Callers that cannot replay the original result must
 	// not execute the upstream operation again.
 	IdempotencyDuplicate bool
+	// Route is the session's routing decision (see RouteForUser). Handlers
+	// attach it so every reservation of one session is priced alike; nil
+	// means decide from the account's current state.
+	Route *RouteDecision
 	// ReuseRefundedReservation lets a durable provider workflow start a new
 	// attempt with the same logical key after a refunded failure.
 	ReuseRefundedReservation bool
@@ -139,7 +143,7 @@ type Service struct {
 
 // DefaultTrainingDiscountPercent is the transcription discount for users who
 // join the training program unless system_settings overrides it.
-const DefaultTrainingDiscountPercent = 30.0
+const DefaultTrainingDiscountPercent = 20.0
 
 // trainingDiscountSettingKey is the system_settings row that overrides the
 // default program discount.
@@ -158,9 +162,9 @@ func (s *Service) TrainingProgramAvailable() bool {
 }
 
 // TrainingDiscountPercent is the program discount in force, or 0 when the
-// program is not offered.
+// program is not offered or switched off.
 func (s *Service) TrainingDiscountPercent(ctx context.Context) float64 {
-	if !s.TrainingProgramAvailable() {
+	if !s.TrainingProgramEnabled(ctx) {
 		return 0
 	}
 	return trainingDiscountPercentFrom(ctx, s.db)

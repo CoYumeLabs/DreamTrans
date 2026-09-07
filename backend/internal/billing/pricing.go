@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"time"
 )
 
 // PricingSnapshotVersion marks snapshots written by this ledger. Older
@@ -79,8 +80,10 @@ func (s *Service) loadUsagePricingView(ctx context.Context) (*usagePricingView, 
 		return nil, err
 	}
 	var trainingDiscount float64
-	if s.TrainingProgramAvailable() {
-		trainingDiscount = trainingDiscountPercentFrom(ctx, tx)
+	if s.trainingProgram {
+		if enabled, err := boolSettingTx(ctx, tx, trainingProgramEnabledKey, true); err == nil && enabled {
+			trainingDiscount = trainingDiscountPercentFrom(ctx, tx)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -422,6 +425,7 @@ func resolveUsageCostFromSnapshot(
 // snapshotPolicy freezes the request-time billing switches into the snapshot
 // so settlement applies the same policy the reservation was made under.
 type snapshotPolicy struct {
+	GiftDiscountAllowed  bool
 	BillingEnabled       bool
 	AllowNegativeBalance bool
 }
@@ -433,6 +437,7 @@ func annotatePricingSnapshot(snapshot []byte, chargedUSD float64, policy *snapsh
 	}
 	values["charged_usd"] = chargedUSD
 	if policy != nil {
+		values["gift_discount_allowed"] = policy.GiftDiscountAllowed
 		values["billing_enabled"] = policy.BillingEnabled
 		values["allow_negative_balance"] = policy.AllowNegativeBalance
 	}
@@ -445,6 +450,7 @@ func annotatePricingSnapshot(snapshot []byte, chargedUSD float64, policy *snapsh
 
 func policyFromPricingSnapshot(snapshot []byte) (snapshotPolicy, bool) {
 	var values struct {
+		GiftDiscountAllowed  bool  `json:"gift_discount_allowed"`
 		BillingEnabled       *bool `json:"billing_enabled"`
 		AllowNegativeBalance *bool `json:"allow_negative_balance"`
 	}
@@ -453,6 +459,7 @@ func policyFromPricingSnapshot(snapshot []byte) (snapshotPolicy, bool) {
 		return snapshotPolicy{}, false
 	}
 	return snapshotPolicy{
+		GiftDiscountAllowed:  values.GiftDiscountAllowed,
 		BillingEnabled:       *values.BillingEnabled,
 		AllowNegativeBalance: *values.AllowNegativeBalance,
 	}, true
@@ -469,6 +476,15 @@ func (s *Service) EstimateCharge(ctx context.Context, userID string, rec *UsageR
 		account, err := s.accountForUser(ctx, userID)
 		if err == nil {
 			pricing = account.pricing()
+			route := rec.Route
+			if route == nil {
+				decision, routeErr := s.routeDecisionTx(ctx, s.db, account, time.Now().UTC())
+				if routeErr != nil {
+					return 0, routeErr
+				}
+				route = &decision
+			}
+			pricing = applyRoute(pricing, *route)
 		} else if !isNotFound(err) {
 			return 0, err
 		}

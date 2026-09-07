@@ -239,8 +239,12 @@ func buildHandler() (http.Handler, func()) {
 		log.Fatalf("init batch: %v", err)
 	}
 	// The training-program answer lives on the user row; route audio by it.
+	// Routing also weighs gift balance, tenant kind, administrator pins and
+	// the program switch, so the billing service answers when present.
 	var trainingOptIn handlers.TrainingOptInLookup
-	if pgStore != nil {
+	if billingSvc != nil {
+		trainingOptIn = billingSvc.TrainingRouteForUser
+	} else if pgStore != nil {
 		trainingOptIn = pgStore.UserTrainingOptIn
 	}
 	tokenHandler.SetTrainingOptInLookup(trainingOptIn)
@@ -326,8 +330,10 @@ func buildHandler() (http.Handler, func()) {
 			return
 		}
 		var trainingDiscount float64
+		trainingProgram := false
 		if billingSvc != nil {
 			trainingDiscount = billingSvc.TrainingDiscountPercent(r.Context())
+			trainingProgram = billingSvc.TrainingProgramEnabled(r.Context())
 		}
 		handlers.WriteJSON(w, map[string]any{
 			"anonymous_api_enabled":       strings.EqualFold(strings.TrimSpace(os.Getenv("ALLOW_ANONYMOUS_API")), "true"),
@@ -337,7 +343,7 @@ func buildHandler() (http.Handler, func()) {
 			"rag_enabled":                 ragHandler != nil,
 			// The training program is offered only with a no-training
 			// provider account; joining earns this transcription discount.
-			"training_program_available": handlers.TrainingProgramAvailable() && billingSvc != nil,
+			"training_program_available": trainingProgram,
 			"training_discount_percent":  trainingDiscount,
 		})
 	})
@@ -638,6 +644,7 @@ func buildHandler() (http.Handler, func()) {
 		mux.Handle("/api/admin/promotions", superAdminRequired(http.HandlerFunc(adminHandler.HandlePromotions)))
 		mux.Handle("/api/admin/promotions/", superAdminRequired(http.HandlerFunc(adminHandler.HandlePromotions)))
 		mux.Handle("/api/admin/referrals", superAdminRequired(http.HandlerFunc(adminHandler.HandleReferrers)))
+		mux.Handle("/api/admin/training-program", superAdminRequired(http.HandlerFunc(adminHandler.HandleTrainingProgramStats)))
 
 		// Billing: costs & markup, plans, top-up tiers, analytics, customers.
 		mux.Handle("/api/admin/billing/catalog", superAdminRequired(http.HandlerFunc(adminHandler.HandleBillingCatalog)))

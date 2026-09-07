@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -32,6 +33,15 @@ type AuthHandler struct {
 	appName        string
 	// clientIP resolves the visitor address for landing-page attribution.
 	clientIP func(*http.Request) string
+}
+
+// trainingProgramEnabled combines the deployment's provider accounts with
+// the administrator pause switch.
+func (h *AuthHandler) trainingProgramEnabled(ctx context.Context) bool {
+	if h.billing != nil {
+		return h.billing.TrainingProgramEnabled(ctx)
+	}
+	return TrainingProgramAvailable()
 }
 
 // SetClientIPResolver wires the trusted client-address lookup used to
@@ -560,14 +570,19 @@ func (h *AuthHandler) HandleUpdateTrainingOptIn(w http.ResponseWriter, r *http.R
 		http.Error(w, `{"error":"opt_in is required"}`, http.StatusBadRequest)
 		return
 	}
-	if *req.OptIn && !TrainingProgramAvailable() {
+	ctx := r.Context()
+	if *req.OptIn && !h.trainingProgramEnabled(ctx) {
 		http.Error(w, `{"error":"the training program is not offered on this deployment","code":"training_program_unavailable"}`, http.StatusConflict)
 		return
 	}
-	ctx := r.Context()
 	if err := h.store.SetUserTrainingOptIn(ctx, claims.UserID, *req.OptIn); err != nil {
 		http.Error(w, `{"error":"failed to update training preference"}`, http.StatusInternalServerError)
 		return
+	}
+	if h.billing != nil {
+		if err := h.billing.RecordTrainingOptInChange(ctx, claims.UserID, *req.OptIn); err != nil {
+			log.Printf("record training opt-in change: %v", err)
+		}
 	}
 	user, err := h.store.GetUserByID(ctx, claims.UserID)
 	if err != nil || user == nil {

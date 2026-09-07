@@ -1374,6 +1374,8 @@ export interface AccountBalance {
   member_active: boolean
   member_until?: string
   auto_topup_enabled: boolean
+  /** Part of grant_usd the customer did not pay for. */
+  gift_usd?: number
 }
 
 export type PlanFeature =
@@ -1408,6 +1410,8 @@ export type GrantKind = 'trial' | 'topup_bonus' | 'promo' | 'adjustment' | 'sett
 export interface GrantItem {
   id: string
   kind: GrantKind
+  /** gift = never paid for (standard price, no training); paid = top-up bonus. */
+  funding?: 'gift' | 'paid'
   amount_usd: number
   remaining_usd: number
   expires_at?: string
@@ -1448,6 +1452,15 @@ export interface AccountSummary extends AccountBalance {
   training_discount_percent: number
   promotion_discount_percent?: number
   promotion_discount_until?: string
+  /** How the next session is served and priced. */
+  route?: RouteDecision
+}
+
+export interface RouteDecision {
+  training: boolean
+  gift_funded: boolean
+  reason: 'program_off' | 'institution' | 'tenant_pinned' | 'user_pinned' | 'gift_balance' | 'opt_in' | 'declined' | string
+  opt_in: boolean
 }
 
 /** The signed-in user's own referral link and how it has performed. */

@@ -206,11 +206,11 @@ func (s *PostgresStore) GetUserByID(ctx context.Context, id string) (*models.Use
 	user := &models.User{}
 	query := `
 		SELECT id, tenant_id, email, password_hash, name, role, is_active, email_verified,
-		       training_opt_in, last_login_at, created_at, updated_at
+		       training_opt_in, COALESCE(speechmatics_route, ''), last_login_at, created_at, updated_at
 		FROM users WHERE id = $1`
 	err := s.db.QueryRowContext(ctx, query, id).Scan(
 		&user.ID, &user.TenantID, &user.Email, &user.PasswordHash, &user.Name, &user.Role,
-		&user.IsActive, &user.EmailVerified, &user.TrainingOptIn,
+		&user.IsActive, &user.EmailVerified, &user.TrainingOptIn, &user.SpeechmaticsRoute,
 		&user.LastLoginAt, &user.CreatedAt, &user.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -224,11 +224,11 @@ func (s *PostgresStore) GetUserByEmail(ctx context.Context, email string) (*mode
 	user := &models.User{}
 	query := `
 		SELECT id, tenant_id, email, password_hash, name, role, is_active, email_verified,
-		       training_opt_in, last_login_at, created_at, updated_at
+		       training_opt_in, COALESCE(speechmatics_route, ''), last_login_at, created_at, updated_at
 		FROM users WHERE email = $1`
 	err := s.db.QueryRowContext(ctx, query, email).Scan(
 		&user.ID, &user.TenantID, &user.Email, &user.PasswordHash, &user.Name, &user.Role,
-		&user.IsActive, &user.EmailVerified, &user.TrainingOptIn,
+		&user.IsActive, &user.EmailVerified, &user.TrainingOptIn, &user.SpeechmaticsRoute,
 		&user.LastLoginAt, &user.CreatedAt, &user.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -276,10 +276,10 @@ func (s *PostgresStore) ReactivateDisabledLegacyAdmin(ctx context.Context, userI
 func (s *PostgresStore) GetTenantByID(ctx context.Context, id string) (*models.Tenant, error) {
 	tenant := &models.Tenant{}
 	query := `
-		SELECT id, name, slug, plan, api_quota_monthly, storage_quota_gb, max_sessions, created_at, updated_at
+		SELECT id, name, slug, plan, kind, COALESCE(speechmatics_route, ''), api_quota_monthly, storage_quota_gb, max_sessions, created_at, updated_at
 		FROM tenants WHERE id = $1`
 	err := s.db.QueryRowContext(ctx, query, id).Scan(
-		&tenant.ID, &tenant.Name, &tenant.Slug, &tenant.Plan,
+		&tenant.ID, &tenant.Name, &tenant.Slug, &tenant.Plan, &tenant.Kind, &tenant.SpeechmaticsRoute,
 		&tenant.APIQuotaMonthly, &tenant.StorageQuotaGB, &tenant.MaxSessions,
 		&tenant.CreatedAt, &tenant.UpdatedAt,
 	)
@@ -1303,7 +1303,7 @@ func (s *PostgresStore) ListUsers(ctx context.Context, limit, offset int) ([]mod
 
 	query := `
 		SELECT id, tenant_id, email, password_hash, name, role, is_active, email_verified,
-		       training_opt_in, last_login_at, created_at, updated_at
+		       training_opt_in, COALESCE(speechmatics_route, ''), last_login_at, created_at, updated_at
 		FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2`
 	rows, err := s.db.QueryContext(ctx, query, limit, offset)
 	if err != nil {
@@ -1336,7 +1336,7 @@ func (s *PostgresStore) ListUsersByTenant(ctx context.Context, tenantID string, 
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, tenant_id, email, password_hash, name, role, is_active, email_verified,
-		       training_opt_in, last_login_at, created_at, updated_at
+		       training_opt_in, COALESCE(speechmatics_route, ''), last_login_at, created_at, updated_at
 		FROM users
 		WHERE tenant_id = $1
 		ORDER BY created_at DESC
@@ -1370,7 +1370,7 @@ func (s *PostgresStore) ListTenants(ctx context.Context, limit, offset int) ([]m
 	}
 
 	query := `
-		SELECT id, name, slug, plan, api_quota_monthly, storage_quota_gb, max_sessions, created_at, updated_at
+		SELECT id, name, slug, plan, kind, COALESCE(speechmatics_route, ''), api_quota_monthly, storage_quota_gb, max_sessions, created_at, updated_at
 		FROM tenants ORDER BY created_at DESC LIMIT $1 OFFSET $2`
 	rows, err := s.db.QueryContext(ctx, query, limit, offset)
 	if err != nil {
@@ -1382,7 +1382,7 @@ func (s *PostgresStore) ListTenants(ctx context.Context, limit, offset int) ([]m
 	for rows.Next() {
 		var tenant models.Tenant
 		if err := rows.Scan(
-			&tenant.ID, &tenant.Name, &tenant.Slug, &tenant.Plan,
+			&tenant.ID, &tenant.Name, &tenant.Slug, &tenant.Plan, &tenant.Kind, &tenant.SpeechmaticsRoute,
 			&tenant.APIQuotaMonthly, &tenant.StorageQuotaGB, &tenant.MaxSessions,
 			&tenant.CreatedAt, &tenant.UpdatedAt,
 		); err != nil {
@@ -1712,7 +1712,7 @@ func (s *PostgresStore) UpdateTenantFields(
 			storage_quota_gb = CASE WHEN $7 THEN $8 ELSE storage_quota_gb END,
 			max_sessions = CASE WHEN $9 THEN $10 ELSE max_sessions END
 		WHERE id = $11
-		RETURNING id, name, slug, plan, api_quota_monthly,
+		RETURNING id, name, slug, plan, kind, COALESCE(speechmatics_route, ''), api_quota_monthly,
 			storage_quota_gb, max_sessions, created_at, updated_at
 	`,
 		name != nil, nameValue,
@@ -1722,7 +1722,7 @@ func (s *PostgresStore) UpdateTenantFields(
 		maxSessions != nil, maxSessionsValue,
 		tenantID,
 	).Scan(
-		&tenant.ID, &tenant.Name, &tenant.Slug, &tenant.Plan,
+		&tenant.ID, &tenant.Name, &tenant.Slug, &tenant.Plan, &tenant.Kind, &tenant.SpeechmaticsRoute,
 		&tenant.APIQuotaMonthly, &tenant.StorageQuotaGB, &tenant.MaxSessions,
 		&tenant.CreatedAt, &tenant.UpdatedAt,
 	)
@@ -1756,4 +1756,51 @@ func (s *PostgresStore) GetGlobalStats(ctx context.Context) (map[string]interfac
 	stats["transcript_count"] = transcriptCount
 
 	return stats, nil
+}
+
+// SetTenantRouting changes the tenant kind and/or its provider-account pin.
+// An empty route clears the pin.
+func (s *PostgresStore) SetTenantRouting(ctx context.Context, tenantID string, kind, route *string) error {
+	if kind == nil && route == nil {
+		return nil
+	}
+	var kindValue, routeValue string
+	if kind != nil {
+		kindValue = *kind
+	}
+	if route != nil {
+		routeValue = *route
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE tenants
+		SET kind = CASE WHEN $1 THEN $2 ELSE kind END,
+		    speechmatics_route = CASE WHEN $3 THEN NULLIF($4, '') ELSE speechmatics_route END
+		WHERE id = $5`, kind != nil, kindValue, route != nil, routeValue, tenantID)
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// SetUserSpeechmaticsRoute pins one account to a provider account; empty
+// clears the pin.
+func (s *PostgresStore) SetUserSpeechmaticsRoute(ctx context.Context, userID, route string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE users SET speechmatics_route = NULLIF($1, '') WHERE id = $2`, route, userID)
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }

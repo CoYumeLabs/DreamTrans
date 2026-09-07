@@ -82,13 +82,13 @@ func TestLiveAndBatchHandlersRouteNonMembersToTheNoTrainingAccount(t *testing.T)
 	if proxy.noTrainingTokenGenerator == nil || proxy.noTrainingTokenGenerator == proxy.tokenGenerator {
 		t.Fatal("proxy did not build a separate generator for the no-training account")
 	}
-	if gen, training := proxy.tokenGeneratorFor(ctx, declined); training || gen != proxy.noTrainingTokenGenerator {
+	if gen, training, _ := proxy.tokenGeneratorFor(ctx, declined); training || gen != proxy.noTrainingTokenGenerator {
 		t.Fatal("declined user's live stream would mint its key on the training account")
 	}
-	if gen, training := proxy.tokenGeneratorFor(ctx, nil); training || gen != proxy.noTrainingTokenGenerator {
+	if gen, training, _ := proxy.tokenGeneratorFor(ctx, nil); training || gen != proxy.noTrainingTokenGenerator {
 		t.Fatal("anonymous live stream would mint its key on the training account")
 	}
-	if gen, training := proxy.tokenGeneratorFor(ctx, joined); !training || gen != proxy.tokenGenerator {
+	if gen, training, _ := proxy.tokenGeneratorFor(ctx, joined); !training || gen != proxy.tokenGenerator {
 		t.Fatal("joined user's live stream did not use the training account")
 	}
 

@@ -227,3 +227,7 @@ func TestBatchWaitRecoveredOnlyForObservedDoneStatus(t *testing.T) {
 		t.Fatal("nil status should not recover a wait error")
 	}
 }
+
+func (f *fakeBatchBilling) RefundRouteDiscount(context.Context, string, string) (*billing.RouteDiscountRefund, error) {
+	return nil, nil
+}

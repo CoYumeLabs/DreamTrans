@@ -86,8 +86,9 @@ func (s *Service) GrantPromotionRewards(ctx context.Context, userID string) erro
 	// Gift memberships remain separate from Stripe/manual assignments. A paid
 	// membership takes precedence; the gift applies while unexpired otherwise.
 	// The discount and first top-up windows start now, not at registration.
-	if _, err := tx.ExecContext(ctx, `UPDATE promotion_registrations SET rewarded_at=$2,grant_id=$3,plan_until=$4,discount_until=$5,topup_bonus_until=$6 WHERE id=$1`,
-		id, now, grantID, until, discountUntil, topupUntil); err != nil {
+	optIn := acct.TrainingOptIn.Valid && acct.TrainingOptIn.Bool
+	if _, err := tx.ExecContext(ctx, `UPDATE promotion_registrations SET rewarded_at=$2,grant_id=$3,plan_until=$4,discount_until=$5,topup_bonus_until=$6,training_opt_in_at_claim=$7 WHERE id=$1`,
+		id, now, grantID, until, discountUntil, topupUntil, optIn); err != nil {
 		return err
 	}
 	s.milestoneSettled.Delete(userID)

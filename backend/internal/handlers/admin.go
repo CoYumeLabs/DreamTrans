@@ -186,6 +186,12 @@ type AdminSystemSettings struct {
 	// TrainingDiscountPercent is the transcription discount for users who
 	// join the training program; it only applies where the program is offered.
 	TrainingDiscountPercent float64 `json:"training_discount_percent"`
+	// TrainingProgramEnabled is the global pause switch: off hides the
+	// program and routes everyone through the no-training account.
+	TrainingProgramEnabled bool `json:"training_program_enabled"`
+	// GiftTrainingDiscount lets gift balance enjoy the program discount;
+	// off means gift money is always standard price and never trains.
+	GiftTrainingDiscount bool `json:"gift_training_discount"`
 }
 
 // AdminSystemSettingsResponse returns both active values and reset defaults.
@@ -201,6 +207,8 @@ type adminSystemSettingsPatch struct {
 	TrialCreditUSD          *float64 `json:"trial_credit_usd"`
 	TrialCreditDays         *float64 `json:"trial_credit_days"`
 	TrainingDiscountPercent *float64 `json:"training_discount_percent"`
+	TrainingProgramEnabled  *bool    `json:"training_program_enabled"`
+	GiftTrainingDiscount    *bool    `json:"gift_training_discount"`
 }
 
 // AdminSystemSettingChange describes one reset-preview difference.
@@ -224,6 +232,8 @@ var defaultAdminSystemSettings = AdminSystemSettings{
 	TrialCreditUSD:          1,
 	TrialCreditDays:         30,
 	TrainingDiscountPercent: billing.DefaultTrainingDiscountPercent,
+	TrainingProgramEnabled:  true,
+	GiftTrainingDiscount:    false,
 }
 
 // HandleListUsers lists all users (admin only)
@@ -329,6 +339,9 @@ type UpdateUserRequest struct {
 	// EmailVerified lets support activate an account whose mail never
 	// arrived (or revoke a verification).
 	EmailVerified *bool `json:"email_verified"`
+	// SpeechmaticsRoute pins the account to one provider account (super
+	// administrators only); "" clears the pin.
+	SpeechmaticsRoute *string `json:"speechmatics_route"`
 }
 
 func validateAdminUserUpdate(
@@ -433,6 +446,17 @@ func (h *AdminHandler) HandleUpdateUser(w http.ResponseWriter, r *http.Request) 
 	); err != nil {
 		writeAdminUserUpdateError(w, err)
 		return
+	}
+	if req.SpeechmaticsRoute != nil {
+		if currentClaims.Role != "super_admin" || !validSpeechmaticsRoute(*req.SpeechmaticsRoute) {
+			http.Error(w, `{"error":"invalid speechmatics route"}`, http.StatusBadRequest)
+			return
+		}
+		if err := h.store.SetUserSpeechmaticsRoute(ctx, userID, *req.SpeechmaticsRoute); err != nil {
+			http.Error(w, `{"error":"failed to update user"}`, http.StatusInternalServerError)
+			return
+		}
+		h.auditTx(ctx, currentClaims, "user.routing.update", "user", userID, map[string]any{"speechmatics_route": *req.SpeechmaticsRoute, "previous": user.SpeechmaticsRoute})
 	}
 	if req.EmailVerified != nil && *req.EmailVerified != user.EmailVerified {
 		if err := h.store.SetUserEmailVerified(ctx, userID, *req.EmailVerified); err != nil {
@@ -593,6 +617,14 @@ type UpdateTenantRequest struct {
 	APIQuotaMonthly *int    `json:"api_quota_monthly"`
 	StorageQuotaGB  *int    `json:"storage_quota_gb"`
 	MaxSessions     *int    `json:"max_sessions"`
+	// Kind is personal or institution; SpeechmaticsRoute pins the tenant
+	// to "training" or "standard" ("" clears the pin).
+	Kind              *string `json:"kind"`
+	SpeechmaticsRoute *string `json:"speechmatics_route"`
+}
+
+func validSpeechmaticsRoute(value string) bool {
+	return value == "" || value == billing.RouteTraining || value == billing.RouteStandard
 }
 
 // HandleUpdateTenant updates a tenant (admin only)
@@ -652,6 +684,25 @@ func (h *AdminHandler) HandleUpdateTenant(w http.ResponseWriter, r *http.Request
 			http.Error(w, `{"error":"invalid session quota"}`, http.StatusBadRequest)
 			return
 		}
+	}
+	if req.Kind != nil && *req.Kind != "personal" && *req.Kind != "institution" {
+		http.Error(w, `{"error":"invalid tenant kind"}`, http.StatusBadRequest)
+		return
+	}
+	if req.SpeechmaticsRoute != nil && !validSpeechmaticsRoute(*req.SpeechmaticsRoute) {
+		http.Error(w, `{"error":"invalid speechmatics route"}`, http.StatusBadRequest)
+		return
+	}
+	if req.Kind != nil || req.SpeechmaticsRoute != nil {
+		if err := h.store.SetTenantRouting(ctx, tenantID, req.Kind, req.SpeechmaticsRoute); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				http.Error(w, `{"error":"tenant not found"}`, http.StatusNotFound)
+				return
+			}
+			http.Error(w, `{"error":"failed to update tenant"}`, http.StatusInternalServerError)
+			return
+		}
+		h.auditTx(ctx, auth.GetUserClaims(ctx), "tenant.routing.update", "tenant", tenantID, map[string]any{"kind": req.Kind, "speechmatics_route": req.SpeechmaticsRoute})
 	}
 
 	tenant, err := h.store.UpdateTenantFields(
@@ -1072,6 +1123,18 @@ func parseStoredSystemSetting(key, value string, settings *AdminSystemSettings) 
 			return fmt.Errorf("invalid training discount")
 		}
 		settings.TrainingDiscountPercent = parsed
+	case "training_program_enabled":
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		settings.TrainingProgramEnabled = parsed
+	case "gift_training_discount":
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		settings.GiftTrainingDiscount = parsed
 	default:
 		return fmt.Errorf("unknown system setting")
 	}
@@ -1090,6 +1153,8 @@ func (h *AdminHandler) getTypedSystemSettings(ctx context.Context) (AdminSystemS
 		"trial_credit_usd",
 		"trial_credit_days",
 		"training_discount_percent",
+		"training_program_enabled",
+		"gift_training_discount",
 	} {
 		value, err := h.billing.GetSystemSetting(ctx, key)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1141,7 +1206,7 @@ func decodeAdminSystemSettingsPatch(r io.Reader) (adminSystemSettingsPatch, erro
 	}
 	if patch.BillingEnabled == nil && patch.AllowNegativeBalance == nil &&
 		patch.AllowUserAPIKey == nil && patch.TrialCreditUSD == nil && patch.TrialCreditDays == nil &&
-		patch.TrainingDiscountPercent == nil {
+		patch.TrainingDiscountPercent == nil && patch.TrainingProgramEnabled == nil && patch.GiftTrainingDiscount == nil {
 		return patch, fmt.Errorf("at least one system setting is required")
 	}
 	if patch.TrialCreditUSD != nil {
@@ -1195,6 +1260,14 @@ func applyAdminSystemSettingsPatch(
 		next.TrainingDiscountPercent = *patch.TrainingDiscountPercent
 		updates["training_discount_percent"] = strconv.FormatFloat(next.TrainingDiscountPercent, 'f', -1, 64)
 	}
+	if patch.TrainingProgramEnabled != nil {
+		next.TrainingProgramEnabled = *patch.TrainingProgramEnabled
+		updates["training_program_enabled"] = strconv.FormatBool(next.TrainingProgramEnabled)
+	}
+	if patch.GiftTrainingDiscount != nil {
+		next.GiftTrainingDiscount = *patch.GiftTrainingDiscount
+		updates["gift_training_discount"] = strconv.FormatBool(next.GiftTrainingDiscount)
+	}
 	return next, updates
 }
 
@@ -1212,6 +1285,10 @@ func systemSettingDescription(key string) string {
 		return "Days before the signup trial credit expires"
 	case "training_discount_percent":
 		return "Transcription discount for users who join the training program"
+	case "training_program_enabled":
+		return "Pause switch for the training program; off routes everyone through the no-training account"
+	case "gift_training_discount":
+		return "Whether gift balance may earn the training discount (default: standard price only)"
 	default:
 		return ""
 	}
@@ -1341,6 +1418,18 @@ func systemSettingsResetPreview(current AdminSystemSettings) AdminSystemSettings
 			To: defaultAdminSystemSettings.TrialCreditDays,
 		})
 	}
+	if current.TrainingProgramEnabled != defaultAdminSystemSettings.TrainingProgramEnabled {
+		changes = append(changes, AdminSystemSettingChange{
+			Key: "training_program_enabled", From: current.TrainingProgramEnabled,
+			To: defaultAdminSystemSettings.TrainingProgramEnabled,
+		})
+	}
+	if current.GiftTrainingDiscount != defaultAdminSystemSettings.GiftTrainingDiscount {
+		changes = append(changes, AdminSystemSettingChange{
+			Key: "gift_training_discount", From: current.GiftTrainingDiscount,
+			To: defaultAdminSystemSettings.GiftTrainingDiscount,
+		})
+	}
 	if current.TrainingDiscountPercent != defaultAdminSystemSettings.TrainingDiscountPercent {
 		changes = append(changes, AdminSystemSettingChange{
 			Key: "training_discount_percent", From: current.TrainingDiscountPercent,
@@ -1408,6 +1497,8 @@ func (h *AdminHandler) HandleSystemSettingsReset(w http.ResponseWriter, r *http.
 		"trial_credit_usd":          strconv.FormatFloat(defaultAdminSystemSettings.TrialCreditUSD, 'f', -1, 64),
 		"trial_credit_days":         strconv.FormatFloat(defaultAdminSystemSettings.TrialCreditDays, 'f', -1, 64),
 		"training_discount_percent": strconv.FormatFloat(defaultAdminSystemSettings.TrainingDiscountPercent, 'f', -1, 64),
+		"training_program_enabled":  strconv.FormatBool(defaultAdminSystemSettings.TrainingProgramEnabled),
+		"gift_training_discount":    strconv.FormatBool(defaultAdminSystemSettings.GiftTrainingDiscount),
 	}
 	if err := h.persistSystemSettings(
 		ctx, updates, claims.UserID, "system.settings.reset",
@@ -1428,4 +1519,44 @@ func validUserRole(role string) bool {
 	default:
 		return false
 	}
+}
+
+// auditTx writes one administrator action to admin_audit_logs. Audit
+// failures are logged, never surfaced: the change itself already happened.
+func (h *AdminHandler) auditTx(ctx context.Context, claims *auth.UserClaims, action, targetType, targetID string, details map[string]any) {
+	if h.store == nil || claims == nil {
+		return
+	}
+	payload, err := json.Marshal(details)
+	if err != nil {
+		return
+	}
+	if _, err := h.store.DB().ExecContext(ctx, `INSERT INTO admin_audit_logs (actor_user_id, action, target_type, target_id, details) VALUES ($1, $2, $3, $4, $5)`,
+		claims.UserID, action, targetType, targetID, payload); err != nil {
+		log.Printf("audit %s: %v", action, err)
+	}
+}
+
+// HandleTrainingProgramStats reports program membership at the moments
+// that matter: claim, first payment and later changes.
+func (h *AdminHandler) HandleTrainingProgramStats(w http.ResponseWriter, r *http.Request) {
+	if _, ok := requireActor(w, r); !ok {
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	if h.billing == nil {
+		http.Error(w, `{"error":"billing unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+	stats, err := h.billing.TrainingProgramStatistics(r.Context())
+	if err != nil {
+		log.Printf("training program stats: %v", err)
+		http.Error(w, `{"error":"failed to compute statistics"}`, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	WriteJSON(w, stats)
 }
