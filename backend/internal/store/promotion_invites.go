@@ -178,6 +178,9 @@ func validatePromotion(p *PromotionInvite) error {
 }
 
 func (s *PostgresStore) CreatePromotion(ctx context.Context, p *PromotionInvite, actor string) error {
+	if !adminChannelAllowed(ctx, strings.TrimSpace(p.Channel)) {
+		return fmt.Errorf("%w: channel is outside your scope", ErrPromotionInput)
+	}
 	if err := validatePromotion(p); err != nil {
 		return err
 	}
@@ -214,16 +217,16 @@ func (s *PostgresStore) CreatePromotion(ctx context.Context, p *PromotionInvite,
 }
 
 func (s *PostgresStore) ListPromotions(ctx context.Context, limit, offset int, search string) ([]PromotionInvite, int, error) {
-	filter := ` WHERE ($1='' OR i.name ILIKE $1 OR i.channel ILIKE $1 OR i.code ILIKE $1 OR i.tags::text ILIKE $1)`
+	filter := ` WHERE ($1='' OR i.name ILIKE $1 OR i.channel ILIKE $1 OR i.code ILIKE $1 OR i.tags::text ILIKE $1) AND (cardinality($2::text[])=0 OR i.channel=ANY($2::text[]))`
 	if search != "" {
 		search = "%" + search + "%"
 	}
 	var total int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM promotion_invites i`+filter, search).Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM promotion_invites i`+filter, search, pq.Array(adminChannels(ctx))).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT `+promotionColumns+`,`+promotionFunnelColumns+`
-        FROM promotion_invites i`+filter+` ORDER BY i.created_at DESC,i.id LIMIT $2 OFFSET $3`, search, limit, offset)
+        FROM promotion_invites i`+filter+` ORDER BY i.created_at DESC,i.id LIMIT $3 OFFSET $4`, search, pq.Array(adminChannels(ctx)), limit, offset)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -241,11 +244,11 @@ func (s *PostgresStore) ListPromotions(ctx context.Context, limit, offset int, s
 
 // GetPromotion loads one invite with its funnel counters.
 func (s *PostgresStore) GetPromotion(ctx context.Context, id string) (*PromotionInvite, error) {
-	return scanPromotion(s.db.QueryRowContext(ctx, `SELECT `+promotionColumns+`,`+promotionFunnelColumns+` FROM promotion_invites i WHERE i.id=$1`, id), true)
+	return scanPromotion(s.db.QueryRowContext(ctx, `SELECT `+promotionColumns+`,`+promotionFunnelColumns+` FROM promotion_invites i WHERE i.id=$1 AND (cardinality($2::text[])=0 OR i.channel=ANY($2::text[]))`, id, pq.Array(adminChannels(ctx))), true)
 }
 
 func (s *PostgresStore) SetPromotionEnabled(ctx context.Context, id string, enabled bool) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE promotion_invites SET enabled=$2 WHERE id=$1`, id, enabled)
+	result, err := s.db.ExecContext(ctx, `UPDATE promotion_invites SET enabled=$2 WHERE id=$1 AND (cardinality($3::text[])=0 OR channel=ANY($3::text[]))`, id, enabled, pq.Array(adminChannels(ctx)))
 	if err != nil {
 		return err
 	}
@@ -265,7 +268,7 @@ func (s *PostgresStore) SetPromotionCopy(ctx context.Context, id, headline, desc
 	if err != nil {
 		return err
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE promotion_invites SET headline=$2,description=$3 WHERE id=$1`, id, headline, description)
+	result, err := s.db.ExecContext(ctx, `UPDATE promotion_invites SET headline=$2,description=$3 WHERE id=$1 AND (cardinality($4::text[])=0 OR channel=ANY($4::text[]))`, id, headline, description, pq.Array(adminChannels(ctx)))
 	if err != nil {
 		return err
 	}
@@ -338,6 +341,9 @@ type PromotionRegistration struct {
 }
 
 func (s *PostgresStore) ListPromotionRegistrations(ctx context.Context, id string, limit, offset int) ([]PromotionRegistration, int, error) {
+	if _, err := s.GetPromotion(ctx, id); err != nil {
+		return nil, 0, err
+	}
 	var total int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM promotion_registrations WHERE invite_id=$1`, id).Scan(&total); err != nil {
 		return nil, 0, err

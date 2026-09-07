@@ -12,6 +12,7 @@ test('super admin reviews signup rewards and can adjust thresholds', async ({ pa
     const url = new URL(route.request().url())
     const method = route.request().method()
     let data: unknown = {}
+    if (url.pathname === '/api/admin/access') data = { allowed: true, super: true, tenant_admin: false, role_id: '', role_key: 'super_admin', name: '超级管理员', permissions: ['*'], channels: [] }
     if (url.pathname === '/api/user/profile') data = { user }
     if (url.pathname === '/api/admin/stats') data = { basic: { user_count: 1, tenant_count: 1, session_count: 0, transcript_count: 0 } }
     if (url.pathname === '/api/admin/signup-risk/budget') data = { limit_cents: settings.daily_reward_budget_cents, spent_usd: '2.500000', blocked: 1 }

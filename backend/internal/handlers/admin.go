@@ -259,7 +259,7 @@ func (h *AdminHandler) HandleListUsers(w http.ResponseWriter, r *http.Request) {
 	var users []models.User
 	var total int
 	var err error
-	if claims.Role == "super_admin" {
+	if claims.Role == "super_admin" || platformConsoleUsers(r) {
 		users, total, err = h.store.ListUsers(r.Context(), pageSize, offset)
 	} else {
 		users, total, err = h.store.ListUsersByTenant(r.Context(), claims.TenantID, pageSize, offset)
@@ -307,7 +307,7 @@ func (h *AdminHandler) HandleGetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims := auth.GetUserClaims(r.Context())
-	if claims.Role != "super_admin" && user.TenantID != claims.TenantID {
+	if claims.Role != "super_admin" && user.TenantID != claims.TenantID && !platformConsoleUsers(r) {
 		http.Error(w, `{"error":"user not found"}`, http.StatusNotFound)
 		return
 	}
@@ -348,8 +348,9 @@ func validateAdminUserUpdate(
 	req UpdateUserRequest,
 	user *models.User,
 	claims *auth.UserClaims,
+	platform ...bool,
 ) (*string, int, string) {
-	if claims.Role != "super_admin" && user.TenantID != claims.TenantID {
+	if claims.Role != "super_admin" && user.TenantID != claims.TenantID && (len(platform) == 0 || !platform[0]) {
 		return nil, http.StatusNotFound, `{"error":"user not found"}`
 	}
 	if (user.Role == "admin" || user.Role == "super_admin") && claims.Role != "super_admin" {
@@ -430,12 +431,16 @@ func (h *AdminHandler) HandleUpdateUser(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 		return
 	}
-	namePatch, status, message := validateAdminUserUpdate(req, user, currentClaims)
+	namePatch, status, message := validateAdminUserUpdate(req, user, currentClaims, platformConsoleUsers(r))
 	if status != 0 {
 		http.Error(w, message, status)
 		return
 	}
 
+	if req.SpeechmaticsRoute != nil && (currentClaims.Role != "super_admin" || !validSpeechmaticsRoute(*req.SpeechmaticsRoute)) {
+		http.Error(w, `{"error":"invalid speechmatics route"}`, http.StatusBadRequest)
+		return
+	}
 	if err := h.store.UpdateUserAdminSafe(
 		ctx,
 		userID,
@@ -448,10 +453,6 @@ func (h *AdminHandler) HandleUpdateUser(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if req.SpeechmaticsRoute != nil {
-		if currentClaims.Role != "super_admin" || !validSpeechmaticsRoute(*req.SpeechmaticsRoute) {
-			http.Error(w, `{"error":"invalid speechmatics route"}`, http.StatusBadRequest)
-			return
-		}
 		if err := h.store.SetUserSpeechmaticsRoute(ctx, userID, *req.SpeechmaticsRoute); err != nil {
 			http.Error(w, `{"error":"failed to update user"}`, http.StatusInternalServerError)
 			return
@@ -505,7 +506,7 @@ func (h *AdminHandler) HandleDeleteUser(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 		return
 	}
-	if currentClaims.Role != "super_admin" && user.TenantID != currentClaims.TenantID {
+	if currentClaims.Role != "super_admin" && user.TenantID != currentClaims.TenantID && !platformConsoleUsers(r) {
 		http.Error(w, `{"error":"user not found"}`, http.StatusNotFound)
 		return
 	}
@@ -977,7 +978,7 @@ func (h *AdminHandler) HandleGetUserBalance(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	claims := auth.GetUserClaims(r.Context())
-	if target == nil || (claims.Role != "super_admin" && target.TenantID != claims.TenantID) {
+	if target == nil || (claims.Role != "super_admin" && target.TenantID != claims.TenantID && !consolePermission(r, "finance.read")) {
 		http.Error(w, `{"error":"user not found"}`, http.StatusNotFound)
 		return
 	}

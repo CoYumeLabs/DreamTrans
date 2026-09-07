@@ -85,6 +85,10 @@ async function installBackend(page: Page, options: MockOptions = {}): Promise<st
       })
       return
     }
+    if (method === 'GET' && path === '/api/admin/access') {
+      await route.fulfill({ json: { allowed: false, super: false, permissions: [], channels: [] } })
+      return
+    }
     if (method === 'GET' && path === '/api/user/profile') {
       await json(route, { user })
       return

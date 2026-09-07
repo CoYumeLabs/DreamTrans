@@ -57,7 +57,12 @@ type audioUsageSnapshot struct {
 // Wall-clock connection time is not a useful proxy because clients can pause,
 // buffer, or send audio faster/slower than real time.
 type audioUsageMeter struct {
-	mu sync.Mutex
+	mu            sync.Mutex
+	timeline      []audioTimeAnchor
+	latencies     []float64
+	metricCount   int
+	lastMetricEnd float64
+	timelineFloor float64
 	// route is the session's routing decision, fixed at connect so every
 	// reservation is priced alike; nil lets the ledger decide per record.
 	route          *billing.RouteDecision
@@ -677,7 +682,7 @@ func (h *SpeechmaticsProxyHandler) HandleProxy(w http.ResponseWriter, r *http.Re
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		h.proxySpeechmaticsToClient(ctx, smConn, safeClientConn, errChan)
+		h.proxySpeechmaticsToClient(ctx, smConn, safeClientConn, errChan, audioMeter)
 	}()
 
 	// Wait for error or completion
@@ -703,6 +708,7 @@ func (h *SpeechmaticsProxyHandler) HandleProxy(w http.ResponseWriter, r *http.Re
 	_ = clientConn.SetReadDeadline(time.Now())
 	_ = smConn.SetReadDeadline(time.Now())
 	wg.Wait()
+	h.saveTranscriptionMetrics(audioMeter, billingConnectionID, userID, billingSessionRef)
 
 	// Reconcile the unused reservation tail against exact forwarded raw audio.
 	// A detached context makes client disconnects unable to cancel the refund.
@@ -867,6 +873,9 @@ func (h *SpeechmaticsProxyHandler) proxyClientToSpeechmatics(
 				} else {
 					meterErr = audioMeter.AddForwardedBytes(len(data))
 				}
+				if meterErr == nil {
+					audioMeter.noteAudioForwarded(time.Now())
+				}
 				if meterErr != nil && requireMeter {
 					reportProxyResult(errChan, meterErr)
 					return
@@ -882,6 +891,7 @@ func (h *SpeechmaticsProxyHandler) proxySpeechmaticsToClient(
 	smConn *websocket.Conn,
 	clientConn *safeWebSocketConn,
 	errChan chan<- error,
+	meters ...*audioUsageMeter,
 ) {
 	for {
 		select {
@@ -896,6 +906,10 @@ func (h *SpeechmaticsProxyHandler) proxySpeechmaticsToClient(
 					reportProxyResult(errChan, nil)
 				}
 				return
+			}
+
+			if messageType == websocket.TextMessage && len(meters) > 0 {
+				meters[0].noteTranscript(data, time.Now())
 			}
 
 			// Reset read deadline on activity

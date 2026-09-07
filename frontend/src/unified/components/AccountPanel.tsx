@@ -28,6 +28,7 @@ import {
 import { ApiRequestError } from '../../pro/api/auth'
 import { getUserReferral, type ReferralSummary } from '../../api'
 import { intlLocale, messages, useMessages } from '../../i18n'
+import { RedeemCodeForm } from './RedeemCodeForm'
 import { Icon } from './Icon'
 
 export interface AccountPanelProps {
@@ -518,6 +519,8 @@ export function AccountPanel({
           </div>
         </dl>
       </section>
+
+      <RedeemCodeForm onRefresh={onRefreshAccount} />
 
       {(account.signup_reward_status === 'review' || account.signup_reward_status === 'denied' || account.signup_reward_status === 'budget_hold') && <p className="dt-auth__offer" role="status">{account.signup_reward_status === 'budget_hold' ? m.auth.rewardBudgetHold : account.signup_reward_status === 'review' ? m.auth.rewardReview : m.auth.rewardDenied}</p>}
 

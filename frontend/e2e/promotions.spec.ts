@@ -12,8 +12,9 @@ test('administrator creates, shares, inspects and pauses a channel invitation', 
     const method = route.request().method()
     let data: unknown = {}
     if (url.pathname === '/api/admin/stats') data = { basic: { user_count: 1, tenant_count: 1, session_count: 0, transcript_count: 0 } }
+    if (url.pathname === '/api/admin/access') data = { allowed: true, super: true, tenant_admin: false, role_id: '', role_key: 'super_admin', name: '超级管理员', permissions: ['*'], channels: [] }
     if (url.pathname === '/api/user/profile') data = { user }
-    if (url.pathname === '/api/admin/billing/plans') data = { plans: [{ code: 'pro', name: 'Pro', active: true }] }
+    if ((url.pathname === '/api/admin/billing/plans' || url.pathname === '/api/user/billing/plans')) data = { plans: [{ code: 'pro', name: 'Pro', active: true }] }
     if (url.pathname === '/api/admin/promotions') {
       if (method === 'POST') {
         offer = { ...route.request().postDataJSON(), id: 'invite-1', enabled: true, registrations: 0, verified: 0, rewarded: 0 }

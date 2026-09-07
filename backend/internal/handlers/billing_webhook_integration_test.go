@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -207,7 +208,7 @@ func TestStripeWebhookTopupAndMembershipIntegration(t *testing.T) {
 	// A refund of the first top-up revokes its bonus and debits the wallet;
 	// the delayed $10 top-up is untouched.
 	refund := stripeEvent(webhookID("evt_refund_1"), "charge.refunded", map[string]any{
-		"id": webhookID("ch_test_1"), "object": "charge", "payment_intent": webhookID("pi_test_topup"), "amount_refunded": 2000, "refunded": true,
+		"id": webhookID("ch_test_1"), "object": "charge", "payment_intent": webhookID("pi_test_topup"), "amount": 2000, "amount_refunded": 2000, "currency": "usd", "refunded": true,
 		"refunds": map[string]any{"object": "list", "data": []map[string]any{{"id": webhookID("re_test_1"), "object": "refund", "amount": 2000}}},
 	})
 	if resp := postSignedWebhook(t, handler, refund); resp.Code != http.StatusOK {
@@ -233,4 +234,23 @@ func TestStripeWebhookTopupAndMembershipIntegration(t *testing.T) {
 	if math.Abs(balance.WalletUSD-5) > 1e-6 {
 		t.Fatalf("after partial AUD refund wallet = %v, want 5", balance.WalletUSD)
 	}
+	// A second partial refund reports the cumulative total. Its refund list
+	// may be newest-first or omitted; neither may determine how much to debit.
+	for index, total := range []int{1550, 775, 1550} {
+		event := stripeEvent(webhookID("evt_cumulative_"+strconv.Itoa(index)), "charge.refunded", map[string]any{
+			"id": webhookID("ch_test_2"), "object": "charge", "payment_intent": webhookID("pi_test_delayed"),
+			"amount": 1550, "amount_refunded": total, "currency": "aud", "refunded": total == 1550,
+		})
+		if response := postSignedWebhook(t, handler, event); response.Code != http.StatusOK {
+			t.Fatalf("cumulative refund=%d %s", response.Code, response.Body)
+		}
+		current, err := service.GetUserBalance(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if math.Abs(current.WalletUSD) > 1e-6 {
+			t.Fatalf("cumulative refund repeated earlier debit: %v", current.WalletUSD)
+		}
+	}
+
 }

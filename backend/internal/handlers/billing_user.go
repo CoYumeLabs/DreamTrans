@@ -519,6 +519,7 @@ func (h *BillingHandler) processStripeEvent(ctx context.Context, event *payments
 			if err != nil && !errors.Is(err, billing.ErrDuplicatePayment) {
 				return err
 			}
+			h.capturePaymentFee(ctx, objectID)
 			return nil
 		case "subscription":
 			if session.SubscriptionID == "" {
@@ -561,7 +562,11 @@ func (h *BillingHandler) processStripeEvent(ctx context.Context, event *payments
 		if err != nil {
 			return err
 		}
-		return h.applySubscription(ctx, &state, h.stripeUSD(invoice.AmountPaid, invoice.Currency, nil), invoice.InvoiceID)
+		if err := h.applySubscription(ctx, &state, h.stripeUSD(invoice.AmountPaid, invoice.Currency, nil), invoice.InvoiceID); err != nil {
+			return err
+		}
+		h.capturePaymentFee(ctx, invoice.InvoiceID)
+		return nil
 	case "invoice.payment_failed":
 		invoice, err := payments.ParseInvoice(event.Data.Raw)
 		if err != nil {
@@ -576,6 +581,20 @@ func (h *BillingHandler) processStripeEvent(ctx context.Context, event *payments
 		}
 		state.Status = "past_due"
 		return h.applySubscription(ctx, &state, 0, "")
+	case "charge.updated":
+		var charge struct {
+			PaymentIntent string `json:"payment_intent"`
+			Invoice       string `json:"invoice"`
+		}
+		if json.Unmarshal(event.Data.Raw, &charge) != nil {
+			return nil
+		}
+		if charge.Invoice != "" {
+			h.capturePaymentFee(ctx, charge.Invoice)
+		} else if charge.PaymentIntent != "" {
+			h.capturePaymentFee(ctx, charge.PaymentIntent)
+		}
+		return nil
 	case "charge.refunded":
 		refund, err := payments.ParseChargeRefund(event.Data.Raw)
 		if err != nil {
@@ -584,14 +603,21 @@ func (h *BillingHandler) processStripeEvent(ctx context.Context, event *payments
 		if refund.PaymentIntentID == "" || refund.AmountRefunded <= 0 {
 			return nil
 		}
-		// A full refund reverses exactly the USD that was credited, whatever
-		// the conversion rounding was; partial refunds convert pro rata at the
-		// rate recorded on the payment.
-		refundedUSD := h.stripeUSD(refund.AmountRefunded, refund.Currency, refund.Metadata)
-		if paid, ok := parseFloatMeta(refund.Metadata["amount_usd"]); ok && paid > 0 && refund.Refunded && refund.AmountRefunded >= refund.Amount {
-			refundedUSD = paid
+		// Charge events contain a cumulative refund total. Convert pro rata
+		// from the immutable credited USD principal, then apply only its delta.
+		paid, lookupErr := h.billing.PaymentAmount(ctx, refund.PaymentIntentID)
+		if errors.Is(lookupErr, sql.ErrNoRows) {
+			return nil
 		}
-		err = h.billing.RecordPaymentRefund(ctx, refund.PaymentIntentID, refundedUSD, refund.LatestRefundID)
+		if lookupErr != nil {
+			return lookupErr
+		}
+		if refund.Amount <= 0 {
+			return fmt.Errorf("invalid refunded charge amount")
+		}
+		refundedUSD := paid * float64(refund.AmountRefunded) / float64(refund.Amount)
+		eventKey := fmt.Sprintf("%s:refund:%d", refund.ChargeID, refund.AmountRefunded)
+		err = h.billing.RecordChargeRefund(ctx, refund.PaymentIntentID, refundedUSD, eventKey)
 		if errors.Is(err, sql.ErrNoRows) {
 			// Not one of our top-ups (e.g. a membership invoice refund handled
 			// by Stripe's own invoice flow).
@@ -646,7 +672,8 @@ func AutoTopupHandler(service *billing.Service, stripeClient *payments.StripeCli
 			UserID: req.UserID, AmountUSD: req.AmountUSD, StripeObjectID: intentID,
 			Description: "automatic wallet top-up",
 		})
-		if errors.Is(err, billing.ErrDuplicatePayment) {
+		if err == nil || errors.Is(err, billing.ErrDuplicatePayment) {
+			NewBillingHandler(service, stripeClient).capturePaymentFee(ctx, intentID)
 			return nil
 		}
 		return err
@@ -674,4 +701,21 @@ func requirePlanFeature(ctx context.Context, service any, userID, feature string
 		return fmt.Errorf("%w: %s", billing.ErrFeatureNotIncluded, feature)
 	}
 	return nil
+}
+
+func (h *BillingHandler) capturePaymentFee(ctx context.Context, objectID string) {
+	if h.stripe == nil || !h.stripe.Enabled() {
+		return
+	}
+	c, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	amount, err := h.billing.PaymentAmount(c, objectID)
+	if err != nil {
+		return
+	}
+	fee, err := h.stripe.PaymentProcessingFee(c, objectID, amount)
+	if err != nil {
+		return
+	}
+	_ = h.billing.RecordPaymentFee(c, objectID, fee.USD, fee.Currency, fee.MinorUnits)
 }

@@ -1,3 +1,4 @@
+import { useConsoleAccess } from '../pro/admin/consoleAccess'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   formatHours,
@@ -329,7 +330,8 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
     return () => { effectActive = false }
   }, [user, historyCostIds, recorderIdle])
   const transitionBusy = recorderStatus === 'starting' || recorderStatus === 'stopping'
-  const adminNavigation = adminNavigationState(user?.role, recorderStatus)
+  const consoleAccess = useConsoleAccess(user?.id)
+  const adminNavigation = adminNavigationState(consoleAccess?.allowed ? 'admin' : user?.role, recorderStatus)
   const adminNavigationDisabled = adminNavigation === 'disabled'
   const adminNavigationTitle = adminNavigationDisabled
     ? w.hints.adminStopFirst

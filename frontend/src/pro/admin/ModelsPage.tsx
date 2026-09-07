@@ -94,7 +94,7 @@ function createModelCostDraft(
   }
 }
 
-export function ModelsPage({ run }: { run: Runner }) {
+export function ModelsPage({ run, canPrice = true }: { run: Runner; canPrice?: boolean }) {
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null)
   const [billingCatalog, setBillingCatalog] = useState<BillingCatalog | null>(null)
   const [costDraft, setCostDraft] = useState<ModelCostDraft | null>(null)
@@ -230,7 +230,7 @@ export function ModelsPage({ run }: { run: Runner }) {
                   <td>
                     <span className={`pa-status ${availability.className}`}>{availability.label}</span>
                     <button className="pa-link-button" onClick={() => openModelCost(model)} type="button">
-                      {costConfirmed ? '查看或修改成本' : '配置成本'}
+                      {!canPrice ? '查看成本' : costConfirmed ? '查看或修改成本' : '配置成本'}
                     </button>
                   </td>
                   <td><div className="pa-policy-grid">
@@ -276,7 +276,7 @@ export function ModelsPage({ run }: { run: Runner }) {
           footer={(
             <>
               <button className="pa-button pa-button--quiet" onClick={() => setCostDraft(null)} type="button">取消</button>
-              <button className="pa-button pa-button--primary" disabled={!costChanged || costDraft.input === ''} onClick={() => void saveModelCost()} type="button">保存成本</button>
+              <button className="pa-button pa-button--primary" disabled={!canPrice || !costChanged || costDraft.input === ''} onClick={() => void saveModelCost()} type="button">保存成本</button>
             </>
           )}
           onClose={() => setCostDraft(null)}

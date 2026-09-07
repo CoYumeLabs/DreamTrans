@@ -182,6 +182,10 @@ class MockAIBackend {
         })
         return
       }
+      if (method === 'GET' && url.pathname === '/api/admin/access') {
+        await json(route, { allowed: false, super: false, permissions: [], channels: [] })
+        return
+      }
       if (method === 'GET' && url.pathname === '/api/user/profile') {
         await json(route, { user })
         return

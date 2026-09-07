@@ -87,7 +87,7 @@ func (h *AdminHandler) HandleAnnouncements(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	if actor.Role != "super_admin" {
+	if actor.Role != "super_admin" && !consolePermission(r, "announcements.read") && !consolePermission(r, "announcements.write") {
 		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		return
 	}

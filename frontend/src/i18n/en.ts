@@ -1,6 +1,7 @@
 import type { zhCN } from './zh-CN'
 
 export const en: typeof zhCN = {
+  redeem: {"title": "Redeem gift credit", "description": "One code per account; verify your email first. Gift credit is charged at the standard rate without training discounts.", "code": "Redemption code", "success": "Redeemed. Gift credit is now available.", "failed": "Redemption failed. Please try again.", "submit": "Redeem", "busy": "Redeeming…"},
   batch: {
     priceChanged: 'The estimate changed. Review it and click Start again.',
     "title": "Batch transcription",

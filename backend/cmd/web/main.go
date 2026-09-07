@@ -590,12 +590,29 @@ func buildHandler() (http.Handler, func()) {
 			})
 		}
 		adminRequired := func(next http.Handler) http.Handler {
-			return authMw.RequireAuth(authMw.RequireRole("admin", "super_admin")(maxRequestBody(1<<20, next)))
+			return authMw.RequireAuth(adminHandler.ConsoleGate(maxRequestBody(1<<20, adminHandler.ConsoleWrites(next))))
 		}
 		superAdminRequired := func(next http.Handler) http.Handler {
-			return authMw.RequireAuth(authMw.RequireRole("super_admin")(maxRequestBody(1<<20, next)))
+			return authMw.RequireAuth(adminHandler.ConsoleGate(maxRequestBody(1<<20, adminHandler.ConsoleWrites(next))))
 		}
 
+		mux.Handle("/api/agent/portal", adminRequired(http.HandlerFunc(adminHandler.HandleAgentPortal)))
+		mux.Handle("/api/agent/codes", adminRequired(http.HandlerFunc(adminHandler.HandleAgentCodes)))
+		mux.Handle("/api/agent/settlements", adminRequired(http.HandlerFunc(adminHandler.HandleAgentSettlementRequest)))
+		mux.Handle("/api/admin/agents", superAdminRequired(http.HandlerFunc(adminHandler.HandleConsoleAgents)))
+		mux.Handle("/api/admin/settlements", superAdminRequired(http.HandlerFunc(adminHandler.HandleConsoleSettlements)))
+		mux.Handle("/api/admin/settlements/", superAdminRequired(http.HandlerFunc(adminHandler.HandleConsoleSettlements)))
+		mux.Handle("/api/admin/agent-fraud", superAdminRequired(http.HandlerFunc(adminHandler.HandleAgentFraud)))
+		mux.Handle("/api/admin/dashboard", superAdminRequired(http.HandlerFunc(adminHandler.HandleConsoleDashboard)))
+		mux.Handle("/api/admin/routing", superAdminRequired(http.HandlerFunc(adminHandler.HandleConsoleRouting)))
+		mux.Handle("/api/admin/access", authMw.RequireAuth(http.HandlerFunc(adminHandler.HandleConsoleAccess)))
+		mux.Handle("/api/admin/roles", superAdminRequired(http.HandlerFunc(adminHandler.HandleConsoleRoles)))
+		mux.Handle("/api/admin/roles/assign", superAdminRequired(http.HandlerFunc(adminHandler.HandleAssignConsoleRole)))
+		mux.Handle("/api/admin/roles/", superAdminRequired(http.HandlerFunc(adminHandler.HandleConsoleRoles)))
+		mux.Handle("/api/admin/redeem-codes", superAdminRequired(http.HandlerFunc(adminHandler.HandleRedeemCodes)))
+		mux.Handle("/api/admin/redeem-codes/", superAdminRequired(http.HandlerFunc(adminHandler.HandleRedeemCodes)))
+		mux.Handle("/api/admin/audit", superAdminRequired(http.HandlerFunc(adminHandler.HandleAudit)))
+		mux.Handle("/api/user/redeem", authMw.RequireAuth(apiGuard.RateLimit(maxRequestBody(8<<10, http.HandlerFunc(billingHandler.HandleRedeem)), 10)))
 		// Admin users
 		mux.Handle("/api/admin/users", adminRequired(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.Method {

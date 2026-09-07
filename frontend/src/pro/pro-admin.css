@@ -687,3 +687,9 @@ input:disabled, select:disabled { color: var(--yf-muted); background: var(--yf-w
 .pa-promotion-funnel { margin-bottom: 16px; }
 .pa-promotion-funnel .pa-metric { min-height: 0; }
 .pa-promotion-form textarea { width: 100%; padding: 8px; font: inherit; resize: vertical; }
+
+.pa-permission-scope { border: 0; padding: 0; margin: 0; min-width: 0; }
+
+.pa-dashboard-kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; }
+.pa-dashboard-kpis strong { font-size:28px; } .pa-chart-scroll { overflow-x:auto; } .pa-chart-scroll svg { width:100%; max-height:290px; } .pa-dashboard-kpis .pa-chart-scroll svg { min-width:0!important; max-height:90px; }
+.pa-chart-legend { display:flex; flex-wrap:wrap; gap:12px; font-size:12px; margin:12px 0; } .pa-chart-legend span { display:flex; align-items:center; gap:5px; } .pa-chart-legend i { display:inline-block; width:9px; height:9px; border-radius:2px; }

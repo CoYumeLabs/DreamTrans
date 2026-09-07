@@ -30,6 +30,7 @@ func TestTranscriptUpsertDoesNotRegressTranslatedSegment(t *testing.T) {
 			end_time REAL,
 			status TEXT NOT NULL,
 			is_partial BOOLEAN NOT NULL,
+            edit_count INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE(session_id, client_segment_id)
@@ -178,6 +179,7 @@ func TestGetTranscriptsPageBySessionUsesStableKeysetCursor(t *testing.T) {
 			end_time REAL,
 			status TEXT NOT NULL,
 			is_partial BOOLEAN NOT NULL,
+            edit_count INTEGER NOT NULL DEFAULT 0,
 			created_at DATETIME NOT NULL,
 			updated_at DATETIME NOT NULL
 		)
@@ -448,6 +450,7 @@ func createTranscriptPagingTable(t *testing.T, db *sql.DB) {
 			end_time REAL,
 			status TEXT NOT NULL,
 			is_partial BOOLEAN NOT NULL,
+            edit_count INTEGER NOT NULL DEFAULT 0,
 			created_at DATETIME NOT NULL,
 			updated_at DATETIME NOT NULL
 		)

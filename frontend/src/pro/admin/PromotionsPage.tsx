@@ -1,5 +1,6 @@
+import { authFetch } from '../api/auth'
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { adminFetch, formatUSD, listPlans, type Plan } from '../../admin/api'
+import { adminFetch, formatUSD, type Plan } from '../../admin/api'
 import { formatDate, type Runner } from './shared'
 import { Modal, Pagination } from './ui'
 
@@ -107,7 +108,7 @@ function rate(numerator: number, denominator: number) {
   return `${Math.round((numerator / denominator) * 1000) / 10}%`
 }
 
-export function PromotionsPage({ run }: { run: Runner }) {
+export function PromotionsPage({ run, scoped = false }: { run: Runner; scoped?: boolean }) {
   const [result, setResult] = useState<ListResult>({ invites: [], total: 0 })
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
@@ -138,7 +139,7 @@ export function PromotionsPage({ run }: { run: Runner }) {
   }, [page, query, generation, run])
   useEffect(() => {
     let current = true
-    void run(listPlans).then((data) => { if (current && data) setPlans(data) })
+    void run(() => authFetch<{ plans: Plan[] }>('/api/user/billing/plans')).then((data) => { if (current && data) setPlans(data.plans) })
     return () => { current = false }
   }, [run])
   useEffect(() => {
@@ -155,10 +156,11 @@ export function PromotionsPage({ run }: { run: Runner }) {
   }, [funnelFor, run])
   useEffect(() => {
     let current = true
+    if (scoped) return
     const params = new URLSearchParams({ page: String(referrerPage), search: query })
     void run(() => adminFetch<ReferrersResult>(`/api/admin/referrals?${params}`)).then((data) => { if (current && data) setReferrers(data) })
     return () => { current = false }
-  }, [referrerPage, query, generation, run])
+  }, [referrerPage, query, generation, run, scoped])
 
   async function create(event: FormEvent) {
     event.preventDefault()
@@ -245,14 +247,14 @@ export function PromotionsPage({ run }: { run: Runner }) {
       </tbody></table></div>
       <Pagination page={page} pageSize={20} total={result.total} onChange={setPage} />
     </section>
-    <section className="pa-card">
+    {!scoped && <section className="pa-card">
       <div className="pa-list-heading"><div><h2>用户推荐</h2><p>每个账户都有自己的邀请链接（/invite?ref=CODE）。这里只记录来源，不发放奖励。</p></div><span className="pa-count">{referrers.total} 位推荐人</span></div>
       <div className="pa-table-wrap"><table className="pa-table"><thead><tr><th>推荐人</th><th>推荐码</th><th>访问 / 注册 / 已验证</th><th>最近一次注册</th></tr></thead><tbody>
         {referrers.referrers.map((r) => <tr key={r.user_id}><td><strong>{r.name || r.email}</strong><small>{r.email}</small></td><td><code>{r.code}</code></td><td className="pa-tabular">{r.visits} / {r.registered} / {r.verified}</td><td>{formatDate(r.last_registered_at)}</td></tr>)}
         {referrers.referrers.length === 0 && <tr><td colSpan={4} className="pa-table-empty">还没有用户通过推荐链接带来注册</td></tr>}
       </tbody></table></div>
       <Pagination page={referrerPage} pageSize={20} total={referrers.total} onChange={setReferrerPage} />
-    </section>
+    </section>}
     {creating && <Modal wide title="创建推广邀请" onClose={() => { if (!busy) setCreating(false) }} footer={<button className="pa-button pa-button--primary" disabled={busy} form="create-promotion" type="submit">{busy ? '创建中…' : '创建邀请'}</button>}>
       <form className="pa-dialog-form pa-promotion-form" id="create-promotion" onSubmit={(event) => { void create(event) }}>
         <label><span>活动名称</span><input required maxLength={100} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="2026 开学季" /></label>

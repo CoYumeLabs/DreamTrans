@@ -1,5 +1,5 @@
 // Typed API wrapper for the React administration console.
-import { ensureValidAccessToken } from '../pro/api/auth'
+import { ensureValidAccessToken, getStoredUser } from '../pro/api/auth'
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8080'
 const isProduction = BACKEND_URL === '/'
@@ -718,11 +718,13 @@ function isRetryableNetworkError(reason: unknown): boolean {
 }
 
 export async function adminFetch<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  const identity = getStoredUser()?.id
   const token = await ensureValidAccessToken()
   const retryable = isRetryableAdminRead(options)
   let response: Response
   for (let attempt = 0; ; attempt += 1) {
     try {
+      if (getStoredUser()?.id !== identity) throw new AdminAPIError('账户已切换，请刷新页面', 401)
       response = await fetch(`${baseUrl}${endpoint}`, {
         ...options,
         headers: {
@@ -756,8 +758,14 @@ export async function adminFetch<T>(endpoint: string, options: RequestInit = {})
     break
   }
 
+  if (getStoredUser()?.id !== identity) throw new AdminAPIError('账户已切换，请刷新页面', 401)
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Request failed' }))
+    if (response.status === 428 && error.code === 'confirmation_required' && new Headers(options.headers).get('X-Admin-Confirm') !== 'true') {
+      if (!window.confirm('这项操作会影响价格、赠送额度或账户余额。请核对当前表单，确认后继续。')) throw new AdminAPIError('已取消，未作任何修改', 428)
+      if (getStoredUser()?.id !== identity) throw new AdminAPIError('账户已切换，请刷新页面', 401)
+      return adminFetch<T>(endpoint, { ...options, headers: { ...options.headers, 'X-Admin-Confirm': 'true' } })
+    }
     throw new AdminAPIError(error.error || 'Request failed', response.status)
   }
 

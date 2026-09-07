@@ -48,7 +48,7 @@ func (h *AdminHandler) HandlePromotions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	// Defense in depth: promotions spend platform funds.
-	if actor.Role != "super_admin" {
+	if actor.Role != "super_admin" && !consolePermission(r, "promotions.read") && !consolePermission(r, "promotions.write") {
 		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		return
 	}
@@ -295,7 +295,7 @@ func (h *AdminHandler) HandleReferrers(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if actor.Role != "super_admin" {
+	if actor.Role != "super_admin" && !consolePermission(r, "promotions.read") && !consolePermission(r, "promotions.write") {
 		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		return
 	}

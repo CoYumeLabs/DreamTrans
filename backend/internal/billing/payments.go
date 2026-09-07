@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -199,6 +200,9 @@ func (s *Service) RecordTopup(ctx context.Context, input *TopupInput) (*AccountB
 	// Invitation first-top-up rewards follow real payments only; manual
 	// administrator credits never trigger them.
 	if input.StripeObjectID != "" {
+		if err := recordAgentCommissionTx(ctx, tx, input.UserID, paymentID, input.AmountUSD); err != nil {
+			return nil, err
+		}
 		if err := applyPromotionTopupRewardsTx(ctx, tx, acct, input.UserID, paymentID, input.AmountUSD); err != nil {
 			return nil, err
 		}
@@ -213,6 +217,16 @@ func (s *Service) RecordTopup(ctx context.Context, input *TopupInput) (*AccountB
 // is revoked first, then the refunded amount leaves the wallet (which may go
 // negative; the account is flagged for review).
 func (s *Service) RecordPaymentRefund(ctx context.Context, stripeObjectID string, amountUSD float64, refundID string) error {
+	return s.recordPaymentRefund(ctx, stripeObjectID, amountUSD, refundID, false)
+}
+
+// RecordChargeRefund consumes the cumulative total in charge.refunded. A
+// repeated or out-of-order event cannot debit earlier refunds a second time.
+func (s *Service) RecordChargeRefund(ctx context.Context, stripeObjectID string, totalUSD float64, eventKey string) error {
+	return s.recordPaymentRefund(ctx, stripeObjectID, totalUSD, eventKey, true)
+}
+func (s *Service) recordPaymentRefund(ctx context.Context, stripeObjectID string, amountUSD float64, refundID string, cumulative bool) error {
+
 	if !finiteNonNegative(amountUSD) || amountUSD <= 0 {
 		return invalidBillingInputf("refund amount must be positive")
 	}
@@ -242,10 +256,20 @@ func (s *Service) RecordPaymentRefund(ctx context.Context, stripeObjectID string
 	if exists {
 		return tx.Commit()
 	}
+	amountUSD, err = refundDeltaTx(ctx, tx, stripeObjectID, amountUSD, cumulative)
+	if err != nil {
+		return err
+	}
+	if amountUSD <= balanceEpsilon {
+		return tx.Commit()
+	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO payments (account_id, kind, amount_usd, stripe_object_id, status, description)
 		VALUES ($1, 'refund', $2, $3, 'succeeded', $4)
 	`, acct.ID, -amountUSD, nullUUIDText(refundID), "refund of "+stripeObjectID); err != nil {
+		return err
+	}
+	if err := refundAgentCommissionTx(ctx, tx, paymentID, amountUSD); err != nil {
 		return err
 	}
 	// Revoke whatever remains of the bonus that came with the refunded payment.
@@ -497,4 +521,16 @@ func (s *Service) ListPayments(ctx context.Context, userID string, limit int) ([
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func refundDeltaTx(ctx context.Context, tx *sql.Tx, objectID string, amount float64, cumulative bool) (float64, error) {
+	var paid, refunded float64
+	err := tx.QueryRowContext(ctx, `SELECT p.amount_usd,COALESCE((SELECT -SUM(r.amount_usd) FROM payments r WHERE r.account_id=p.account_id AND r.kind='refund' AND r.status='succeeded' AND r.description='refund of '||p.stripe_object_id),0) FROM payments p WHERE p.stripe_object_id=$1 AND p.kind='topup'`, objectID).Scan(&paid, &refunded)
+	if err != nil {
+		return 0, err
+	}
+	if cumulative {
+		amount -= refunded
+	}
+	return roundUSD(math.Max(0, math.Min(amount, paid-refunded))), nil
 }

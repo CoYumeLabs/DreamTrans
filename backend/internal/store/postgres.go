@@ -639,6 +639,11 @@ const transcriptUpsertQuery = `
 	INSERT INTO transcripts (session_id, client_segment_id, speaker, text, translation, translation_group_id, start_time, end_time, status, is_partial)
 	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	ON CONFLICT (session_id, client_segment_id) DO UPDATE SET
+        edit_count = transcripts.edit_count + CASE
+            WHEN NOT transcripts.is_partial AND transcripts.text IS DISTINCT FROM EXCLUDED.text
+             AND CASE transcripts.status WHEN 'translated' THEN 2 WHEN 'confirmed' THEN 1 ELSE 0 END <=
+                 CASE EXCLUDED.status WHEN 'translated' THEN 2 WHEN 'confirmed' THEN 1 ELSE 0 END
+            THEN 1 ELSE 0 END,
 		speaker = CASE
 			WHEN CASE transcripts.status WHEN 'translated' THEN 2 WHEN 'confirmed' THEN 1 ELSE 0 END >
 			     CASE EXCLUDED.status WHEN 'translated' THEN 2 WHEN 'confirmed' THEN 1 ELSE 0 END
@@ -1474,29 +1479,33 @@ func (s *PostgresStore) UpdateUserAdminSafe(
 	`, actorID).Scan(&actorTenantID, &actorRole, &actorActive); err != nil {
 		return err
 	}
-	if !actorActive || (actorRole != "admin" && actorRole != "super_admin") {
+	platformWriter, err := platformUserWriterTx(ctx, tx, actorID)
+	if err != nil {
+		return err
+	}
+	if !actorActive || (!elevatedBaseRole(actorRole) && !platformWriter) {
 		return ErrAdminUserForbidden
 	}
 
 	var currentName, currentRole, targetTenantID string
-	var currentActive bool
+	var currentActive, targetConsoleAdmin bool
 	if err := tx.QueryRowContext(ctx, `
-		SELECT name, role, is_active, tenant_id
+		SELECT name, role, is_active, tenant_id, admin_role_id IS NOT NULL
 		FROM users
 		WHERE id = $1
 		FOR UPDATE
-	`, targetID).Scan(&currentName, &currentRole, &currentActive, &targetTenantID); err != nil {
+	`, targetID).Scan(&currentName, &currentRole, &currentActive, &targetTenantID, &targetConsoleAdmin); err != nil {
 		return err
 	}
 
 	if actorRole != "super_admin" {
-		if targetTenantID != actorTenantID {
+		if targetTenantID != actorTenantID && !platformWriter {
 			return sql.ErrNoRows
 		}
-		if currentRole == "admin" || currentRole == "super_admin" {
+		if elevatedBaseRole(currentRole) || targetConsoleAdmin {
 			return ErrAdminUserForbidden
 		}
-		if role != nil && (*role == "admin" || *role == "super_admin") {
+		if role != nil && elevatedBaseRole(*role) {
 			return ErrAdminUserForbidden
 		}
 	}
@@ -1565,25 +1574,30 @@ func (s *PostgresStore) DeleteUserAdminSafeAndCancelIndexJobs(
 	`, actorID).Scan(&actorTenantID, &actorRole, &actorActive); err != nil {
 		return nil, err
 	}
-	if !actorActive || (actorRole != "admin" && actorRole != "super_admin") {
+	platformWriter, err := platformUserWriterTx(ctx, tx, actorID)
+	if err != nil {
+		return nil, err
+	}
+	if !actorActive || (actorRole != "admin" && actorRole != "super_admin" && !platformWriter) {
 		return nil, ErrAdminUserForbidden
 	}
 
 	var targetTenantID, targetRole string
+	var targetConsoleAdmin bool
 	if err := tx.QueryRowContext(ctx, `
-		SELECT tenant_id, role
+		SELECT tenant_id, role, admin_role_id IS NOT NULL
 		FROM users
 		WHERE id = $1
 		FOR UPDATE
-	`, targetID).Scan(&targetTenantID, &targetRole); err != nil {
+	`, targetID).Scan(&targetTenantID, &targetRole, &targetConsoleAdmin); err != nil {
 		return nil, err
 	}
 	if targetID == actorID || targetRole == "super_admin" {
 		return nil, ErrAdminUserForbidden
 	}
 	if actorRole != "super_admin" &&
-		(targetTenantID != actorTenantID || targetRole == "admin") {
-		if targetTenantID != actorTenantID {
+		((targetTenantID != actorTenantID && !platformWriter) || targetRole == "admin" || targetConsoleAdmin) {
+		if targetTenantID != actorTenantID && !platformWriter {
 			return nil, sql.ErrNoRows
 		}
 		return nil, ErrAdminUserForbidden
