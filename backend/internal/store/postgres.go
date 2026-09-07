@@ -139,6 +139,12 @@ func (s *PostgresStore) CreateUserWithInvite(ctx context.Context, user *models.U
 
 // CreateUserWithRisk evaluates signup risk and records it in the account transaction.
 func (s *PostgresStore) CreateUserWithRisk(ctx context.Context, user *models.User, inviteCode string, signals *risk.Signals) error {
+	return s.CreateUserWithAttribution(ctx, user, inviteCode, "", signals)
+}
+
+// CreateUserWithAttribution additionally records which user's referral link
+// brought the sign-up. Referral attribution never blocks account creation.
+func (s *PostgresStore) CreateUserWithAttribution(ctx context.Context, user *models.User, inviteCode, referralCode string, signals *risk.Signals) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -150,6 +156,10 @@ func (s *PostgresStore) CreateUserWithRisk(ctx context.Context, user *models.Use
 		return err
 	}
 	invite, err := reservePromotionTx(ctx, tx, inviteCode)
+	if err != nil {
+		return err
+	}
+	referrerID, err := referrerIDTx(ctx, tx, referralCode)
 	if err != nil {
 		return err
 	}
@@ -181,6 +191,9 @@ func (s *PostgresStore) CreateUserWithRisk(ctx context.Context, user *models.Use
 		if err := recordPromotionTx(ctx, tx, invite.ID, user); err != nil {
 			return err
 		}
+	}
+	if err := recordReferralTx(ctx, tx, referrerID, user); err != nil {
+		return err
 	}
 	if err := risk.RecordTx(ctx, tx, user.ID, signals, assessment); err != nil {
 		return err

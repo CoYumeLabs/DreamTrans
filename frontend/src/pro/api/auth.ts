@@ -811,6 +811,7 @@ export async function register(
   password: string,
   name: string,
   inviteCode?: string,
+  referralCode?: string,
 ): Promise<RegisterResult> {
   const generation = advanceAuthGeneration()
   // Refresh the signed first-party registration cookie immediately before
@@ -821,6 +822,7 @@ export async function register(
   } catch { /* The server will hold rewards if the device cannot be verified. */ }
   if (!isCurrentAuthGeneration(generation)) throw authStateChangedError()
   const normalizedInviteCode = inviteCode?.trim()
+  const normalizedReferralCode = referralCode?.trim()
   const data = await submitAuthRequest<AuthResponse | RegistrationPending>(
     '/api/auth/register',
     {
@@ -828,6 +830,7 @@ export async function register(
       password,
       name,
       ...(normalizedInviteCode ? { invite_code: normalizedInviteCode } : {}),
+      ...(normalizedReferralCode ? { referral_code: normalizedReferralCode } : {}),
       browser: collectSignupSignals(),
     },
     'register',

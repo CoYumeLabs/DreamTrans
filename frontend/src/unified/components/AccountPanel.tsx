@@ -26,6 +26,7 @@ import {
   type UserUsageItem,
 } from '../../api'
 import { ApiRequestError } from '../../pro/api/auth'
+import { getUserReferral, type ReferralSummary } from '../../api'
 import { intlLocale, messages, useMessages } from '../../i18n'
 import { Icon } from './Icon'
 
@@ -260,6 +261,17 @@ export function AccountPanel({
   const [notice, setNotice] = useState<string | null>(null)
   const [autoTopupThreshold, setAutoTopupThreshold] = useState('')
   const [autoTopupAmount, setAutoTopupAmount] = useState('')
+  const [referral, setReferral] = useState<ReferralSummary | null | 'failed'>(null)
+  const [referralCopied, setReferralCopied] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    let active = true
+    void getUserReferral()
+      .then((next) => { if (active) setReferral(next) })
+      .catch(() => { if (active) setReferral('failed') })
+    return () => { active = false }
+  }, [open])
 
   useEffect(() => {
     if (!open) return
@@ -484,6 +496,9 @@ export function AccountPanel({
             <dd>
               {b.perHour(formatUSD(account.realtime_hour_usd))}
               {discount && <small>{discount}</small>}
+              {(account.promotion_discount_percent ?? 0) > 0 && account.promotion_discount_until && (
+                <small>{b.referral.discount(account.promotion_discount_percent!, formatDate(account.promotion_discount_until))}</small>
+              )}
             </dd>
           </div>
         </dl>
@@ -666,6 +681,51 @@ export function AccountPanel({
               </button>
             </div>
           </div>
+        )}
+      </section>
+
+      <section className="dt-billing-card" aria-label={b.referral.title}>
+        <div className="dt-billing-card__head">
+          <div>
+            <strong>{b.referral.title}</strong>
+            <small>{b.referral.lead}</small>
+          </div>
+        </div>
+        {referral === null && <p className="dt-muted">{b.referral.loading}</p>}
+        {referral === 'failed' && <p className="dt-muted">{b.referral.failed}</p>}
+        {referral && referral !== 'failed' && (
+          <>
+            <label className="dt-field">
+              <span>{b.referral.link}</span>
+              <input
+                aria-label={b.referral.link}
+                onFocus={(event) => event.target.select()}
+                readOnly
+                value={`${window.location.origin}${referral.path}`}
+              />
+            </label>
+            <div className="dt-billing-actions">
+              <button
+                className="dt-button dt-button--secondary dt-button--small"
+                onClick={() => {
+                  void navigator.clipboard.writeText(`${window.location.origin}${referral.path}`)
+                    .then(() => { setReferralCopied(true); window.setTimeout(() => setReferralCopied(false), 2000) })
+                    .catch(() => undefined)
+                }}
+                type="button"
+              >
+                {referralCopied ? b.referral.copied : b.referral.copy}
+              </button>
+              <a className="dt-button dt-button--secondary dt-button--small" href={referral.path} rel="noopener" target="_blank">
+                {b.referral.poster}
+              </a>
+            </div>
+            <dl className="dt-billing-rows">
+              <div><dt>{b.referral.visits}</dt><dd>{referral.visits}</dd></div>
+              <div><dt>{b.referral.registered}</dt><dd>{referral.registered}</dd></div>
+              <div><dt>{b.referral.verified}</dt><dd>{referral.verified}</dd></div>
+            </dl>
+          </>
         )}
       </section>
 

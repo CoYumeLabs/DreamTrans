@@ -56,7 +56,11 @@ async function installBackend(page: Page): Promise<Backend> {
     }
     if (path === '/api/system/settings') { await json(route, { allow_user_api_key: false }); return }
     if (path === '/api/auth/invite') {
-      await json(route, { name: '开学季', grant_usd: 2.5, grant_days: 15, plan_code: 'pro', plan_days: 30 })
+      if (new URL(request.url()).searchParams.get('ref')) {
+        await json(route, { kind: 'referral', referrer_name: '老同学' })
+        return
+      }
+      await json(route, { name: '开学季', grant_usd: 2.5, grant_days: 15, plan_code: 'pro', plan_days: 30, usage_discount_percent: 20, discount_days: 10 })
       return
     }
     if (path === '/api/auth/register') {
@@ -162,6 +166,7 @@ test('invite links open sign-up and submit the code while the field remains coll
   await expect(page.locator('.dt-auth__invite')).not.toHaveAttribute('open')
   await expect(page.getByText('已填写邀请码（可修改）')).toBeVisible()
   await expect(page.locator('.dt-auth__offer')).toContainText('额外 $2.5')
+  await expect(page.locator('.dt-auth__offer')).toContainText('再减 20%')
   await page.getByLabel('昵称', { exact: true }).fill('小梦')
   await page.locator('input[type="email"]').fill(user.email)
   await page.locator('input[type="password"]').fill('correct horse battery')
@@ -208,4 +213,21 @@ test('signup prepares the browser cookie and explains held rewards', async ({ pa
   await expect(page.getByTestId('verification-pending')).toContainText('注册赠送权益正在审核')
   await expect(page.getByTestId('verification-pending')).toContainText('验证邮箱后仍可登录')
   expect(backend.calls.some((call) => call.path === '/api/auth/signup-context')).toBe(true)
+})
+
+test('referral links open sign-up, show the referrer and submit the referral code', async ({ page }) => {
+  const backend = await installBackend(page)
+  await page.goto('/pro?ref=ABCD2345')
+  await expect(page.getByRole('heading', { name: '创建账户' })).toBeVisible()
+  await expect(page.locator('.dt-auth__offer')).toContainText('老同学 邀请你加入')
+  await expect(page.getByText('有邀请码？', { exact: true })).toBeVisible()
+  await page.getByLabel('昵称', { exact: true }).fill('新同学')
+  await page.locator('input[type="email"]').fill(user.email)
+  await page.locator('input[type="password"]').fill('correct horse battery')
+  await page.getByRole('checkbox').check()
+  await page.locator('.dt-auth__card .dt-button--primary').click()
+  await expect(page.getByTestId('verification-pending')).toBeVisible()
+  const request = backend.calls.find((call) => call.path === '/api/auth/register')
+  expect(request?.body?.referral_code).toBe('ABCD2345')
+  expect(request?.body?.invite_code).toBeUndefined()
 })

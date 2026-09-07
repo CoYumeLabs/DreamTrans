@@ -353,6 +353,8 @@ export interface CustomerRow {
   lifetime_charged_usd: number
   month_charged_usd: number
   created_at: string
+  referrer_email?: string
+  referrer_name?: string
 }
 
 export interface CustomerListResponse {

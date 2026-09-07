@@ -30,7 +30,13 @@ type AuthHandler struct {
 	signupDetector *risk.Detector
 	signupRisk     *risk.Service
 	appName        string
+	// clientIP resolves the visitor address for landing-page attribution.
+	clientIP func(*http.Request) string
 }
+
+// SetClientIPResolver wires the trusted client-address lookup used to
+// de-duplicate invitation link visits.
+func (h *AuthHandler) SetClientIPResolver(fn func(*http.Request) string) { h.clientIP = fn }
 
 // This is a valid bcrypt hash used to equalize the work done for unknown
 // accounts. It must never correspond to a real account password.
@@ -52,11 +58,14 @@ func NewAuthHandler(postgresStore *store.PostgresStore, jwtManager *auth.JWTMana
 
 // RegisterRequest represents a registration request
 type RegisterRequest struct {
-	Email      string               `json:"email"`
-	Password   string               `json:"password"`
-	Name       string               `json:"name"`
-	InviteCode string               `json:"invite_code,omitempty"`
-	Browser    *risk.BrowserSignals `json:"browser,omitempty"`
+	Email      string `json:"email"`
+	Password   string `json:"password"`
+	Name       string `json:"name"`
+	InviteCode string `json:"invite_code,omitempty"`
+	// ReferralCode names the user whose link brought this sign-up. It is
+	// attribution only and never blocks registration.
+	ReferralCode string               `json:"referral_code,omitempty"`
+	Browser      *risk.BrowserSignals `json:"browser,omitempty"`
 }
 
 // LoginRequest represents a login request
@@ -189,7 +198,7 @@ func (h *AuthHandler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		IsActive:      true,
 		EmailVerified: !verificationRequired,
 	}
-	if err := h.store.CreateUserWithRisk(ctx, user, promotionCode, h.signupSignals(r, req.Email, req.Browser)); err != nil {
+	if err := h.store.CreateUserWithAttribution(ctx, user, promotionCode, req.ReferralCode, h.signupSignals(r, req.Email, req.Browser)); err != nil {
 		if errors.Is(err, store.ErrInvalidPromotion) {
 			writePromotionError(w, err)
 			return

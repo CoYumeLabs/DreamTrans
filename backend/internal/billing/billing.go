@@ -132,6 +132,9 @@ type Service struct {
 	// training program (a no-training provider account is configured), so
 	// opted-in users earn the transcription discount.
 	trainingProgram bool
+	// milestoneSettled remembers users with no pending first-session reward
+	// so the usage path does not query for one on every charge.
+	milestoneSettled sync.Map
 }
 
 // DefaultTrainingDiscountPercent is the transcription discount for users who

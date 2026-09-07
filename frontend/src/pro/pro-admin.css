@@ -681,3 +681,9 @@ input:disabled, select:disabled { color: var(--yf-muted); background: var(--yf-w
 }
 
 .pa-dialog-form textarea { resize: vertical; font: inherit; line-height: 1.5; }
+
+/* Promotion marketing: UTM link builder and the funnel dialog. */
+.pa-promotion-utm input { flex: 1 1 180px; min-width: 0; }
+.pa-promotion-funnel { margin-bottom: 16px; }
+.pa-promotion-funnel .pa-metric { min-height: 0; }
+.pa-promotion-form textarea { width: 100%; padding: 8px; font: inherit; resize: vertical; }

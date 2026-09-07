@@ -46,7 +46,10 @@ export function AuthGate({
 }: AuthGateProps) {
   const m = useMessages()
   const [linkedInviteCode] = useState(() => new URLSearchParams(window.location.search).get('invite')?.trim() ?? '')
-  const [registering, setRegistering] = useState(() => registrationEnabled && Boolean(linkedInviteCode))
+  // A friend's referral link (/pro?ref=CODE) opens sign-up too; the code only
+  // records where the account came from.
+  const [referralCode] = useState(() => new URLSearchParams(window.location.search).get('ref')?.trim() ?? '')
+  const [registering, setRegistering] = useState(() => registrationEnabled && Boolean(linkedInviteCode || referralCode))
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [name, setName] = useState('')
@@ -62,7 +65,7 @@ export function AuthGate({
     }
     setAgreeError(false)
     if (registering) {
-      await onRegister({ email, password, name, inviteCode })
+      await onRegister({ email, password, name, inviteCode, referralCode })
     } else {
       await onLogin(email, password)
     }
@@ -176,7 +179,7 @@ export function AuthGate({
           </details>
         )}
 
-        {registering && <InviteOffer code={inviteCode} />}
+        {registering && <InviteOffer code={inviteCode} referralCode={referralCode} />}
 
         {registering ? (
           <label className="dt-auth__legal">

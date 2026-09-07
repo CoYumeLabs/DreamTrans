@@ -8,6 +8,44 @@
 注册页使用「昵称」，邀请码输入默认折叠；邀请链接自动进入注册页并填码，展示
 活动权益。用户可以展开修改。预览不保证占位，最终以提交注册时的事务校验为准。
 
+## 落地页与分享
+
+- 管理页复制的链接指向落地页 `/invite?code=CODE`（也接受 `/invite/CODE`），展示活动标题、
+  说明、权益清单、截止倒计时、剩余名额、二维码，并可保存海报 PNG。「立即注册领取」跳到
+  `/pro?invite=CODE`；旧的 `/pro?invite=CODE` 直达注册页仍然有效。
+- 落地页标题与说明是可编辑文案（「文案」按钮），不属于承诺权益。
+- 复制链接时可附加 `utm_source / utm_medium / utm_campaign / utm_content`。落地页打开时
+  调用 `POST /api/auth/invite/visit` 记录一次访问；同一访客（IP + UA 按天加盐哈希）每天只计
+  一次，未知或已暂停的码静默忽略，服务器不保存 IP。
+
+## 转化漏斗
+
+列表显示 访问 → 注册 → 验证 → 领取 → 付费 以及收入（只统计 Stripe 真实付款）。
+「漏斗」对话框给出访问转化率、验证率、付费转化率、UTM 来源分布和最近 30 天按日统计
+（`GET /api/admin/promotions/{id}/funnel`）。
+
+## 奖励规则扩展
+
+除余额与套餐外，活动还可配置（创建后同样不可修改）：
+
+- **实时转录折扣**（`usage_discount_percent`，`discount_days`）：领取注册权益后 N 天内，
+  转录费用在会员折扣、训练计划折扣之后再按百分比减免；只作用于转录，冻结在计费快照中。
+- **首次充值加赠**（`topup_bonus_percent`、`milestone_topup_usd`，`topup_bonus_days`）：
+  领取后 N 天内的第一笔 Stripe 充值，按金额比例加赠并/或加送固定余额；管理员手动充值不触发。
+  首笔真实充值无论是否在窗口内都会消耗该机会。
+- **首次转录加送**（`milestone_session_usd`）：第一次产生转录扣费后到账。
+
+阶段奖励与注册奖励一样走注册风控与每日预算（`promotion_topup`、`promotion_session`），
+有效期沿用「余额有效天数」，账本备注带活动名。用户账户页在小时单价旁显示活动折扣及到期日。
+
+## 用户推荐（只归因）
+
+每个账户在「账户 → 邀请好友」可获得专属链接 `/invite?ref=CODE`（`GET /api/user/referral`
+首次调用时生成 8 位码），并看到访问 / 注册 / 已验证人数。落地页显示推荐人昵称；注册请求携带
+`referral_code`，无效或已删除的推荐码被忽略而不阻止注册。推荐**不发放任何奖励**，
+只写入 `referrals` 表；管理页「用户推荐」列表与用户列表的「推荐人」字段用于查看。
+同一邮箱只保留第一次推荐关系。
+
 ## 发放与归因
 
 - 每个新账号只能绑定一个注册邀请。来源标签、渠道和奖励配置创建后不可修改；
@@ -36,14 +74,18 @@
 
 ## 部署与接口
 
-运行新后端前执行 `036_promotion_invites.sql`。迁移运行器和启动检查均已更新；
+运行新后端前执行 `036_promotion_invites.sql` 与 `043_promotion_marketing.sql`。迁移运行器和启动检查均已更新；
 Compose 与安装器沿用原有迁移流程。
 
-- `GET /api/auth/invite?code=...`：公开预览活动名与权益，隐藏渠道、标签及用户数据。
+- `GET /api/auth/invite?code=...`：公开预览活动名、文案、权益、截止时间与剩余名额，隐藏渠道、标签及用户数据；`?ref=...` 返回推荐人昵称。
+- `POST /api/auth/invite/visit`：记录落地页访问（含 UTM），始终返回 204。
 - `GET /api/admin/promotions?page=1&search=...`：分页搜索活动、渠道、码或标签。
 - `POST /api/admin/promotions`：创建邀请。
-- `PATCH /api/admin/promotions/{id}`：`{"enabled": false}` 暂停，`true` 恢复。
-- `GET /api/admin/promotions/{id}?page=1`：分页查看注册和领取记录。
+- `PATCH /api/admin/promotions/{id}`：`{"enabled": false}` 暂停，`true` 恢复；`{"headline","description"}` 修改落地页文案。
+- `GET /api/admin/promotions/{id}?page=1`：分页查看注册、领取、阶段奖励与付费记录。
+- `GET /api/admin/promotions/{id}/funnel`：漏斗、UTM 分布与最近 30 天。
+- `GET /api/admin/referrals?page=1&search=...`：推荐人排行。
+- `GET /api/user/referral`：当前用户的推荐链接与统计。
 
 管理接口仅超级管理员可用，沿用 JWT 鉴权；公开预览与注册沿用限流。
 推广码为可反复复制的渠道标识，管理员列表可读取完整码。分享链接使用当前管理站点

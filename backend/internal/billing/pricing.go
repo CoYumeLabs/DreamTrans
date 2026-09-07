@@ -48,6 +48,9 @@ type accountPricing struct {
 	// TrainingOptIn earns the program discount on transcription when the
 	// view says the program is offered.
 	TrainingOptIn bool
+	// PromotionDiscountPercent is an invitation reward on transcription,
+	// stacked after the membership and program discounts.
+	PromotionDiscountPercent float64
 }
 
 // usagePricingView is one immutable read of the cost catalog.
@@ -252,8 +255,17 @@ func trainingDiscountFor(pricing accountPricing, view *usagePricingView, service
 	return view.TrainingDiscountPercent
 }
 
-// applyTrainingDiscount stacks the program discount on top of the membership
-// discount already inside charge.
+// promotionDiscountFor returns the invitation discount for one record:
+// transcription only, while the reward window is open.
+func promotionDiscountFor(pricing accountPricing, service string) float64 {
+	if pricing.PromotionDiscountPercent <= 0 || service != "transcription" {
+		return 0
+	}
+	return pricing.PromotionDiscountPercent
+}
+
+// applyTrainingDiscount stacks a percentage discount on top of whatever is
+// already inside charge (membership, then program, then invitation).
 func applyTrainingDiscount(charge, trainingDiscountPercent float64) float64 {
 	if trainingDiscountPercent <= 0 {
 		return charge
@@ -295,8 +307,11 @@ func priceUsage(rec *UsageRecord, view *usagePricingView, pricing accountPricing
 	}
 	provider, sku := CanonicalSKU(rec.Provider, rec.Model, rec.Action)
 	retail, charge := retailFromUpstream(upstream, markup, pricing.DiscountPercent)
-	trainingDiscount := trainingDiscountFor(pricing, view, providerCostServiceForUsage(rec, provider, sku))
+	service := providerCostServiceForUsage(rec, provider, sku)
+	trainingDiscount := trainingDiscountFor(pricing, view, service)
 	charge = applyTrainingDiscount(charge, trainingDiscount)
+	promotionDiscount := promotionDiscountFor(pricing, service)
+	charge = applyTrainingDiscount(charge, promotionDiscount)
 	attribution := AttributionProviderPriced
 	platformUpstream := upstream
 	if rec.CustomerFunded {
@@ -310,6 +325,7 @@ func priceUsage(rec *UsageRecord, view *usagePricingView, pricing accountPricing
 		"markup_percent":              markup,
 		"discount_percent":            pricing.DiscountPercent,
 		"training_discount_percent":   trainingDiscount,
+		"promotion_discount_percent":  promotionDiscount,
 		"plan_code":                   pricing.PlanCode,
 		"model":                       rec.Model,
 		"canonical_sku":               sku,
@@ -334,12 +350,14 @@ type usagePricingSnapshot struct {
 	DiscountPercent float64 `json:"discount_percent"`
 	// TrainingDiscountPercent is the program discount frozen at reservation
 	// time; older snapshots simply carry 0.
-	TrainingDiscountPercent float64            `json:"training_discount_percent"`
-	Provider                string             `json:"provider"`
-	CanonicalSKU            string             `json:"canonical_sku"`
-	Action                  string             `json:"action"`
-	Attribution             string             `json:"attribution"`
-	RatesUSD                map[string]float64 `json:"rates_usd"`
+	TrainingDiscountPercent float64 `json:"training_discount_percent"`
+	// PromotionDiscountPercent is the invitation discount frozen alongside.
+	PromotionDiscountPercent float64            `json:"promotion_discount_percent"`
+	Provider                 string             `json:"provider"`
+	CanonicalSKU             string             `json:"canonical_sku"`
+	Action                   string             `json:"action"`
+	Attribution              string             `json:"attribution"`
+	RatesUSD                 map[string]float64 `json:"rates_usd"`
 }
 
 // resolveUsageCostFromSnapshot reprices actual usage with the rates, markup,
@@ -372,6 +390,7 @@ func resolveUsageCostFromSnapshot(
 	}
 	retail, charge := retailFromUpstream(upstream, snapshot.MarkupPercent, snapshot.DiscountPercent)
 	charge = applyTrainingDiscount(charge, snapshot.TrainingDiscountPercent)
+	charge = applyTrainingDiscount(charge, snapshot.PromotionDiscountPercent)
 	platformUpstream := upstream
 	switch reservedAttribution {
 	case AttributionBYOK:

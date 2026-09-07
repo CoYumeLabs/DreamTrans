@@ -1,0 +1,254 @@
+/* Invitation landing page. Tokens and buttons come from LandingPage.css via
+   the shared .lp root; everything here is layout for the offer + share card. */
+
+.iv-main {
+  max-width: var(--lp-max);
+  margin: 0 auto;
+  padding: clamp(28px, 5vw, 64px) var(--lp-gutter) clamp(40px, 6vw, 72px);
+}
+
+.iv-status {
+  color: var(--lp-muted);
+  text-align: center;
+  padding: 48px 0;
+}
+
+.iv-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.8fr);
+  gap: clamp(20px, 3vw, 36px);
+  align-items: start;
+}
+
+.iv-card {
+  background: var(--lp-surface, #fff);
+  border: 1px solid var(--lp-line);
+  border-radius: var(--lp-r-lg);
+  padding: clamp(24px, 4vw, 44px);
+}
+
+.iv-card--invalid {
+  max-width: 640px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.iv-card h1 {
+  margin: 0;
+  font-size: clamp(1.75rem, 3.4vw, 2.6rem);
+  font-weight: 700;
+  line-height: 1.18;
+  text-wrap: balance;
+}
+
+.iv-campaign {
+  margin: 10px 0 0;
+  color: var(--lp-muted);
+  font-weight: 500;
+}
+
+.iv-lead {
+  margin: 16px 0 0;
+  color: var(--lp-body);
+  font-size: 1.05rem;
+  line-height: 1.7;
+}
+
+.iv-subhead {
+  margin: 28px 0 12px;
+  font-size: 0.85rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--lp-muted);
+}
+
+.iv-benefits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.iv-benefits li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--lp-line);
+  border-radius: var(--lp-r-md, 12px);
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.iv-benefits li svg {
+  flex: none;
+  margin-top: 4px;
+  color: var(--lp-accent, var(--yf-accent));
+}
+
+.iv-urgency {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  align-items: center;
+  margin-top: 24px;
+}
+
+.iv-countdown {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.iv-countdown__label {
+  color: var(--lp-muted);
+  font-size: 0.9rem;
+}
+
+.iv-countdown__cells {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.iv-countdown__cells b {
+  font-size: 1.35rem;
+  font-weight: 700;
+  min-width: 1.4em;
+  text-align: right;
+}
+
+.iv-countdown__cells small {
+  color: var(--lp-muted);
+  margin-right: 8px;
+}
+
+.iv-pill {
+  display: inline-block;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--yf-accent-soft, rgba(47, 109, 246, 0.1));
+  color: var(--yf-accent, #2f6df6);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.iv-pill--closed {
+  background: var(--yf-warning-soft, rgba(200, 120, 0, 0.12));
+  color: var(--yf-warning, #a15c00);
+}
+
+.iv-steps {
+  margin: 28px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+  counter-reset: iv-step;
+}
+
+.iv-steps li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--lp-body);
+}
+
+.iv-steps li span {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  background: var(--lp-dark, #111318);
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.iv-cta {
+  margin-top: 28px;
+}
+
+.iv-note {
+  margin: 18px 0 0;
+  color: var(--lp-muted);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.iv-card--share {
+  position: sticky;
+  top: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.iv-card--share .iv-subhead {
+  margin-top: 0;
+}
+
+.iv-qr {
+  width: 168px;
+  height: 168px;
+  border: 1px solid var(--lp-line);
+  border-radius: 12px;
+  background: #fff;
+  padding: 8px;
+  box-sizing: content-box;
+}
+
+.iv-qr-hint {
+  margin: 10px 0 16px;
+  color: var(--lp-muted);
+  font-size: 0.85rem;
+}
+
+.iv-link {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--lp-line);
+  border-radius: 10px;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--lp-body);
+  background: var(--lp-surface-alt, #f7f8fa);
+}
+
+.iv-share-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.iv-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  justify-content: center;
+  padding: 24px var(--lp-gutter) 40px;
+  color: var(--lp-muted);
+  font-size: 0.85rem;
+}
+
+.iv-footer a {
+  color: inherit;
+}
+
+@media (max-width: 860px) {
+  .iv-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .iv-card--share {
+    position: static;
+  }
+}

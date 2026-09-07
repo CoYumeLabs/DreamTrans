@@ -1446,6 +1446,21 @@ export interface AccountSummary extends AccountBalance {
   training_opt_in: boolean | null
   training_program_available: boolean
   training_discount_percent: number
+  promotion_discount_percent?: number
+  promotion_discount_until?: string
+}
+
+/** The signed-in user's own referral link and how it has performed. */
+export interface ReferralSummary {
+  code: string
+  path: string
+  visits: number
+  registered: number
+  verified: number
+}
+
+export async function getUserReferral(): Promise<ReferralSummary> {
+  return authFetch<ReferralSummary>('/api/user/referral')
 }
 
 export interface TopupTier {

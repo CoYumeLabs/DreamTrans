@@ -65,6 +65,10 @@ type AccountSummary struct {
 	// TrainingDiscountPercent is that discount (0 when not offered).
 	TrainingProgramAvailable bool    `json:"training_program_available"`
 	TrainingDiscountPercent  float64 `json:"training_discount_percent"`
+	// PromotionDiscountPercent is the invitation's transcription discount in
+	// force (0 when none) and PromotionDiscountUntil when it ends.
+	PromotionDiscountPercent float64    `json:"promotion_discount_percent"`
+	PromotionDiscountUntil   *time.Time `json:"promotion_discount_until,omitempty"`
 }
 
 func (a *accountRow) balance(now time.Time, grantTotal float64) AccountBalance {
@@ -174,6 +178,11 @@ func (s *Service) GetAccountSummary(ctx context.Context, userID string) (*Accoun
 	}
 	summary.TrainingProgramAvailable = s.TrainingProgramAvailable()
 	summary.TrainingDiscountPercent = s.TrainingDiscountPercent(ctx)
+	if acct.promotionDiscountPercent > 0 && acct.promotionDiscountUntil.After(now) {
+		until := acct.promotionDiscountUntil.UTC()
+		summary.PromotionDiscountPercent = acct.promotionDiscountPercent
+		summary.PromotionDiscountUntil = &until
+	}
 	if acct.StripeCustomerID.Valid {
 		summary.StripeCustomerID = acct.StripeCustomerID.String
 		summary.HasPaymentMethod = summary.StripeCustomerID != ""
@@ -596,6 +605,8 @@ type CustomerRow struct {
 	PromotionName      string     `json:"promotion_name"`
 	PromotionChannel   string     `json:"promotion_channel"`
 	PromotionTags      []string   `json:"promotion_tags"`
+	ReferrerEmail      string     `json:"referrer_email"`
+	ReferrerName       string     `json:"referrer_name"`
 	CreatedAt          string     `json:"created_at"`
 }
 
@@ -630,10 +641,13 @@ func (s *Service) ListCustomers(ctx context.Context, search string, limit, offse
 		       COALESCE(a.lifetime_charged_usd, 0),
 		       COALESCE((SELECT SUM(l.charge_usd) FROM usage_logs l
 		                 WHERE l.account_id = a.id AND l.month_key = $4 AND l.refunded_at IS NULL), 0),
-		       CAST(u.created_at AS TEXT), COALESCE(pi.name,''), COALESCE(pi.channel,''), COALESCE(pi.tags,'[]'::jsonb)
+		       CAST(u.created_at AS TEXT), COALESCE(pi.name,''), COALESCE(pi.channel,''), COALESCE(pi.tags,'[]'::jsonb),
+		       COALESCE(ru.email,''), COALESCE(ru.name,'')
 		FROM users u
 		LEFT JOIN promotion_registrations pr ON pr.user_id=u.id
 		LEFT JOIN promotion_invites pi ON pi.id=pr.invite_id
+		LEFT JOIN referrals rf ON rf.referred_user_id=u.id
+		LEFT JOIN users ru ON ru.id=rf.referrer_user_id
 		LEFT JOIN billing_accounts a ON a.id = u.billing_account_id
 		WHERE $1 = '' OR LOWER(u.email) LIKE $2 OR LOWER(COALESCE(u.name, '')) LIKE $2 OR LOWER(pi.name) LIKE $2 OR LOWER(pi.channel) LIKE $2 OR LOWER(pi.tags::text) LIKE $2
 		ORDER BY u.created_at DESC
@@ -651,7 +665,8 @@ func (s *Service) ListCustomers(ctx context.Context, search string, limit, offse
 		var tags []byte
 		if err := rows.Scan(&row.UserID, &row.AccountID, &row.Email, &row.Name, &row.Role, &row.PlanCode,
 			&memberUntil, &row.Status, &row.WalletUSD, &row.GrantUSD, &row.LifetimeChargedUSD,
-			&row.MonthChargedUSD, &row.CreatedAt, &row.PromotionName, &row.PromotionChannel, &tags); err != nil {
+			&row.MonthChargedUSD, &row.CreatedAt, &row.PromotionName, &row.PromotionChannel, &tags,
+			&row.ReferrerEmail, &row.ReferrerName); err != nil {
 			return nil, 0, err
 		}
 		if memberUntil.Valid {

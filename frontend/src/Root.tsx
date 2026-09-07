@@ -1,3 +1,4 @@
+import InviteLanding from './landing/InviteLanding'
 import LandingPage from './landing/LandingPage'
 import LegalPage from './legal/LegalPage'
 import type { LegalKind } from './legal/documents'
@@ -42,9 +43,15 @@ function shouldOpenWorkspace(pathname: string, search: string): boolean {
   return false
 }
 
+function isInvitePath(pathname: string): boolean {
+  const path = normalizePath(pathname)
+  return path === '/invite' || path === '/invite.html' || path.startsWith('/invite/')
+}
+
 export default function Root() {
   const kind = legalKind(window.location.pathname)
   if (kind) return <LegalPage kind={kind} />
+  if (isInvitePath(window.location.pathname)) return <InviteLanding />
 
   const openWorkspace = shouldOpenWorkspace(
     window.location.pathname,

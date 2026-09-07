@@ -11,7 +11,9 @@ import (
 // commit together; a failed grant rolls back its budget reservation. Human
 // approval never bypasses this cap. Legacy/admin-created users are excluded.
 func ReserveRewardTx(ctx context.Context, tx *sql.Tx, userID, kind string, amount float64) (bool, error) {
-	if kind != "trial" && kind != "promotion" {
+	switch kind {
+	case "trial", "promotion", "promotion_topup", "promotion_session":
+	default:
 		return false, ErrInput
 	}
 	if math.IsNaN(amount) || math.IsInf(amount, 0) || amount < 0 {

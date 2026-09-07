@@ -33,6 +33,10 @@ type accountRow struct {
 	freePlan       *Plan
 	promotionPlan  *Plan
 	promotionUntil time.Time
+	// promotionDiscountPercent is the invitation's transcription discount
+	// while promotionDiscountUntil is in the future.
+	promotionDiscountPercent float64
+	promotionDiscountUntil   time.Time
 }
 
 const accountSelectColumns = `a.id, a.owner_type, a.owner_id, a.plan_code, a.wallet_usd,
@@ -87,6 +91,9 @@ func (a *accountRow) pricing() accountPricing {
 		pricing.MarkupOverride = &markup
 	}
 	pricing.TrainingOptIn = a.TrainingOptIn.Valid && a.TrainingOptIn.Bool
+	if a.promotionDiscountPercent > 0 && a.promotionDiscountUntil.After(now) {
+		pricing.PromotionDiscountPercent = a.promotionDiscountPercent
+	}
 	return pricing
 }
 
@@ -138,6 +145,9 @@ func ensureAccountForUserTx(ctx context.Context, tx txQueryer, userID string) er
 
 func loadAccountPlansTx(ctx context.Context, tx queryRower, acct *accountRow) error {
 	if err := loadPromotionPlan(ctx, tx, acct); err != nil {
+		return err
+	}
+	if err := loadPromotionDiscount(ctx, tx, acct); err != nil {
 		return err
 	}
 	plan, err := getPlanTx(ctx, tx, acct.PlanCode)
@@ -522,7 +532,10 @@ func (s *Service) RecordUsageBatch(ctx context.Context, records []*UsageRecord) 
 		if topupErr := s.autoTopup(ctx, *shortfall.Topup); topupErr != nil {
 			return nil, fmt.Errorf("%w: automatic top-up failed: %v", ErrInsufficientBalance, topupErr)
 		}
-		return s.recordUsageBatchOnce(ctx, records)
+		costs, err = s.recordUsageBatchOnce(ctx, records)
+	}
+	if err == nil {
+		s.awardSessionMilestoneAfterUsage(ctx, records)
 	}
 	return costs, err
 }

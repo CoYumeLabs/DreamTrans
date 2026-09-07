@@ -30,6 +30,8 @@ export interface RegisterInput {
   password: string
   name: string
   inviteCode?: string
+  /** Attribution only: the referral code from a friend's link. */
+  referralCode?: string
 }
 
 /** An account waiting for its emailed verification link to be clicked. */
@@ -293,6 +295,7 @@ export function useUnifiedAuth(): UnifiedAuthState {
         input.password,
         input.name.trim(),
         input.inviteCode?.trim() || undefined,
+        input.referralCode?.trim() || undefined,
       )
       if (result.kind === 'verification-pending') {
         setPendingVerification({

@@ -196,6 +196,13 @@ func (s *Service) RecordTopup(ctx context.Context, input *TopupInput) (*AccountB
 			return nil, err
 		}
 	}
+	// Invitation first-top-up rewards follow real payments only; manual
+	// administrator credits never trigger them.
+	if input.StripeObjectID != "" {
+		if err := applyPromotionTopupRewardsTx(ctx, tx, acct, input.UserID, paymentID, input.AmountUSD); err != nil {
+			return nil, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}

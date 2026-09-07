@@ -447,6 +447,8 @@ func buildHandler() (http.Handler, func()) {
 		}
 		mux.Handle("/api/auth/signup-context", authLimit(http.HandlerFunc(authHandler.HandleSignupContext)))
 		mux.Handle("/api/auth/invite", authLimit(http.HandlerFunc(authHandler.HandlePromotionPreview)))
+		authHandler.SetClientIPResolver(apiGuard.ClientIP)
+		mux.Handle("/api/auth/invite/visit", authLimit(http.HandlerFunc(authHandler.HandleInviteVisit)))
 		mux.Handle("/api/auth/register", signupLimit(http.HandlerFunc(authHandler.HandleRegister)))
 		mux.Handle("/api/auth/verify-email", authLimit(http.HandlerFunc(authHandler.HandleVerifyEmail)))
 		mux.Handle("/api/auth/resend-verification", signupLimit(http.HandlerFunc(authHandler.HandleResendVerification)))
@@ -467,6 +469,7 @@ func buildHandler() (http.Handler, func()) {
 		}))))
 		mux.Handle("/api/user/password", authMw.RequireAuth(maxRequestBody(64<<10, http.HandlerFunc(authHandler.HandleUpdatePassword))))
 		mux.Handle("/api/user/training-program", authMw.RequireAuth(maxRequestBody(4<<10, http.HandlerFunc(authHandler.HandleUpdateTrainingOptIn))))
+		mux.Handle("/api/user/referral", authMw.RequireAuth(http.HandlerFunc(authHandler.HandleReferral)))
 
 		// Site announcements: anyone may read what is on display (signed-in
 		// users get their dismissals applied); dismissing needs an account.
@@ -633,6 +636,7 @@ func buildHandler() (http.Handler, func()) {
 		mux.Handle("/api/admin/announcements/", superAdminRequired(http.HandlerFunc(adminHandler.HandleAnnouncements)))
 		mux.Handle("/api/admin/promotions", superAdminRequired(http.HandlerFunc(adminHandler.HandlePromotions)))
 		mux.Handle("/api/admin/promotions/", superAdminRequired(http.HandlerFunc(adminHandler.HandlePromotions)))
+		mux.Handle("/api/admin/referrals", superAdminRequired(http.HandlerFunc(adminHandler.HandleReferrers)))
 
 		// Billing: costs & markup, plans, top-up tiers, analytics, customers.
 		mux.Handle("/api/admin/billing/catalog", superAdminRequired(http.HandlerFunc(adminHandler.HandleBillingCatalog)))

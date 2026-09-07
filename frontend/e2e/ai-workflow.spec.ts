@@ -190,6 +190,10 @@ class MockAIBackend {
         await json(route, e2eAccountBalance(user.id))
         return
       }
+      if (method === 'GET' && url.pathname === '/api/user/referral') {
+        await json(route, { code: 'ABCD2345', path: '/invite?ref=ABCD2345', visits: 0, registered: 0, verified: 0 })
+        return
+      }
       if (method === 'GET' && url.pathname === '/api/user/billing/account') {
         await json(route, {
           account: {
