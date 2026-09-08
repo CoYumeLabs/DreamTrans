@@ -11,6 +11,7 @@ import (
 	"math"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -568,4 +569,53 @@ func readBatchResponse(reader io.Reader, limit int64) ([]byte, error) {
 		return nil, fmt.Errorf("speechmatics response exceeds %d bytes", limit)
 	}
 	return payload, nil
+}
+
+// ListedJob includes the caller-supplied tracking reference used to recover an
+// accepted upload when the create response was lost.
+type ListedJob struct {
+	ID        string    `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	Tracking  struct {
+		Reference string `json:"reference"`
+	} `json:"tracking"`
+}
+
+func (c *BatchClient) ListJobsContext(ctx context.Context, before string) ([]ListedJob, error) {
+	if err := c.validateCredentials(); err != nil {
+		return nil, err
+	}
+	endpoint := batchAPIBaseURL + "/jobs?limit=100&include_deleted=true"
+	if before != "" {
+		endpoint += "&created_before=" + url.QueryEscape(before)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	response, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("list batch jobs: HTTP %d", response.StatusCode)
+	}
+	data, err := readBatchResponse(response.Body, 4<<20)
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Jobs []ListedJob `json:"jobs"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+	for _, j := range result.Jobs {
+		if !validJobID(j.ID) || j.CreatedAt.IsZero() {
+			return nil, fmt.Errorf("invalid listed job")
+		}
+	}
+	return result.Jobs, nil
 }

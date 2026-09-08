@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dreamtrans/backend/internal/billing"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 )
@@ -112,15 +113,45 @@ func TestDeleteUserAdminSafeQueuesKnowledgeBlobsOptIn(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	service := billing.NewService(db)
+	if _, err := service.RecordTopup(t.Context(), &billing.TopupInput{UserID: targetID, AmountUSD: 10, StripeObjectID: "pi_archive_" + targetID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(t.Context(), `INSERT INTO agent_profiles(user_id,commission_percent,settle_threshold_usd,channel) VALUES($1,10,10,'archive-test')`, targetID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM agent_profiles WHERE user_id=$1`, targetID)
+	})
 	if err := postgresStore.DeleteUserAdminSafe(
 		t.Context(), targetID, actorID,
 	); err != nil {
 		t.Fatalf("delete target user: %v", err)
 	}
 
+	var paymentCount, ledgerCount int
+	if err := db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM payments WHERE stripe_object_id=$1`, "pi_archive_"+targetID).Scan(&paymentCount); err != nil || paymentCount != 1 {
+		t.Fatalf("payment history %d %v", paymentCount, err)
+	}
+	if err := db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM balance_transactions WHERE user_id=$1`, targetID).Scan(&ledgerCount); err != nil || ledgerCount < 1 {
+		t.Fatalf("ledger history %d %v", ledgerCount, err)
+	}
+	var active bool
+	var email, agentStatus string
+	if err := db.QueryRowContext(t.Context(), `SELECT u.is_active,u.email,a.status FROM users u JOIN agent_profiles a ON a.user_id=u.id WHERE u.id=$1 AND u.deleted_at IS NOT NULL`, targetID).Scan(&active, &email, &agentStatus); err != nil || active || !strings.HasPrefix(email, "deleted+") || agentStatus != "suspended" {
+		t.Fatalf("archive identity %v %s %s %v", active, email, agentStatus, err)
+	}
+	if user, err := postgresStore.GetUserByID(t.Context(), targetID); err != nil || user != nil {
+		t.Fatalf("archived identity exposed: %+v %v", user, err)
+	}
+	// Late refund events still find the original payment after erasure.
+	if err := service.RecordChargeRefund(t.Context(), "pi_archive_"+targetID, 2, "refund_archive_"+targetID); err != nil {
+		t.Fatal(err)
+	}
+
 	var userCount, sourceCount, queuedCount, userDeletionCount int
 	if err := db.QueryRowContext(t.Context(), `
-		SELECT COUNT(*) FROM users WHERE id = $1
+		SELECT COUNT(*) FROM users WHERE id = $1 AND deleted_at IS NULL
 	`, targetID).Scan(&userCount); err != nil {
 		t.Fatal(err)
 	}

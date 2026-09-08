@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -170,7 +171,7 @@ func (s *Service) TrainingDiscountPercent(ctx context.Context) float64 {
 	return trainingDiscountPercentFrom(ctx, s.db)
 }
 
-func trainingDiscountPercentFrom(ctx context.Context, queryer catalogQueryer) float64 {
+func trainingDiscountPercentFrom(ctx context.Context, queryer queryRower) float64 {
 	var value string
 	err := queryer.QueryRowContext(ctx, `SELECT value FROM system_settings WHERE key = $1`, trainingDiscountSettingKey).Scan(&value)
 	if err != nil {
@@ -193,10 +194,13 @@ type AutoTopupFunc func(ctx context.Context, account AutoTopupRequest) error
 
 // AutoTopupRequest identifies an account that needs funds.
 type AutoTopupRequest struct {
-	AccountID        string
-	UserID           string
-	StripeCustomerID string
-	AmountUSD        float64
+	PaymentRequest     json.RawMessage
+	SavePaymentRequest func(context.Context, json.RawMessage) error
+	IdempotencyKey     string
+	AccountID          string
+	UserID             string
+	StripeCustomerID   string
+	AmountUSD          float64
 }
 
 func NewService(db *sql.DB) *Service {

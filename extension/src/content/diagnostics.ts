@@ -109,7 +109,7 @@ export async function runDiagnostics(ctx: MoodleContext, doc: Document): Promise
   checks.push({
     key: 'fetch_estimate', label: '单课全量请求估计',
     ok: null,
-    detail: `约 ${Object.entries(modtypes).filter(([type]) => ['resource', 'folder', 'book', 'page', 'forum', 'link'].includes(type)).reduce((sum, [, count]) => sum + count, 0) + 1} 次请求，并发 3、间隔 200ms`,
+    detail: `约 ${Object.entries(modtypes).filter(([type]) => ['resource', 'folder', 'book', 'page', 'link'].includes(type)).reduce((sum, [, count]) => sum + count, 0) + 1} 次请求，并发 3、间隔 200ms`,
   })
 
   const report: DiagnosticsReport = {

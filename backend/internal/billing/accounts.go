@@ -55,6 +55,8 @@ type AccountSummary struct {
 	Grants                 []GrantItem `json:"grants"`
 	StripeCustomerID       string      `json:"stripe_customer_id,omitempty"`
 	HasPaymentMethod       bool        `json:"has_payment_method"`
+	AutoTopupStatus        string      `json:"auto_topup_status,omitempty"`
+	AutoTopupError         string      `json:"auto_topup_error,omitempty"`
 	AutoTopupThresholdUSD  *float64    `json:"auto_topup_threshold_usd,omitempty"`
 	AutoTopupAmountUSD     *float64    `json:"auto_topup_amount_usd,omitempty"`
 	StorageBytes           int64       `json:"storage_bytes"`
@@ -199,6 +201,9 @@ func (s *Service) GetAccountSummary(ctx context.Context, userID string) (*Accoun
 	if acct.StripeCustomerID.Valid {
 		summary.StripeCustomerID = acct.StripeCustomerID.String
 		summary.HasPaymentMethod = summary.StripeCustomerID != ""
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT status,error FROM auto_topup_attempts WHERE account_id=$1 ORDER BY created_at DESC LIMIT 1`, acct.ID).Scan(&summary.AutoTopupStatus, &summary.AutoTopupError); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
 	}
 	if acct.AutoTopupThreshold.Valid {
 		value := acct.AutoTopupThreshold.Float64
@@ -560,6 +565,9 @@ func (s *Service) SetAutoTopup(ctx context.Context, userID string, thresholdUSD,
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
+	}
+	if amountUSD != nil {
+		_ = s.maybeAutoTopup(ctx, userID, false)
 	}
 	return s.GetAccountSummary(ctx, userID)
 }

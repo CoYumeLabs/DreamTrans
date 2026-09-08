@@ -31,10 +31,12 @@ type BatchTranscribeRequest struct {
 
 // BatchTranscribeResponse represents the response for batch transcription
 type BatchTranscribeResponse struct {
-	JobID      string                           `json:"job_id"`
-	Status     string                           `json:"status"`
-	Transcript *speechmatics.TranscriptResponse `json:"transcript,omitempty"`
-	Error      string                           `json:"error,omitempty"`
+	ServerManaged bool                             `json:"server_managed,omitempty"`
+	SessionID     string                           `json:"session_id,omitempty"`
+	JobID         string                           `json:"job_id"`
+	Status        string                           `json:"status"`
+	Transcript    *speechmatics.TranscriptResponse `json:"transcript,omitempty"`
+	Error         string                           `json:"error,omitempty"`
 }
 
 // BatchTranscribeHandler handles batch transcription requests
@@ -253,6 +255,10 @@ func (h *BatchTranscribeHandler) HandleSubmit(w http.ResponseWriter, r *http.Req
 		http.Error(w, "Batch routing unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	if h.store != nil && auth.GetUserClaims(r.Context()) != nil {
+		h.submitPersistentBatch(w, r, file, handler.Size, handler.Filename, &jobConfig)
+		return
+	}
 	reservationKey, err := h.createBatchReservation(r)
 	if err != nil {
 		log.Printf("failed to reserve batch usage: %v", err)
@@ -328,6 +334,9 @@ func (h *BatchTranscribeHandler) HandleStatus(w http.ResponseWriter, r *http.Req
 		http.Error(w, "Job not found", http.StatusNotFound)
 		return
 	}
+	if h.servePersistentBatch(w, r, jobID) {
+		return
+	}
 	// Get job status from the account that owns the job
 	batchClient := h.jobClient(r, jobID)
 	status, err := batchClient.GetJobStatusContext(r.Context(), jobID)
@@ -384,6 +393,11 @@ func (h *BatchTranscribeHandler) HandleTranscribeAndWait(w http.ResponseWriter, 
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if h.store != nil && auth.GetUserClaims(r.Context()) != nil {
+		h.handlePersistentBatchAndWait(w, r)
+		return
+	}
+
 	if !h.preflightBatchBilling(w, r) {
 		return
 	}
@@ -732,6 +746,9 @@ func (h *BatchTranscribeHandler) createBatchReservation(r *http.Request) (string
 	if err != nil {
 		return "", err
 	}
+	if id, ok := r.Context().Value(batchRequestIDKey{}).(string); ok {
+		reservationID = id
+	}
 	reservationKey := "batch-submit:" + reservationID
 	_, err = h.billing.RecordUsage(r.Context(), &billing.UsageRecord{
 		UserID: claims.UserID, TenantID: claims.TenantID,
@@ -897,7 +914,7 @@ func (h *BatchTranscribeHandler) recordBatchCompletion(r *http.Request, jobID st
 	// A gift-routed upload was priced at the standard rate; the paid part
 	// gets the customer's own discount back now.
 	if refund, refundErr := h.billing.RefundRouteDiscount(r.Context(), claims.UserID, reservationKey); refundErr != nil {
-		log.Printf("batch route discount refund %s: %v", strconv.Quote(reservationKey), refundErr)
+		return fmt.Errorf("batch route discount refund: %w", refundErr)
 	} else if refund != nil {
 		log.Print("batch route discount refund completed")
 	}

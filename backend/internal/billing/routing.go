@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -31,7 +32,11 @@ const (
 
 // RouteDecision says how one session is served and priced.
 type RouteDecision struct {
-	GiftDiscountAllowed bool `json:"gift_discount_allowed"`
+	GiftDiscountAllowed      bool    `json:"gift_discount_allowed"`
+	DiscountsSnapshotted     bool    `json:"discounts_snapshotted"`
+	TrainingDiscountPercent  float64 `json:"training_discount_percent"`
+	PromotionDiscountPercent float64 `json:"promotion_discount_percent"`
+	PaidDiscountPercent      float64 `json:"paid_discount_percent"`
 	// Training routes audio through the training account and earns the
 	// program discount.
 	Training bool `json:"training"`
@@ -108,6 +113,8 @@ func decideRoute(acct *accountRow, programEnabled, giftDiscount bool, giftBalanc
 		d.Reason = "user_pinned"
 	case d.GiftFunded:
 		d.Reason = "gift_balance"
+	case !optIn:
+		d.Reason = "declined"
 	case acct.TenantRoute.Valid && acct.TenantRoute.String == RouteTraining:
 		d.Training = true
 		d.Reason = "tenant_pinned"
@@ -140,7 +147,20 @@ func (s *Service) routeDecisionTx(ctx context.Context, q queryRower, acct *accou
 	if err != nil {
 		return RouteDecision{}, err
 	}
-	return decideRoute(acct, programEnabled, giftDiscount, gift), nil
+	d := decideRoute(acct, programEnabled, giftDiscount, gift)
+	if !s.trainingProgram {
+		d.Reason = "single_account"
+	}
+	d.DiscountsSnapshotted = true
+	d.TrainingDiscountPercent = trainingDiscountPercentFrom(ctx, q)
+	d.PromotionDiscountPercent = acct.pricing().PromotionDiscountPercent
+	paid := decideRoute(acct, programEnabled, true, 0)
+	training := 0.0
+	if paid.Training {
+		training = d.TrainingDiscountPercent
+	}
+	d.PaidDiscountPercent = 100 * (1 - (1-training/100)*(1-d.PromotionDiscountPercent/100))
+	return d, nil
 }
 
 // RouteForUser decides how the user's next session is served. Handlers call
@@ -168,6 +188,10 @@ func (s *Service) TrainingRouteForUser(ctx context.Context, userID string) (bool
 // applyRoute turns a decision into the pricing inputs for one record.
 func applyRoute(pricing accountPricing, d RouteDecision) accountPricing {
 	pricing.TrainingOptIn = d.Training
+	if d.DiscountsSnapshotted {
+		pricing.TrainingDiscountSnapshot = &d.TrainingDiscountPercent
+		pricing.PromotionDiscountPercent = d.PromotionDiscountPercent
+	}
 	if d.GiftFunded {
 		pricing.PromotionDiscountPercent = 0
 	}
@@ -225,22 +249,19 @@ func (s *Service) RefundRouteDiscount(ctx context.Context, userID, keyPrefix str
 	if paid <= balanceEpsilon {
 		return nil, nil
 	}
-	// Price the paid part as if the session had not been gift-routed.
-	programEnabled := false
-	if s.trainingProgram {
-		programEnabled, err = boolSettingTx(ctx, tx, trainingProgramEnabledKey, true)
-		if err != nil {
-			return nil, err
-		}
+	// New reservations carry the paid-discount entitlement from session start.
+	// Legacy rows without a snapshot require manual reconciliation: the prior
+	// choice cannot be reconstructed reliably. Never substitute a later consent.
+	var amount float64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM((charge_usd-gift_usd)*
+ COALESCE((pricing_snapshot->>'paid_route_discount_percent')::numeric,0)/100),0)
+ FROM usage_logs WHERE user_id=$1 AND idempotency_key LIKE $2 || '%' AND action='transcription'
+ AND funding_route='gift' AND refunded_at IS NULL AND cost_attribution=$3`,
+		userID, escapeLikePrefix(keyPrefix), AttributionProviderPriced).Scan(&amount); err != nil {
+		return nil, err
 	}
-	paidDecision := decideRoute(acct, programEnabled, true, 0)
-	training := 0.0
-	if paidDecision.Training {
-		training = trainingDiscountPercentFrom(ctx, tx)
-	}
-	promo := acct.pricing().PromotionDiscountPercent
-	combined := 100 * (1 - (1-training/100)*(1-promo/100))
-	amount := roundUSD(paid * combined / 100)
+	amount = roundUSD(amount)
+	combined := amount / paid * 100
 	if amount <= balanceEpsilon {
 		return nil, nil
 	}
@@ -312,4 +333,17 @@ func (s *Service) TrainingProgramStatistics(ctx context.Context) (*TrainingProgr
 		return stats, nil
 	}
 	return stats, err
+}
+
+func annotateRouteDiscount(snapshot []byte, route RouteDecision) []byte {
+	var value map[string]any
+	if json.Unmarshal(snapshot, &value) != nil {
+		return snapshot
+	}
+	value["paid_route_discount_percent"] = route.PaidDiscountPercent
+	updated, err := json.Marshal(value)
+	if err != nil {
+		return snapshot
+	}
+	return updated
 }

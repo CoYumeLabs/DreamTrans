@@ -22,7 +22,7 @@ export function detectRecording(url?: string, name?: string): { provider: Record
   return undefined
 }
 
-function classifyModule(module: CourseModule): CourseModule {
+export function classifyModule(module: CourseModule): CourseModule {
   const haystack = `${module.url ?? ''} ${module.name} ${module.contents.map((c) => c.fileurl).join(' ')}`
   if (LIBRARY_PATTERN.test(haystack)) {
     module.skipped = 'library'
@@ -33,7 +33,7 @@ function classifyModule(module: CourseModule): CourseModule {
     const recording = detectRecording(target, module.name)
     if (recording) module.recording = recording
   }
-  if (module.modtype === 'forum' && !/announce|news|公告|notice/i.test(module.name)) {
+  if (module.modtype === 'forum') {
     module.skipped = 'private'
   }
   return module

@@ -298,8 +298,8 @@ func (s *Service) GetSessionCostSummaries(
 		return []SessionCostSummary{}, nil
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT session_id, action, SUM(charge_usd), SUM(quantity)
-		FROM usage_logs
+		SELECT session_id, action, SUM(charge_usd-COALESCE((SELECT SUM(d.amount_usd*(l.charge_usd-l.gift_usd)/NULLIF(d.paid_usd,0)) FROM route_discount_refunds d WHERE d.user_id=l.user_id AND l.funding_route='gift' AND l.action='transcription' AND left(l.idempotency_key,length(d.key))=d.key),0)), SUM(quantity)
+  FROM usage_logs l
 		WHERE user_id = $1 AND session_id = ANY($2::uuid[])
 		GROUP BY session_id, action
 	`, userID, pq.Array(sessionIDs))

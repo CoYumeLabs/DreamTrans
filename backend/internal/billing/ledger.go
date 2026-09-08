@@ -590,16 +590,22 @@ func (s *Service) RecordUsage(ctx context.Context, rec *UsageRecord) (float64, e
 // account cannot cover it and has automatic top-up configured, the top-up
 // runs once (outside the transaction) and the reservation is retried.
 func (s *Service) RecordUsageBatch(ctx context.Context, records []*UsageRecord) ([]float64, error) {
+	// Refilling at the configured threshold is opportunistic: a failed refill
+	// must not reject usage that the existing wallet can still cover.
+	if len(records) > 0 && records[0] != nil {
+		_ = s.maybeAutoTopup(ctx, records[0].UserID, false)
+	}
 	costs, err := s.recordUsageBatchOnce(ctx, records)
 	var shortfall *insufficientBalanceError
 	if errors.As(err, &shortfall) && shortfall.Topup != nil && s.autoTopup != nil {
-		if topupErr := s.autoTopup(ctx, *shortfall.Topup); topupErr != nil {
+		if topupErr := s.maybeAutoTopup(ctx, shortfall.Topup.UserID, true); topupErr != nil {
 			return nil, fmt.Errorf("%w: automatic top-up failed: %v", ErrInsufficientBalance, topupErr)
 		}
 		costs, err = s.recordUsageBatchOnce(ctx, records)
 	}
-	if err == nil {
-		s.awardSessionMilestoneAfterUsage(ctx, records)
+
+	if err == nil && len(records) > 0 {
+		_ = s.maybeAutoTopup(ctx, records[0].UserID, false)
 	}
 	return costs, err
 }
@@ -705,6 +711,7 @@ func (s *Service) recordUsageBatchOnce(ctx context.Context, records []*UsageReco
 		recordPolicy := *policy
 		recordPolicy.GiftDiscountAllowed = route.GiftDiscountAllowed
 		breakdown.Snapshot = annotatePricingSnapshot(breakdown.Snapshot, breakdown.ChargeUSD, &recordPolicy)
+		breakdown.Snapshot = annotateRouteDiscount(breakdown.Snapshot, route)
 		breakdowns[i] = breakdown
 		costs[i] = breakdown.ChargeUSD
 	}

@@ -1,3 +1,5 @@
+> 历史归档：本文描述旧版本，不代表当前实现。当前使用方式见 [用户指南](USER_GUIDE.md)，功能审计见 [2026-09-07 审计](audits/product-consistency-2026-09-07.md)。
+
 # Project Status: Real-Time Transcription App
 
 ## 1. Project Goal

@@ -23,7 +23,7 @@ SQL
 # The runner and SQL bundle ship together in one immutable application image.
 # Keep this marker aligned with the highest migration in that release so a
 # truncated/corrupt bundle fails before applying only a prefix.
-expected_latest_prefix=048
+expected_latest_prefix=050
 expected_sequence=1
 latest_prefix=
 found_migration=false

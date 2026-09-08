@@ -19,6 +19,7 @@ type PublicPlan struct {
 	UsageDiscountPercent  float64         `json:"usage_discount_percent"`
 	StorageGB             int             `json:"storage_gb"`
 	RetentionDays         int             `json:"retention_days"`
+	RetentionEnforced     bool            `json:"retention_enforced"`
 	MaxConcurrentSessions int             `json:"max_concurrent_sessions"`
 	Seats                 int             `json:"seats"`
 	Features              map[string]bool `json:"features"`
@@ -159,7 +160,7 @@ func (h *PublicPricingHandler) load(r *http.Request) (*PublicPricing, error) {
 			PriceUSDYear:          plan.PriceUSDYear,
 			UsageDiscountPercent:  plan.UsageDiscountPercent,
 			StorageGB:             plan.StorageGB,
-			RetentionDays:         plan.RetentionDays,
+			RetentionDays:         -1,
 			MaxConcurrentSessions: plan.MaxConcurrentSessions,
 			Seats:                 plan.Seats,
 			Features:              features,

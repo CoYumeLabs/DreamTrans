@@ -819,7 +819,7 @@ func TestPostgresAIIndexScopeMutationsCancelJobsWithoutReverseLocking(t *testing
 		}
 		var count int
 		if err := db.QueryRowContext(t.Context(), `
-			SELECT COUNT(*) FROM users WHERE id=$1
+			SELECT COUNT(*) FROM users WHERE id=$1 AND deleted_at IS NULL
 		`, targetUserID).Scan(&count); err != nil {
 			t.Fatal(err)
 		}

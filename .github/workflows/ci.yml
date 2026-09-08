@@ -60,6 +60,14 @@ jobs:
           VITE_BACKEND_URL: /
           VITE_BACKEND_WS_URL: /
 
+      - name: Verify Moodle extension privacy boundary and builds
+        working-directory: ./extension
+        run: |
+          npm ci
+          npm run type-check
+          npm test
+          npm run build
+
   backend:
     name: Backend Lint & Test
     runs-on: ubuntu-latest

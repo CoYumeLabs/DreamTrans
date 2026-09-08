@@ -6,13 +6,15 @@ export interface BatchTranscript {
   metadata: { duration: number; language?: string }
   results: Array<{ type: string; start_time: number; end_time: number; alternatives: Array<{ content: string; speaker?: string }> }>
 }
-export interface BatchResponse { job_id: string; status: string; error?: string; transcript?: BatchTranscript }
+export interface BatchResponse { server_managed?: boolean; session_id?: string; job_id: string; status: string; error?: string; transcript?: BatchTranscript }
 
 export function quoteBatch(seconds: number): Promise<BatchQuote> {
   return authFetch(`/api/transcribe/batch/quote?duration_seconds=${seconds}`)
 }
-export function submitBatch(audio: Blob, language: string): Promise<BatchResponse> {
+export function submitBatch(audio: Blob, language: string, requestId: string, title: string): Promise<BatchResponse> {
   const form = new FormData()
+  form.append('request_id', requestId)
+  form.append('title', title)
   form.append('audio', audio, 'audio.wav')
   form.append('config', JSON.stringify({ language, diarization: 'speaker', operating_point: 'enhanced' }))
   return authFetch('/api/transcribe/batch/submit?audio_format=pcm16', { method: 'POST', body: form }, [], 300_000)
@@ -77,3 +79,8 @@ export async function saveBatchResult(ownerId: string, sessionId: string, name: 
   assertOwner()
   await updateSession(sessionId, { status: 'completed', duration_seconds: Math.ceil(transcript.metadata.duration) })
 }
+
+export interface ServerBatchJob { id: string; name: string; language: string; seconds: number; job_id: string; status: string; error?: string }
+export function listBatchJobs(): Promise<ServerBatchJob[]> { return authFetch('/api/transcribe/batch/jobs') }
+
+export function retryBatchJob(id: string): Promise<void> { return authFetch('/api/transcribe/batch/jobs/retry', { method: 'POST', body: JSON.stringify({ id }) }) }

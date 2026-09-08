@@ -395,12 +395,12 @@ export function SettingsPanel({
         />
       </section>
 
-      {authenticated && (trainingProgram.available || trainingRoute?.reason === 'program_off') && (
+      {authenticated && (trainingProgram.available || trainingRoute?.reason === 'program_off' || trainingRoute?.reason === 'single_account') && (
         <section className="dt-settings__section">
           <div>
             <h3>{s.training.title}</h3>
             <p className="dt-muted">
-              {s.training.body(trainingProgram.discountPercent)}
+              {trainingRoute?.reason === 'single_account' ? s.training.routeSingleAccount : s.training.body(trainingProgram.discountPercent)}
               {' '}
               <a href="/privacy#share" rel="noreferrer" target="_blank">{s.training.privacyLink}</a>
             </p>

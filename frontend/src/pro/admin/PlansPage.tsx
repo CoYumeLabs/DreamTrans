@@ -93,7 +93,7 @@ function emptyPlanDraft(sort: number): PlanDraft {
     stripe_price_id_year: '',
     usage_discount_percent: '0',
     storage_gb: '1',
-    retention_days: '30',
+    retention_days: '-1',
     max_concurrent_sessions: '1',
     seats: '1',
     features: {},
@@ -281,7 +281,7 @@ export function PlansPage({ run, onOpenSettings }: { run: Runner; onOpenSettings
                     </td>
                     <td>{formatPercent(plan.usage_discount_percent)}</td>
                     <td>
-                      <span>存储 {limitLabel(plan.storage_gb, 'GB')} · 保留 {limitLabel(plan.retention_days, '天')}</span>
+                      <span>存储 {limitLabel(plan.storage_gb, 'GB')} · 自动清理未启用</span>
                       <small>并发 {limitLabel(plan.max_concurrent_sessions)} · 席位 {formatInteger(plan.seats)}</small>
                     </td>
                     <td>
@@ -368,11 +368,11 @@ export function PlansPage({ run, onOpenSettings }: { run: Runner; onOpenSettings
             </div>
             <div className="pa-dialog-grid pa-dialog-grid--four">
               <label><span>存储（GB）</span><input min="-1" onChange={(event) => setPlanDraft({ ...planDraft, storage_gb: event.target.value })} step="1" type="number" value={planDraft.storage_gb} /></label>
-              <label><span>保留天数</span><input min="-1" onChange={(event) => setPlanDraft({ ...planDraft, retention_days: event.target.value })} step="1" type="number" value={planDraft.retention_days} /></label>
+              <label><span>保留天数（未实施自动清理）</span><input disabled value="未启用" /></label>
               <label><span>并发转录</span><input min="-1" onChange={(event) => setPlanDraft({ ...planDraft, max_concurrent_sessions: event.target.value })} step="1" type="number" value={planDraft.max_concurrent_sessions} /></label>
               <label><span>席位</span><input min="1" onChange={(event) => setPlanDraft({ ...planDraft, seats: event.target.value })} step="1" type="number" value={planDraft.seats} /></label>
             </div>
-            <p className="pa-form-note">存储、保留天数与并发填 -1 表示不限。</p>
+            <p className="pa-form-note">存储与并发填 -1 表示不限。保留天数未实施，不作为套餐权益或自动删除承诺。</p>
             <fieldset className="pa-fieldset">
               <legend>功能开关</legend>
               <div className="pa-checkbox-grid">

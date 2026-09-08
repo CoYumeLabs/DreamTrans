@@ -48,7 +48,8 @@ type accountPricing struct {
 	MarkupOverride  *float64
 	// TrainingOptIn earns the program discount on transcription when the
 	// view says the program is offered.
-	TrainingOptIn bool
+	TrainingOptIn            bool
+	TrainingDiscountSnapshot *float64
 	// PromotionDiscountPercent is an invitation reward on transcription,
 	// stacked after the membership and program discounts.
 	PromotionDiscountPercent float64
@@ -252,6 +253,9 @@ func retailFromUpstream(upstream, markupPercent, discountPercent float64) (retai
 // trainingDiscountFor returns the program discount that applies to one
 // record: transcription only, and only for users who joined.
 func trainingDiscountFor(pricing accountPricing, view *usagePricingView, service string) float64 {
+	if pricing.TrainingOptIn && service == "transcription" && pricing.TrainingDiscountSnapshot != nil {
+		return *pricing.TrainingDiscountSnapshot
+	}
 	if !pricing.TrainingOptIn || view == nil || view.TrainingDiscountPercent <= 0 || service != "transcription" {
 		return 0
 	}

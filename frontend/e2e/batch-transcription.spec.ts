@@ -116,3 +116,20 @@ test('mobile menu exposes batch as a locked Pro feature for a free account', asy
   await expect(page.getByRole('button', { name: '查看会员方案' })).toBeVisible()
   expect(state.uploads).toBe(0)
 })
+
+test('server jobs are recovered without local storage and never saved or uploaded twice', async ({ page }) => {
+  const state = await setup(page)
+  const serverJob = { id: '3ddbabed-6000-4000-8000-000000000001', name: 'Other device.wav', language: 'en', seconds: 2, job_id: 'remote-job', status: 'saving', server_managed: true }
+  await page.route('**/api/transcribe/batch/jobs', route => route.fulfill({ json: [serverJob] }))
+  await page.route('**/api/transcribe/batch/status?*', route => route.fulfill({ json: serverJob }))
+  await page.evaluate(() => localStorage.removeItem('dt_batch_jobs_v1:batch-user'))
+  await page.reload()
+  await page.getByRole('button', { name: '批量转录' }).click()
+  const dialog = page.getByRole('dialog', { name: '批量转录' })
+  await expect(dialog.getByText('Other device.wav', { exact: true })).toBeVisible()
+  serverJob.status = 'done'
+  await expect(dialog.getByText('已保存到历史', { exact: true })).toBeVisible()
+  expect(state.uploads).toBe(0)
+  expect(state.saves).toBe(0)
+  expect(state.sessionIds).toEqual([])
+})

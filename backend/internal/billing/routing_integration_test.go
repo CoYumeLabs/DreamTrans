@@ -225,7 +225,7 @@ func TestInstitutionTenantsAndPaidBonusFunding(t *testing.T) {
 		t.Fatal(err)
 	}
 	approx(t, "institution price", estimate, standardHour)
-	// Administrator pins win over the answer but never over the institution rule.
+	// Administrator pins may restrict routes but never replace user consent.
 	if _, err := service.db.ExecContext(ctx, `UPDATE tenants SET kind='personal', speechmatics_route='standard' WHERE id=$1`, user.tenantID); err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestInstitutionTenantsAndPaidBonusFunding(t *testing.T) {
 	if _, err := service.db.ExecContext(ctx, `UPDATE users SET training_opt_in=false, speechmatics_route='training' WHERE id=$1`, user.userID); err != nil {
 		t.Fatal(err)
 	}
-	if route, _ = service.RouteForUser(ctx, user.userID); !route.Training || route.Reason != "user_pinned" {
+	if route, _ = service.RouteForUser(ctx, user.userID); route.Training || route.Reason != "declined" {
 		t.Fatalf("user pin = %+v", route)
 	}
 

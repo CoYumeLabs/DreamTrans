@@ -659,13 +659,39 @@ func AutoTopupHandler(service *billing.Service, stripeClient *payments.StripeCli
 		if !stripeClient.Enabled() {
 			return payments.ErrNotConfigured
 		}
-		// One logical attempt per account per 5 minutes: a retry storm cannot
-		// charge the card repeatedly for the same shortfall.
+		// Durable attempt IDs survive restarts. The time bucket is only for
+		// older callers that have not supplied a receipt.
 		bucket := time.Now().UTC().Truncate(5 * time.Minute).Unix()
-		idempotencyKey := fmt.Sprintf("autotopup:%s:%d", req.AccountID, bucket)
-		intentID, err := stripeClient.ChargeOffSession(ctx, req.StripeCustomerID, req.AmountUSD,
-			"DreamTrans automatic wallet top-up", idempotencyKey)
+		idempotencyKey := req.IdempotencyKey
+		if idempotencyKey == "" {
+			idempotencyKey = fmt.Sprintf("autotopup:%s:%d", req.AccountID, bucket)
+		}
+		var payment *payments.OffSessionPayment
+		if len(req.PaymentRequest) > 0 {
+			if err := json.Unmarshal(req.PaymentRequest, &payment); err != nil {
+				return err
+			}
+		} else {
+			prepared, err := stripeClient.PrepareOffSession(ctx, req.StripeCustomerID, req.AmountUSD, "DreamTrans automatic wallet top-up")
+			if err != nil {
+				return err
+			}
+			payment = prepared
+			if req.SavePaymentRequest != nil {
+				raw, err := json.Marshal(payment)
+				if err != nil {
+					return err
+				}
+				if err := req.SavePaymentRequest(ctx, raw); err != nil {
+					return err
+				}
+			}
+		}
+		intentID, err := stripeClient.ChargePreparedOffSession(ctx, payment, idempotencyKey)
 		if err != nil {
+			if payments.IsDefinitivePaymentRejection(err) {
+				return fmt.Errorf("%w: %v", billing.ErrAutoTopupRejected, err)
+			}
 			return err
 		}
 		_, err = service.RecordTopup(ctx, &billing.TopupInput{

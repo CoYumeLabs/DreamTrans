@@ -266,6 +266,10 @@ func buildHandler() (http.Handler, func()) {
 		cleanup = ragHandler.Close
 	}
 
+	stopBatch := batchHandler.StartWorker()
+	previousCleanup := cleanup
+	cleanup = func() { stopBatch(); previousCleanup() }
+
 	// Create mux
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", probeHandler(nil))
@@ -389,6 +393,8 @@ func buildHandler() (http.Handler, func()) {
 	mux.HandleFunc("/api/models/defaults", handlers.HandleModelDefaults)
 
 	// Batch transcription
+	mux.Handle("/api/transcribe/batch/jobs/retry", protect(http.HandlerFunc(batchHandler.HandleRetryJobs)))
+	mux.Handle("/api/transcribe/batch/jobs", protect(http.HandlerFunc(batchHandler.HandleJobs)))
 	mux.Handle("/api/transcribe/batch/quote", protect(http.HandlerFunc(batchHandler.HandleQuote)))
 	batchSubmit := http.Handler(http.HandlerFunc(batchHandler.HandleSubmit))
 	batchWait := http.Handler(http.HandlerFunc(batchHandler.HandleTranscribeAndWait))

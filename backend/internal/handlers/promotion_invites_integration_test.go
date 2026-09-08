@@ -125,7 +125,7 @@ func TestPromotionRegistrationRewardsAndAttribution(t *testing.T) {
 		t.Fatal("missing customer")
 	}
 	// A paid/manual assignment wins without deleting the gift entitlement.
-	paid := &billing.Plan{Code: "promo_test_paid", Name: "Paid", Active: true, StorageGB: 100, RetentionDays: 365, MaxConcurrentSessions: 5, Seats: 1}
+	paid := &billing.Plan{Code: "promo_test_paid", Name: "Paid", Active: true, StorageGB: 100, RetentionDays: -1, MaxConcurrentSessions: 5, Seats: 1}
 	if _, err := h.billing.UpsertPlan(t.Context(), paid, ""); err != nil {
 		t.Fatal(err)
 	}

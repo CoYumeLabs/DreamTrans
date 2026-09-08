@@ -168,9 +168,26 @@ func TestPromotionLandingVisitsAndStagedRewards(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// First transcription: paid once, and remembered so later charges skip it.
+	// A prepaid window that is fully refunded is not a completed transcription.
+	reservationKey := "zero-session:" + u.ID
+	if _, err := h.billing.RecordUsage(t.Context(), &billing.UsageRecord{UserID: u.ID, TenantID: u.TenantID, Action: "transcription", Model: "speechmatics-realtime-enhanced", Quantity: 5.0 / 60, IdempotencyKey: reservationKey}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.billing.RefundUsage(t.Context(), reservationKey, "no audio"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.billing.CompleteTranscription(t.Context(), u.ID, "zero:"+u.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.billing.GrantPromotionSessionMilestone(t.Context(), u.ID); err != nil {
+		t.Fatal(err)
+	}
+	if count, amount := promoGrantTotal(t, h, balance.AccountID); count != 1 || amount != 1 {
+		t.Fatalf("zero usage earned milestone: %d %f", count, amount)
+	}
+	// Actual completed transcription grants the reward exactly once.
 	for i := 0; i < 2; i++ {
-		if err := h.billing.GrantPromotionSessionMilestone(t.Context(), u.ID); err != nil {
+		if err := h.billing.CompleteTranscription(t.Context(), u.ID, "test-completed:"+u.ID, 2); err != nil {
 			t.Fatal(err)
 		}
 	}

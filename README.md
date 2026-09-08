@@ -145,7 +145,7 @@ ALLOW_USER_API_KEY=false  # Set to 'true' to allow users to use their own API ke
   of clearing the workspace.
 - **Cost-Safe AI Defaults**: Chat and generated artifacts remain explicit user
   actions. Uploading or migrating knowledge never starts a paid semantic
-  backfill; the UI previews model, chunks, estimated tokens, and DP before the
+  backfill; the UI previews model, chunks, estimated tokens, and USD before the
   user confirms an index job. Free lexical retrieval remains available.
 - **Practical Settings**: Configure source/target language, live translation,
   translation engine (AI context translation or Speechmatics MT), a custom

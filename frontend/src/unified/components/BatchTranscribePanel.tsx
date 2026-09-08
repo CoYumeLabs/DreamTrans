@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { formatUsageUSD } from '../../api'
 import { useMessages } from '../../i18n'
 import { ApiRequestError, getStoredUser } from '../../pro/api/auth'
-import { batchStatus, MAX_BATCH_BYTES, prepareBatchAudio, quoteBatch, saveBatchResult, submitBatch } from '../workspace/batchTranscription'
+import { batchStatus, listBatchJobs, retryBatchJob, MAX_BATCH_BYTES, prepareBatchAudio, quoteBatch, saveBatchResult, submitBatch } from '../workspace/batchTranscription'
 import { languageOptions } from '../workspace/languageOptions'
 import { Sheet } from './Sheet'
 import './BatchTranscribePanel.css'
@@ -24,6 +24,10 @@ export function BatchTranscribePanel({ ownerId, allowed, open, sourceLanguage, o
   const b = useMessages().batch
   const [jobs, setJobs] = useState<Job[]>(() => restoreJobs(ownerId))
   const jobsRef = useRef(jobs)
+  const dismissed = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    try { dismissed.current = new Set(JSON.parse(localStorage.getItem(`${storageKey(ownerId)}:dismissed`) ?? '[]')) } catch { dismissed.current = new Set() }
+  }, [ownerId])
   const [language, setLanguage] = useState(sourceLanguage)
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
@@ -56,9 +60,9 @@ export function BatchTranscribePanel({ ownerId, allowed, open, sourceLanguage, o
         if (['rejected', 'deleted', 'error'].includes(result.status)) {
           patch(job.id, { state: 'failed', error: callbacks.current.b.failed })
         } else if (result.status === 'done') {
-          if (!result.transcript) throw new Error('Missing transcript')
+          if (!result.server_managed && !result.transcript) throw new Error('Missing transcript')
           patch(job.id, { state: 'saving', error: undefined })
-          await saveBatchResult(ownerId!, job.id, job.name, job.language, result.transcript)
+          if (!result.server_managed && result.transcript) await saveBatchResult(ownerId!, job.id, job.name, job.language, result.transcript)
           if (!current()) return
           patch(job.id, { state: 'done', error: undefined })
           await callbacks.current.onSaved().catch(() => {})
@@ -80,10 +84,40 @@ export function BatchTranscribePanel({ ownerId, allowed, open, sourceLanguage, o
     return () => window.clearInterval(timer)
   }, [current, ownerId, patch])
 
+  useEffect(() => {
+    if (!ownerId || !open) return
+    let disposed = false
+    const recover = async () => {
+      try {
+        const remote = await listBatchJobs()
+        if (disposed || !current() || !Array.isArray(remote)) return
+        const next = [...jobsRef.current]
+        let completed = false
+        for (const row of remote) {
+          if (dismissed.current.has(row.id)) continue
+          const index = next.findIndex(job => job.id === row.id || (row.job_id && job.jobId === row.job_id))
+          const previous = index >= 0 ? next[index] : undefined
+          // An upload still being transmitted keeps its local progress.
+          if (previous?.state === 'uploading') continue
+          const state: JobState = row.status === 'done' ? 'done' : row.status === 'error' ? 'failed' : row.status === 'saving' ? 'saving' : row.job_id ? 'running' : 'uncertain'
+          const recovered: Job = { ...previous, id: row.id, name: row.name, language: row.language, seconds: row.seconds, jobId: row.job_id || undefined, state, error: row.error ? (state === 'failed' ? callbacks.current.b.failed : callbacks.current.b.error) : undefined }
+          if (state === 'done' && previous?.state !== 'done') completed = true
+          if (index >= 0) next[index] = recovered
+          else next.push(recovered)
+        }
+        commit(next)
+        if (completed) await callbacks.current.onSaved().catch(() => {})
+      } catch { /* Local jobs remain usable during a temporary list outage. */ }
+    }
+    void recover()
+    const timer = window.setInterval(() => { void recover() }, 5000)
+    return () => { disposed = true; window.clearInterval(timer) }
+  }, [ownerId, current, commit, open])
+
   async function choose(files: File[]) {
     if (busyRef.current || !allowed) return
     const existing = jobsRef.current.filter(job => job.audio)
-    if (files.length + existing.length > 10 || files.reduce((sum, file) => sum + file.size, 0) > MAX_BATCH_BYTES || jobsRef.current.length + files.length > 30) { setError(b.tooMany); return }
+    if (files.length + existing.length > 10 || files.reduce((sum, file) => sum + file.size, 0) > MAX_BATCH_BYTES || jobsRef.current.filter(job => !['done', 'failed', 'interrupted'].includes(job.state)).length + files.length > 30) { setError(b.tooMany); return }
     busyRef.current = true; setBusy(true); setError('')
     try {
       for (const file of files) {
@@ -114,7 +148,7 @@ export function BatchTranscribePanel({ ownerId, allowed, open, sourceLanguage, o
         if (job.cost === undefined || quote.reservation_usd > job.cost + 0.000001) { setError(b.priceChanged); break }
         patch(job.id, { state: 'uploading' })
         try {
-          const result = await submitBatch(job.audio, job.language)
+          const result = await submitBatch(job.audio, job.language, job.id, job.name)
           if (!current()) return
           if (!result.job_id) throw new Error('Missing job id')
           patch(job.id, { jobId: result.job_id, state: 'running', audio: undefined })
@@ -145,15 +179,17 @@ export function BatchTranscribePanel({ ownerId, allowed, open, sourceLanguage, o
         <div><strong>{job.name}</strong><small>{Math.ceil(job.seconds)} s · {job.cost === undefined ? '—' : formatUsageUSD(job.cost)}</small></div>
         <p role="status">{b[job.state]}</p>
         {job.error && <p role="alert">{job.error}</p>}
-        {job.jobId && <small>ID: {job.jobId}</small>}
+        {(job.jobId || job.state === 'uncertain') && <small>ID: {job.jobId || job.id}</small>}
         <div className="dt-batch__actions">
+          {job.state === 'uncertain' && <button type="button" onClick={() => { void retryBatchJob(job.id).catch(() => setError(b.error)) }}>{b.retry}</button>}
           {job.error && job.jobId && job.state !== 'failed' && <button type="button" onClick={() => { try { patch(job.id, { error: undefined }) } catch { setError(b.storage) } }}>{b.retry}</button>}
-          {['done', 'failed', 'ready', 'interrupted'].includes(job.state) && <button disabled={busy} type="button" onClick={() => { try { commit(jobsRef.current.filter(item => item.id !== job.id)) } catch { setError(b.storage) } }}>{b.remove}</button>}
+          {['done', 'failed', 'ready', 'interrupted'].includes(job.state) && <button disabled={busy} type="button" onClick={() => { try { dismissed.current.add(job.id); localStorage.setItem(`${storageKey(ownerId)}:dismissed`, JSON.stringify([...dismissed.current].slice(-200))); commit(jobsRef.current.filter(item => item.id !== job.id)) } catch { setError(b.storage) } }}>{b.remove}</button>}
         </div>
       </li>)}</ul>
       {ready.length > 0 && <><p>{b.estimate}: {ready.every(job => job.cost !== undefined) ? formatUsageUSD(ready.reduce((sum, job) => sum + (job.cost ?? 0), 0)) : '—'}</p><p className="dt-muted">{b.pricing}</p><button className="dt-primary-button" disabled={busy} type="button" onClick={() => { void start() }}>{ready.some(job => job.cost === undefined) ? b.quoteRetry : b.start}</button></>}
       <p className="dt-muted">{b.resume}</p>
-      <div className="dt-batch__actions"><button type="button" onClick={onAccount}>{b.topup}</button><button type="button" onClick={onHistory}>{b.history}</button></div>
+      <div className="dt-batch__actions">
+<button type="button" onClick={onAccount}>{b.topup}</button><button type="button" onClick={onHistory}>{b.history}</button></div>
     </div>}
   </Sheet>
 }

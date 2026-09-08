@@ -26,6 +26,7 @@ type Plan struct {
 	UsageDiscountPercent  float64         `json:"usage_discount_percent"`
 	StorageGB             int             `json:"storage_gb"`
 	RetentionDays         int             `json:"retention_days"`
+	RetentionEnforced     bool            `json:"retention_enforced"`
 	MaxConcurrentSessions int             `json:"max_concurrent_sessions"`
 	Seats                 int             `json:"seats"`
 	Features              map[string]bool `json:"features"`
@@ -170,6 +171,12 @@ func (s *Service) UpsertPlan(ctx context.Context, plan *Plan, actorID string) (*
 	}
 	defer func() { _ = tx.Rollback() }()
 	previous, _ := getPlanTx(ctx, tx, plan.Code)
+	if previous != nil && previous.RetentionDays != plan.RetentionDays {
+		return nil, invalidBillingInputf("retention changes are unavailable: automatic retention is not implemented")
+	}
+	if previous == nil {
+		plan.RetentionDays = -1
+	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO plans
 			(code, name, is_public, active, sort, price_usd_month, price_usd_year,

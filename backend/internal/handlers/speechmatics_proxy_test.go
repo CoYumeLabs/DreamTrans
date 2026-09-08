@@ -562,3 +562,50 @@ func (s *speechmaticsBillingStub) RefundRouteDiscount(context.Context, string, s
 func (s *speechmaticsBillingStub) RouteForUser(context.Context, string) (billing.RouteDecision, error) {
 	return billing.RouteDecision{}, nil
 }
+
+func (s *speechmaticsBillingStub) RecordUsageBatch(ctx context.Context, records []*billing.UsageRecord) ([]float64, error) {
+	costs := make([]float64, len(records))
+	for i, record := range records {
+		cost, err := s.RecordUsage(ctx, record)
+		if err != nil {
+			return nil, err
+		}
+		costs[i] = cost
+	}
+	return costs, nil
+}
+
+func TestSpeechmaticsTranslationIsReservedAndSettledWithAudio(t *testing.T) {
+	meter := &audioUsageMeter{}
+	config := []byte(`{"message":"StartRecognition","audio_format":{"type":"raw","encoding":"pcm_s16le","sample_rate":16000},"translation_config":{"target_languages":["zh"]}}`)
+	if ok, err := meter.ConfigureStartRecognition(config); !ok || err != nil {
+		t.Fatalf("configure %v %v", ok, err)
+	}
+	service := &speechmaticsBillingStub{}
+	handler := &SpeechmaticsProxyHandler{billing: service}
+	if err := handler.reserveSpeechmaticsAudio(t.Context(), nil, meter, "addon-session", "user", "tenant", nil, 32000); err != nil {
+		t.Fatal(err)
+	}
+	if len(service.recorded) != 2 || service.recorded[1].Action != "translation" || service.recorded[1].Model != "speechmatics-translation" {
+		t.Fatalf("records=%+v", service.recorded)
+	}
+	if err := meter.AddReservedForwardedBytes(32000); err != nil {
+		t.Fatal(err)
+	}
+	if !handler.settleSpeechmaticsReservations(nil, meter, "user", "tenant", nil) {
+		t.Fatal("settlement failed")
+	}
+	if len(service.settled) != 2 || service.settled[1].Action != "translation" || math.Abs(service.settled[1].Quantity-1.0/60) > 1e-9 {
+		t.Fatalf("settlements=%+v", service.settled)
+	}
+	if _, err := meter.ConfigureStartRecognition([]byte(`{"message":"StartRecognition","audio_format":{"type":"raw","encoding":"pcm_s16le","sample_rate":16000}}`)); err == nil {
+		t.Fatal("translation changed after prepaid start")
+	}
+	for _, targets := range []string{`[]`, `["en","fr"]`, `["en?paid=true"]`} {
+		other := &audioUsageMeter{}
+		bad := strings.Replace(string(config), `["zh"]`, targets, 1)
+		if _, err := other.ConfigureStartRecognition([]byte(bad)); err == nil {
+			t.Fatalf("accepted %s", targets)
+		}
+	}
+}

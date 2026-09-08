@@ -43,7 +43,7 @@ test('channel landing page shows the offer, urgency, QR and records a UTM-tagged
   await expect(page.getByText('额外 $2.5 活动余额')).toBeVisible()
   await expect(page.getByText('实时转录费用再减 20%')).toBeVisible()
   await expect(page.getByText('首次充值加赠 30%')).toBeVisible()
-  await expect(page.getByText('完成首次转录再送 $1')).toBeVisible()
+  await expect(page.getByText('完成首次有效转录（至少 1 秒且有文字）再送 $1')).toBeVisible()
   await expect(page.getByText('仅剩 42 个名额')).toBeVisible()
   await expect(page.getByLabel('距活动结束')).toContainText('2天')
   await expect(page.getByRole('link', { name: '立即注册领取' })).toHaveAttribute('href', '/pro?invite=XHS2026A')
@@ -78,3 +78,21 @@ test('an invalid invitation still offers direct sign-up', async ({ page }) => {
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('这个邀请链接已失效')
   await expect(page.getByRole('link', { name: '直接注册' })).toHaveAttribute('href', '/pro')
 })
+
+for (const colorScheme of ['light', 'dark'] as const) {
+  test(`invitation primary links retain white labels in ${colorScheme} mode`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme })
+    await installBackend(page)
+    await page.goto('/invite?code=CONTRAST')
+    const cta = page.locator('.iv-cta .lp-btn--primary')
+    await expect(cta).toHaveText('立即注册领取')
+    await expect(cta).toHaveCSS('color', 'rgb(255, 255, 255)')
+    await cta.hover()
+    await expect(cta).toHaveCSS('color', 'rgb(255, 255, 255)')
+    await cta.focus()
+    await expect(cta).toHaveCSS('color', 'rgb(255, 255, 255)')
+    await page.getByRole('radio', { name: 'English', exact: true }).click()
+    await expect(cta).not.toHaveText('')
+    await expect(cta).toHaveCSS('color', 'rgb(255, 255, 255)')
+  })
+}

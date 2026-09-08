@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"math"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -37,7 +38,8 @@ func (m *audioUsageMeter) noteTranscript(data []byte, at time.Time) {
 	var event struct {
 		Message  string `json:"message"`
 		Metadata struct {
-			End float64 `json:"end_time"`
+			End        float64 `json:"end_time"`
+			Transcript string  `json:"transcript"`
 		} `json:"metadata"`
 	}
 	if json.Unmarshal(data, &event) != nil || event.Message != "AddTranscript" || event.Metadata.End <= 0 {
@@ -45,6 +47,9 @@ func (m *audioUsageMeter) noteTranscript(data []byte, at time.Time) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if strings.TrimSpace(event.Metadata.Transcript) != "" {
+		m.finalTranscript = true
+	}
 	if len(m.timeline) == 0 || event.Metadata.End <= m.lastMetricEnd || event.Metadata.End <= m.timelineFloor {
 		return
 	}

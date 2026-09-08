@@ -127,14 +127,9 @@ export async function fetchModuleFiles(
       const text = lines.join('\n')
       return text.length > 20 ? [textFile(`${module.name}.txt`, text, module.url ?? base, module.timemodified)] : []
     }
-    case 'forum': {
-      // Only the announcements forum reaches here (classifyModule).
-      const response = await moodleFetch(limiter, `${base}/mod/forum/view.php?id=${module.cmid}`)
-      const doc = new DOMParser().parseFromString(await response.text(), 'text/html')
-      const rows = Array.from(doc.querySelectorAll('.discussion, [data-region="discussion-list"] tr, .forumpost'))
-      const text = rows.map((row) => domToText(row)).filter(Boolean).join('\n\n')
-      return text ? [textFile(`${module.name}.txt`, text, response.url, module.timemodified)] : []
-    }
+    case 'forum':
+      // A forum name cannot prove its contents are public announcements.
+      return []
     default:
       return []
   }

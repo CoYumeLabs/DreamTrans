@@ -44,8 +44,9 @@ type audioUsageReservation struct {
 }
 
 type audioUsageSettlement struct {
-	key     string
-	minutes float64
+	translation bool
+	key         string
+	minutes     float64
 }
 
 type audioUsageSnapshot struct {
@@ -57,12 +58,14 @@ type audioUsageSnapshot struct {
 // Wall-clock connection time is not a useful proxy because clients can pause,
 // buffer, or send audio faster/slower than real time.
 type audioUsageMeter struct {
-	mu            sync.Mutex
-	timeline      []audioTimeAnchor
-	latencies     []float64
-	metricCount   int
-	lastMetricEnd float64
-	timelineFloor float64
+	mu              sync.Mutex
+	timeline        []audioTimeAnchor
+	latencies       []float64
+	metricCount     int
+	finalTranscript bool
+	translation     bool
+	lastMetricEnd   float64
+	timelineFloor   float64
 	// route is the session's routing decision, fixed at connect so every
 	// reservation is priced alike; nil lets the ledger decide per record.
 	route          *billing.RouteDecision
@@ -84,6 +87,9 @@ func (m *audioUsageMeter) ConfigureStartRecognition(data []byte) (bool, error) {
 	}
 
 	var request struct {
+		Translation *struct {
+			TargetLanguages []string `json:"target_languages"`
+		} `json:"translation_config"`
 		AudioFormat struct {
 			Type         string `json:"type"`
 			Encoding     string `json:"encoding"`
@@ -94,6 +100,20 @@ func (m *audioUsageMeter) ConfigureStartRecognition(data []byte) (bool, error) {
 	}
 	if err := json.Unmarshal(data, &request); err != nil {
 		return true, fmt.Errorf("invalid StartRecognition message: %w", err)
+	}
+	if request.Translation != nil {
+		if len(request.Translation.TargetLanguages) != 1 {
+			return true, fmt.Errorf("exactly one translation target is supported")
+		}
+		language := request.Translation.TargetLanguages[0]
+		if len(language) < 2 || len(language) > 12 {
+			return true, fmt.Errorf("invalid translation target")
+		}
+		for _, ch := range language {
+			if (ch < 'a' || ch > 'z') && (ch < 'A' || ch > 'Z') && ch != '-' {
+				return true, fmt.Errorf("invalid translation target")
+			}
+		}
 	}
 	format := request.AudioFormat
 	if !strings.EqualFold(strings.TrimSpace(format.Type), "raw") {
@@ -125,6 +145,10 @@ func (m *audioUsageMeter) ConfigureStartRecognition(data []byte) (bool, error) {
 		m.bytesPerSecond != bytesPerSecond {
 		return true, fmt.Errorf("audio format cannot change after audio has started")
 	}
+	if m.configured && m.translation != (request.Translation != nil) {
+		return true, fmt.Errorf("translation cannot change after recognition starts")
+	}
+	m.translation = request.Translation != nil
 	m.configured = true
 	m.bytesPerSecond = bytesPerSecond
 	return true, nil
@@ -298,12 +322,21 @@ func (m *audioUsageMeter) PendingSettlements() []audioUsageSettlement {
 			minutes: float64(actualBytes) / float64(m.bytesPerSecond) / 60,
 		})
 	}
+	if m.translation {
+		originals := append([]audioUsageSettlement(nil), settlements...)
+		for _, item := range originals {
+			item.key += ":translation"
+			item.translation = true
+			settlements = append(settlements, item)
+		}
+	}
 	return settlements
 }
 
 type speechmaticsBillingService interface {
 	CanAffordUsage(context.Context, string, *billing.UsageRecord) (bool, error)
 	RecordUsage(context.Context, *billing.UsageRecord) (float64, error)
+	RecordUsageBatch(context.Context, []*billing.UsageRecord) ([]float64, error)
 	SettleUsageReservation(context.Context, string, *billing.UsageRecord) (float64, error)
 	GetUserBalance(context.Context, string) (*billing.AccountBalance, error)
 	SessionLimitForUser(context.Context, string) (int, error)
@@ -713,7 +746,18 @@ func (h *SpeechmaticsProxyHandler) HandleProxy(w http.ResponseWriter, r *http.Re
 	// Reconcile the unused reservation tail against exact forwarded raw audio.
 	// A detached context makes client disconnects unable to cancel the refund.
 	if userID != "" && tenantID != "" && h.billing != nil {
-		h.settleSpeechmaticsReservations(safeClientConn, audioMeter, userID, tenantID, billingSessionRef)
+		settled := h.settleSpeechmaticsReservations(safeClientConn, audioMeter, userID, tenantID, billingSessionRef)
+		if settled && proxyErr == nil && audioMeter.finalTranscript && audioMeter.bytesPerSecond > 0 {
+			if completer, ok := h.billing.(interface {
+				CompleteTranscription(context.Context, string, string, float64) error
+			}); ok {
+				c, done := context.WithTimeout(context.Background(), 5*time.Second)
+				if err := completer.CompleteTranscription(c, userID, "speechmatics:"+billingConnectionID, float64(audioMeter.totalBytes)/float64(audioMeter.bytesPerSecond)); err != nil {
+					log.Printf("record transcription completion: %v", err)
+				}
+				done()
+			}
+		}
 		// A gift-routed stream was priced at the standard rate; hand the paid
 		// part's discount back now that the stream is closed.
 		if routeDecision != nil && routeDecision.GiftFunded {
@@ -766,6 +810,7 @@ func (h *SpeechmaticsProxyHandler) reserveSpeechmaticsAudio(
 		reservation.minutes,
 		reservation.key,
 		audioMeter.route,
+		audioMeter.translation,
 	); err != nil {
 		return wrapWebSocketAccountingError(classifyBillingAccountingFailure(err), err)
 	}
@@ -978,6 +1023,7 @@ func (h *SpeechmaticsProxyHandler) recordSpeechmaticsUsage(
 	minutes float64,
 	idempotencyKey string,
 	route *billing.RouteDecision,
+	translation ...bool,
 ) error {
 	if minutes <= 0 || h.billing == nil || userID == "" || tenantID == "" {
 		return fmt.Errorf("audio billing is unavailable")
@@ -985,7 +1031,7 @@ func (h *SpeechmaticsProxyHandler) recordSpeechmaticsUsage(
 	c, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	cost, err := h.billing.RecordUsage(c, &billing.UsageRecord{
+	record := &billing.UsageRecord{
 		UserID:         userID,
 		TenantID:       tenantID,
 		SessionID:      sessionID,
@@ -994,7 +1040,21 @@ func (h *SpeechmaticsProxyHandler) recordSpeechmaticsUsage(
 		Quantity:       minutes,
 		IdempotencyKey: idempotencyKey,
 		Route:          route,
-	})
+	}
+	records := []*billing.UsageRecord{record}
+	if len(translation) > 0 && translation[0] {
+		addon := *record
+		addon.Action = "translation"
+		addon.Model = "speechmatics-translation"
+		addon.Provider = "speechmatics"
+		addon.IdempotencyKey += ":translation"
+		records = append(records, &addon)
+	}
+	costs, err := h.billing.RecordUsageBatch(c, records)
+	cost := 0.0
+	for _, value := range costs {
+		cost += value
+	}
 	if err != nil {
 		log.Printf("failed to record Speechmatics usage: %v", err)
 		return err
@@ -1013,12 +1073,13 @@ func (h *SpeechmaticsProxyHandler) settleSpeechmaticsReservations(
 	audioMeter *audioUsageMeter,
 	userID, tenantID string,
 	sessionID *string,
-) {
+) bool {
 	settlements := audioMeter.PendingSettlements()
 	if len(settlements) == 0 {
-		return
+		return true
 	}
 	settledAny := false
+	allSettled := true
 	for _, settlement := range settlements {
 		// Settlement overwrites the reservation row's session_id, so the
 		// reference must ride along here too or attribution is lost.
@@ -1029,6 +1090,11 @@ func (h *SpeechmaticsProxyHandler) settleSpeechmaticsReservations(
 			Action:    "transcription",
 			Model:     "speechmatics-realtime-enhanced",
 			Quantity:  settlement.minutes,
+		}
+		if settlement.translation {
+			actual.Action = "translation"
+			actual.Model = "speechmatics-translation"
+			actual.Provider = "speechmatics"
 		}
 		var settleErr error
 		for attempt := 0; attempt < 3; attempt++ {
@@ -1049,6 +1115,7 @@ func (h *SpeechmaticsProxyHandler) settleSpeechmaticsReservations(
 			continue
 		}
 		if settleErr != nil {
+			allSettled = false
 			log.Printf("failed to settle Speechmatics usage reservation: %v", settleErr)
 			continue
 		}
@@ -1062,6 +1129,7 @@ func (h *SpeechmaticsProxyHandler) settleSpeechmaticsReservations(
 			h.sendSpeechmaticsBalanceUpdate(clientConn, balance, 0)
 		}
 	}
+	return allSettled
 }
 
 func (h *SpeechmaticsProxyHandler) sendSpeechmaticsBalanceUpdate(

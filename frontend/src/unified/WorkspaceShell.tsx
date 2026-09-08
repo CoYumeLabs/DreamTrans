@@ -260,6 +260,10 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
     : effectiveViewMode
 
   const setChromeMode = (mode: TranscriptChromeMode) => {
+    if (settings.translationEnabled && settings.translationEngine === 'speechmatics' && ['starting', 'recording', 'reconnecting', 'paused'].includes(recorderStatus) && ((mode === 'learn') !== learningMode)) {
+      setNotice(w.notices.stopForTranslationMode)
+      return
+    }
     if (mode === 'learn') {
       onSettingsChange({ assistMode: 'learn' })
       return

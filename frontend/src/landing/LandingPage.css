@@ -230,32 +230,32 @@ body:has(.lp),
   font-size: 0.94rem;
 }
 
-.lp-btn--primary {
+.lp .lp-btn--primary {
   color: #fff;
   background: var(--lp-ink);
 }
 
-.lp-btn--primary:hover {
+.lp .lp-btn--primary:hover {
   background: #23262d;
 }
 
-.lp-btn--secondary {
+.lp .lp-btn--secondary {
   color: var(--lp-ink);
   background: var(--lp-surface);
   border-color: var(--lp-line-strong);
 }
 
-.lp-btn--secondary:hover {
+.lp .lp-btn--secondary:hover {
   background: var(--lp-tint);
   border-color: #c2c8d1;
 }
 
-.lp-btn--ghost {
+.lp .lp-btn--ghost {
   color: var(--lp-body);
   background: transparent;
 }
 
-.lp-btn--ghost:hover {
+.lp .lp-btn--ghost:hover {
   color: var(--lp-ink);
   background: var(--lp-tint);
 }

@@ -1440,6 +1440,8 @@ export interface AccountSummary extends AccountBalance {
   discount_percent: number
   grants: GrantItem[]
   has_payment_method: boolean
+  auto_topup_status?: 'pending' | 'succeeded' | 'failed'
+  auto_topup_error?: string
   auto_topup_threshold_usd?: number
   auto_topup_amount_usd?: number
   storage_bytes: number

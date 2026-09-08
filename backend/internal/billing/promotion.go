@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
+	"math"
 	"time"
 
 	"github.com/dreamtrans/backend/internal/risk"
@@ -181,21 +181,16 @@ func applyPromotionTopupRewardsTx(ctx context.Context, tx *sql.Tx, acct *account
 	return err
 }
 
-// awardSessionMilestoneAfterUsage grants the first-transcription reward once
-// the charge that earned it has committed. It never fails the usage call.
-func (s *Service) awardSessionMilestoneAfterUsage(ctx context.Context, records []*UsageRecord) {
-	for _, rec := range records {
-		if rec == nil || rec.Action != "transcription" || rec.CustomerFunded {
-			continue
-		}
-		if _, settled := s.milestoneSettled.Load(rec.UserID); settled {
-			return
-		}
-		if err := s.GrantPromotionSessionMilestone(ctx, rec.UserID); err != nil {
-			log.Printf("promotion session milestone for %s: %v", rec.UserID, err)
-		}
-		return
+// CompleteTranscription is called only after usable final output and actual audio
+// have been observed, never when a reservation is placed.
+func (s *Service) CompleteTranscription(ctx context.Context, userID, key string, seconds float64) error {
+	if seconds < 1 || seconds > 604800 || math.IsNaN(seconds) || math.IsInf(seconds, 0) {
+		return nil
 	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO transcription_completions(key,user_id,seconds) VALUES($1,$2,$3) ON CONFLICT(key) DO NOTHING`, key, userID, seconds); err != nil {
+		return err
+	}
+	return s.GrantPromotionSessionMilestone(ctx, userID)
 }
 
 // GrantPromotionSessionMilestone issues the invitation's first-transcription
@@ -225,6 +220,7 @@ func (s *Service) GrantPromotionSessionMilestone(ctx context.Context, userID str
 	err = tx.QueryRowContext(ctx, `SELECT r.id,i.name,i.milestone_session_usd,i.grant_days
         FROM promotion_registrations r JOIN promotion_invites i ON i.id=r.invite_id
         WHERE r.user_id=$1 AND r.rewarded_at IS NOT NULL AND r.session_rewarded_at IS NULL AND i.milestone_session_usd>0
+ AND EXISTS(SELECT 1 FROM transcription_completions c WHERE c.user_id=r.user_id AND c.seconds>=1)
         FOR UPDATE OF r`, userID).Scan(&id, &name, &amount, &grantDays)
 	if errors.Is(err, sql.ErrNoRows) {
 		// Registered but the registration reward is still pending (unverified

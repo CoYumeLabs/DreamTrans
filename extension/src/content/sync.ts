@@ -11,7 +11,7 @@ import { RateLimiter } from './limits'
 // Sync: incremental by timemodified, idempotent by sha256. One pass over the
 // course tree while the user is on the page; nothing runs afterwards.
 
-const FETCHABLE = new Set(['resource', 'folder', 'book', 'page', 'label', 'assign', 'forum', 'link'])
+const FETCHABLE = new Set(['resource', 'folder', 'book', 'page', 'label', 'assign', 'link'])
 
 function stateKey(ctx: MoodleContext): string {
   return `dt.sync.${ctx.host}.${ctx.courseId}`

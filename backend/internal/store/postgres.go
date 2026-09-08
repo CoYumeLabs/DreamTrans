@@ -58,6 +58,8 @@ var requiredSchemaMigrations = []string{
 	"036_promotion_invites.sql",
 	"037_signup_risk.sql",
 	"038_signup_risk_defense.sql",
+	"049_consent_and_account_archive.sql",
+	"050_durable_batch.sql",
 }
 
 // PostgresStore handles all database operations
@@ -207,7 +209,7 @@ func (s *PostgresStore) GetUserByID(ctx context.Context, id string) (*models.Use
 	query := `
 		SELECT id, tenant_id, email, password_hash, name, role, is_active, email_verified,
 		       training_opt_in, COALESCE(speechmatics_route, ''), last_login_at, created_at, updated_at
-		FROM users WHERE id = $1`
+		FROM users WHERE id = $1 AND deleted_at IS NULL`
 	err := s.db.QueryRowContext(ctx, query, id).Scan(
 		&user.ID, &user.TenantID, &user.Email, &user.PasswordHash, &user.Name, &user.Role,
 		&user.IsActive, &user.EmailVerified, &user.TrainingOptIn, &user.SpeechmaticsRoute,
@@ -225,7 +227,7 @@ func (s *PostgresStore) GetUserByEmail(ctx context.Context, email string) (*mode
 	query := `
 		SELECT id, tenant_id, email, password_hash, name, role, is_active, email_verified,
 		       training_opt_in, COALESCE(speechmatics_route, ''), last_login_at, created_at, updated_at
-		FROM users WHERE email = $1`
+		FROM users WHERE email = $1 AND deleted_at IS NULL`
 	err := s.db.QueryRowContext(ctx, query, email).Scan(
 		&user.ID, &user.TenantID, &user.Email, &user.PasswordHash, &user.Name, &user.Role,
 		&user.IsActive, &user.EmailVerified, &user.TrainingOptIn, &user.SpeechmaticsRoute,
@@ -320,7 +322,7 @@ func (s *PostgresStore) CreateSessionWithQuota(ctx context.Context, session *mod
 
 	var userTenantID string
 	if err := tx.QueryRowContext(ctx, `
-		SELECT tenant_id FROM users WHERE id = $1 FOR UPDATE
+		SELECT tenant_id FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE
 	`, session.UserID).Scan(&userTenantID); err != nil {
 		return err
 	}
@@ -1302,14 +1304,14 @@ func (s *PostgresStore) UpdateUserPasswordAndRevokeTokens(ctx context.Context, u
 func (s *PostgresStore) ListUsers(ctx context.Context, limit, offset int) ([]models.User, int, error) {
 	// Get total count
 	var total int
-	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users WHERE deleted_at IS NULL").Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
 	query := `
 		SELECT id, tenant_id, email, password_hash, name, role, is_active, email_verified,
 		       training_opt_in, COALESCE(speechmatics_route, ''), last_login_at, created_at, updated_at
-		FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2`
+		FROM users WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT $1 OFFSET $2`
 	rows, err := s.db.QueryContext(ctx, query, limit, offset)
 	if err != nil {
 		return nil, 0, err
@@ -1321,7 +1323,7 @@ func (s *PostgresStore) ListUsers(ctx context.Context, limit, offset int) ([]mod
 		var user models.User
 		if err := rows.Scan(
 			&user.ID, &user.TenantID, &user.Email, &user.PasswordHash, &user.Name, &user.Role,
-			&user.IsActive, &user.EmailVerified, &user.TrainingOptIn,
+			&user.IsActive, &user.EmailVerified, &user.TrainingOptIn, &user.SpeechmaticsRoute,
 			&user.LastLoginAt, &user.CreatedAt, &user.UpdatedAt,
 		); err != nil {
 			return nil, 0, err
@@ -1335,7 +1337,7 @@ func (s *PostgresStore) ListUsers(ctx context.Context, limit, offset int) ([]mod
 func (s *PostgresStore) ListUsersByTenant(ctx context.Context, tenantID string, limit, offset int) ([]models.User, int, error) {
 	var total int
 	if err := s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM users WHERE tenant_id = $1
+		SELECT COUNT(*) FROM users WHERE tenant_id = $1 AND deleted_at IS NULL
 	`, tenantID).Scan(&total); err != nil {
 		return nil, 0, err
 	}
@@ -1343,7 +1345,7 @@ func (s *PostgresStore) ListUsersByTenant(ctx context.Context, tenantID string, 
 		SELECT id, tenant_id, email, password_hash, name, role, is_active, email_verified,
 		       training_opt_in, COALESCE(speechmatics_route, ''), last_login_at, created_at, updated_at
 		FROM users
-		WHERE tenant_id = $1
+		WHERE tenant_id = $1 AND deleted_at IS NULL
 		ORDER BY created_at DESC
 		LIMIT $2 OFFSET $3
 	`, tenantID, limit, offset)
@@ -1357,7 +1359,7 @@ func (s *PostgresStore) ListUsersByTenant(ctx context.Context, tenantID string, 
 		var user models.User
 		if err := rows.Scan(
 			&user.ID, &user.TenantID, &user.Email, &user.PasswordHash, &user.Name, &user.Role,
-			&user.IsActive, &user.EmailVerified, &user.TrainingOptIn,
+			&user.IsActive, &user.EmailVerified, &user.TrainingOptIn, &user.SpeechmaticsRoute,
 			&user.LastLoginAt, &user.CreatedAt, &user.UpdatedAt,
 		); err != nil {
 			return nil, 0, err
@@ -1419,7 +1421,20 @@ func (s *PostgresStore) UpdateUserName(ctx context.Context, userID, name string)
 // SetUserTrainingOptIn records the user's answer to the Speechmatics
 // training program. Both answers are explicit; NULL only means "not asked".
 func (s *PostgresStore) SetUserTrainingOptIn(ctx context.Context, userID string, optIn bool) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE users SET training_opt_in = $1 WHERE id = $2`, optIn, userID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var enabled bool
+	// Serialize consent with the administrator pause trigger, in settings->user order.
+	if err := tx.QueryRowContext(ctx, `SELECT value='true'::jsonb FROM system_settings WHERE key='training_program_enabled' FOR SHARE`).Scan(&enabled); err != nil {
+		return err
+	}
+	if optIn && !enabled {
+		return fmt.Errorf("training program is paused")
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE users SET training_opt_in = $1 WHERE id = $2 AND deleted_at IS NULL`, optIn, userID)
 	if err != nil {
 		return err
 	}
@@ -1430,7 +1445,7 @@ func (s *PostgresStore) SetUserTrainingOptIn(ctx context.Context, userID string,
 	if affected != 1 {
 		return sql.ErrNoRows
 	}
-	return nil
+	return tx.Commit()
 }
 
 // UserTrainingOptIn reports whether the user joined the training program.
@@ -1438,7 +1453,7 @@ func (s *PostgresStore) SetUserTrainingOptIn(ctx context.Context, userID string,
 // never routed through the training account without an explicit yes.
 func (s *PostgresStore) UserTrainingOptIn(ctx context.Context, userID string) (bool, error) {
 	var optIn sql.NullBool
-	err := s.db.QueryRowContext(ctx, `SELECT training_opt_in FROM users WHERE id = $1`, userID).Scan(&optIn)
+	err := s.db.QueryRowContext(ctx, `SELECT training_opt_in FROM users WHERE id = $1 AND deleted_at IS NULL`, userID).Scan(&optIn)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -1474,7 +1489,7 @@ func (s *PostgresStore) UpdateUserAdminSafe(
 	if err := tx.QueryRowContext(ctx, `
 		SELECT tenant_id, role, is_active
 		FROM users
-		WHERE id = $1
+		WHERE id = $1 AND deleted_at IS NULL
 		FOR UPDATE
 	`, actorID).Scan(&actorTenantID, &actorRole, &actorActive); err != nil {
 		return err
@@ -1492,7 +1507,7 @@ func (s *PostgresStore) UpdateUserAdminSafe(
 	if err := tx.QueryRowContext(ctx, `
 		SELECT name, role, is_active, tenant_id, admin_role_id IS NOT NULL
 		FROM users
-		WHERE id = $1
+		WHERE id = $1 AND deleted_at IS NULL
 		FOR UPDATE
 	`, targetID).Scan(&currentName, &currentRole, &currentActive, &targetTenantID, &targetConsoleAdmin); err != nil {
 		return err
@@ -1569,7 +1584,7 @@ func (s *PostgresStore) DeleteUserAdminSafeAndCancelIndexJobs(
 	if err := tx.QueryRowContext(ctx, `
 		SELECT tenant_id, role, is_active
 		FROM users
-		WHERE id = $1
+		WHERE id = $1 AND deleted_at IS NULL
 		FOR UPDATE
 	`, actorID).Scan(&actorTenantID, &actorRole, &actorActive); err != nil {
 		return nil, err
@@ -1587,7 +1602,7 @@ func (s *PostgresStore) DeleteUserAdminSafeAndCancelIndexJobs(
 	if err := tx.QueryRowContext(ctx, `
 		SELECT tenant_id, role, admin_role_id IS NOT NULL
 		FROM users
-		WHERE id = $1
+		WHERE id = $1 AND deleted_at IS NULL
 		FOR UPDATE
 	`, targetID).Scan(&targetTenantID, &targetRole, &targetConsoleAdmin); err != nil {
 		return nil, err
@@ -1648,7 +1663,7 @@ func (s *PostgresStore) DeleteUserAdminSafeAndCancelIndexJobs(
 			return nil, err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM users WHERE id = $1`, targetID); err != nil {
+	if err := archiveUserTx(ctx, tx, targetID); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {

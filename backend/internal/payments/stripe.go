@@ -495,13 +495,23 @@ func (c *StripeClient) GetSubscription(ctx context.Context, subscriptionID strin
 // ChargeOffSession charges the customer's saved card for an automatic
 // top-up. idempotencyKey must be stable for one logical top-up attempt so a
 // retried call cannot charge twice.
-func (c *StripeClient) ChargeOffSession(ctx context.Context, customerID string, amountUSD float64, description, idempotencyKey string) (string, error) {
+type OffSessionPayment struct {
+	Amount        int64   `json:"amount"`
+	Currency      string  `json:"currency"`
+	Customer      string  `json:"customer"`
+	PaymentMethod string  `json:"payment_method"`
+	Description   string  `json:"description"`
+	AmountUSD     float64 `json:"amount_usd"`
+	USDRate       float64 `json:"usd_rate"`
+}
+
+func (c *StripeClient) PrepareOffSession(ctx context.Context, customerID string, amountUSD float64, description string) (*OffSessionPayment, error) {
 	if !c.Enabled() {
-		return "", ErrNotConfigured
+		return nil, ErrNotConfigured
 	}
 	rate, ok := c.usdRateNow()
 	if !ok {
-		return "", ErrRateUnavailable
+		return nil, ErrRateUnavailable
 	}
 	listParams := &stripe.PaymentMethodListParams{
 		Customer: stripe.String(customerID),
@@ -516,24 +526,29 @@ func (c *StripeClient) ChargeOffSession(ctx context.Context, customerID string, 
 		break
 	}
 	if err := iter.Err(); err != nil {
-		return "", err
+		return nil, err
 	}
 	if methodID == "" {
-		return "", fmt.Errorf("no saved payment method for automatic top-up")
+		return nil, fmt.Errorf("no saved payment method for automatic top-up")
 	}
-	params := &stripe.PaymentIntentParams{
-		Amount:        stripe.Int64(minorUnits(amountUSD, rate)),
-		Currency:      stripe.String(c.Currency()),
-		Customer:      stripe.String(customerID),
-		PaymentMethod: stripe.String(methodID),
-		Confirm:       stripe.Bool(true),
-		OffSession:    stripe.Bool(true),
-		Description:   stripe.String(description),
+	return &OffSessionPayment{Amount: minorUnits(amountUSD, rate), Currency: c.Currency(), Customer: customerID, PaymentMethod: methodID, Description: description, AmountUSD: amountUSD, USDRate: rate}, nil
+}
+
+// ChargePreparedOffSession reuses immutable currency, amount and card details
+// across retries; Stripe rejects a reused key with different parameters.
+func (c *StripeClient) ChargePreparedOffSession(ctx context.Context, payment *OffSessionPayment, idempotencyKey string) (string, error) {
+	if !c.Enabled() {
+		return "", ErrNotConfigured
 	}
+	if payment == nil || payment.Amount <= 0 || payment.Customer == "" || payment.PaymentMethod == "" {
+		return "", fmt.Errorf("invalid prepared payment")
+	}
+	params := &stripe.PaymentIntentParams{Amount: stripe.Int64(payment.Amount), Currency: stripe.String(payment.Currency), Customer: stripe.String(payment.Customer), PaymentMethod: stripe.String(payment.PaymentMethod), Confirm: stripe.Bool(true), OffSession: stripe.Bool(true), Description: stripe.String(payment.Description)}
 	params.Context = ctx
 	params.AddMetadata("kind", "auto_topup")
-	params.AddMetadata("amount_usd", strconv.FormatFloat(amountUSD, 'f', 2, 64))
-	c.addCurrencyMetadata(params.AddMetadata, rate)
+	params.AddMetadata("amount_usd", strconv.FormatFloat(payment.AmountUSD, 'f', 2, 64))
+	params.AddMetadata("currency", payment.Currency)
+	params.AddMetadata("usd_rate", strconv.FormatFloat(payment.USDRate, 'f', -1, 64))
 	params.SetIdempotencyKey(idempotencyKey)
 	intent, err := paymentintent.New(params)
 	if err != nil {
@@ -543,6 +558,13 @@ func (c *StripeClient) ChargeOffSession(ctx context.Context, customerID string, 
 		return "", fmt.Errorf("automatic top-up payment is %s", intent.Status)
 	}
 	return intent.ID, nil
+}
+func (c *StripeClient) ChargeOffSession(ctx context.Context, customerID string, amountUSD float64, description, idempotencyKey string) (string, error) {
+	payment, err := c.PrepareOffSession(ctx, customerID, amountUSD, description)
+	if err != nil {
+		return "", err
+	}
+	return c.ChargePreparedOffSession(ctx, payment, idempotencyKey)
 }
 
 // Event re-exports the Stripe event type for handlers.
@@ -554,4 +576,11 @@ func (c *StripeClient) ConstructEvent(payload []byte, signatureHeader string) (E
 		return Event{}, fmt.Errorf("%w: STRIPE_WEBHOOK_SECRET is unset", ErrNotConfigured)
 	}
 	return constructEvent(payload, signatureHeader, c.webhookSecret)
+}
+
+// IsDefinitivePaymentRejection distinguishes a declined/invalid request from
+// timeouts and server errors whose payment outcome is still unknown.
+func IsDefinitivePaymentRejection(err error) bool {
+	var stripeErr *stripe.Error
+	return errors.As(err, &stripeErr) && stripeErr.HTTPStatusCode >= 400 && stripeErr.HTTPStatusCode < 500 && stripeErr.HTTPStatusCode != 429 && stripeErr.HTTPStatusCode != 409 && string(stripeErr.Type) != "idempotency_error"
 }
