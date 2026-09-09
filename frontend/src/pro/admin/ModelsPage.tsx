@@ -140,7 +140,7 @@ export function ModelsPage({ run, canPrice = true }: { run: Runner; canPrice?: b
     purpose: ModelPolicy['purpose'],
     patch: Partial<ModelPolicy>,
   ) {
-    const model = catalog?.models.find((item) => item.model_id === modelId)
+    const model = catalog?.models.find((item) => modelKey(item) === modelId)
     if (!model || isModelUnavailable(model)) return
     const existing = model.policies.find((policy) => policy.purpose === purpose)
     const next: ModelPolicy = {
