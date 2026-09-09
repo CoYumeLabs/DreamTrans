@@ -1428,7 +1428,11 @@ func (s *PostgresStore) SetUserTrainingOptIn(ctx context.Context, userID string,
 	defer func() { _ = tx.Rollback() }()
 	var enabled bool
 	// Serialize consent with the administrator pause trigger, in settings->user order.
-	if err := tx.QueryRowContext(ctx, `SELECT value='true'::jsonb FROM system_settings WHERE key='training_program_enabled' FOR SHARE`).Scan(&enabled); err != nil {
+	// A deployment that never saved system settings has no row; the program
+	// defaults to enabled there, matching billing's routing default.
+	if err := tx.QueryRowContext(ctx, `SELECT value='true'::jsonb FROM system_settings WHERE key='training_program_enabled' FOR SHARE`).Scan(&enabled); errors.Is(err, sql.ErrNoRows) {
+		enabled = true
+	} else if err != nil {
 		return err
 	}
 	if optIn && !enabled {

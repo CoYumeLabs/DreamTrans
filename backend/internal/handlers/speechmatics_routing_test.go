@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/dreamtrans/backend/internal/auth"
+	"github.com/dreamtrans/backend/internal/billing"
 )
 
 func TestSpeechmaticsRoutingWithoutProgrammeUsesTheOnlyKey(t *testing.T) {
@@ -25,6 +26,18 @@ func TestSpeechmaticsRoutingWithoutProgrammeUsesTheOnlyKey(t *testing.T) {
 	}
 	if routing.key(false) != "training-key" {
 		t.Fatalf("key(false) = %q, want the only key", routing.key(false))
+	}
+	// Even with one key the ledger must price the stream from a decision made
+	// at start, or a gift-funded stream loses its promotion discount and the
+	// close-time refund never runs.
+	proxy, err := NewSpeechmaticsProxyHandler(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy.billing = &speechmaticsBillingStub{route: billing.RouteDecision{GiftFunded: true, Reason: "gift_balance", DiscountsSnapshotted: true}}
+	gen, _, route := proxy.tokenGeneratorFor(context.Background(), claims)
+	if gen != proxy.tokenGenerator || route == nil || !route.GiftFunded {
+		t.Fatalf("single-key stream lost its route decision: gen=%v route=%+v", gen == proxy.tokenGenerator, route)
 	}
 }
 

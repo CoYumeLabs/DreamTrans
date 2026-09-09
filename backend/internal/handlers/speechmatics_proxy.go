@@ -399,12 +399,18 @@ func (h *SpeechmaticsProxyHandler) SetTrainingOptInLookup(lookup TrainingOptInLo
 func (h *SpeechmaticsProxyHandler) tokenGeneratorFor(ctx context.Context, claims *internalAuth.UserClaims) (*internalAuth.TokenGenerator, bool, *billing.RouteDecision) {
 	var route *billing.RouteDecision
 	training := false
-	if h.billing != nil && claims != nil && h.routing.available() {
+	if h.billing != nil && claims != nil {
+		// Decide once per stream even when only one provider key exists: the
+		// ledger prices every record from this decision, and a gift-funded
+		// stream needs it to hand the paid part's discount back on close.
 		if decision, err := h.billing.RouteForUser(ctx, claims.UserID); err == nil {
 			route = &decision
 			training = decision.Training
 		} else {
 			log.Printf("route decision failed for user=%s; using no-training account: %v", claims.UserID, err)
+			// Price what is actually sent: the standard account, never the
+			// training discount.
+			route = &billing.RouteDecision{Reason: "lookup_failed"}
 		}
 	} else {
 		training = h.routing.useTrainingRoute(ctx, claims)

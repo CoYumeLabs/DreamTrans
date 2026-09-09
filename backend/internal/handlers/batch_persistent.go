@@ -52,7 +52,7 @@ func scanPersistentBatch(row interface{ Scan(...any) error }) (*persistentBatch,
 	err := row.Scan(&j.ID, &j.UserID, &j.TenantID, &j.ReservationKey, &j.JobID, &j.Training, &j.Name, &j.Language, &j.Seconds, &j.Status, &j.Error, &transcript, &j.Cursor, &j.Created)
 	j.Transcript = transcript
 	if j.Status == "done" {
-		j.SessionID = j.ID
+		j.SessionID = batchSessionID(j.ID, j.UserID)
 	}
 	return j, err
 }
@@ -279,7 +279,7 @@ func (h *BatchTranscribeHandler) workBatch(parent context.Context) {
 	}
 	saveCtx, saveCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer saveCancel()
-	if _, e := h.store.DB().ExecContext(saveCtx, `UPDATE batch_submissions SET lease_until=NOW(),next_attempt_at=NOW()+INTERVAL '15 seconds',error=$2 WHERE id=$1 AND status NOT IN ('done','error')`, j.ID, message); e != nil {
+	if _, e := h.store.DB().ExecContext(saveCtx, `UPDATE batch_submissions SET lease_until=NOW(),next_attempt_at=NOW()+CASE WHEN status='uncertain' AND created_at<NOW()-INTERVAL '24 hours' THEN INTERVAL '1 hour' ELSE INTERVAL '15 seconds' END,error=$2 WHERE id=$1 AND status NOT IN ('done','error')`, j.ID, message); e != nil {
 		log.Printf("release batch lease: %v", e)
 	}
 }
@@ -312,6 +312,15 @@ func (h *BatchTranscribeHandler) processPersistentBatch(ctx context.Context, j *
 		transcript.Metadata.Duration = j.Seconds
 	} else if len(j.Transcript) == 0 {
 		status, err := client.GetJobStatusContext(ctx, j.JobID)
+		if errors.Is(err, speechmatics.ErrJobNotFound) {
+			// The provider has no such job: nothing was processed upstream, so
+			// the reservation goes back instead of polling forever.
+			if err := h.refundBatchReservationWithReason(j.ReservationKey, "provider has no such job"); err != nil {
+				return err
+			}
+			_, err = h.store.DB().ExecContext(ctx, `UPDATE batch_submissions SET status='error',error='The provider no longer has this job; reservation refunded' WHERE id=$1`, j.ID)
+			return err
+		}
 		if err != nil {
 			return err
 		}
@@ -367,8 +376,17 @@ func (h *BatchTranscribeHandler) processPersistentBatch(ctx context.Context, j *
 	_, err = h.store.DB().ExecContext(ctx, `UPDATE batch_submissions SET status='done',error='',transcript=NULL,title=CASE WHEN $2 THEN title ELSE 'Deleted account' END WHERE id=$1`, j.ID, user != nil)
 	return err
 }
+
+// batchSessionID derives the saved history identity from the receipt. The
+// request ID is client-chosen, so it must never double as a session key: a
+// reused or foreign session UUID would merge or block the save.
+func batchSessionID(id, userID string) string {
+	return uuid.NewSHA1(uuid.MustParse(id), []byte("session:"+userID)).String()
+}
+
 func (h *BatchTranscribeHandler) savePersistentTranscript(ctx context.Context, j *persistentBatch, t *speechmatics.TranscriptResponse) error {
-	session := &models.Session{ID: j.ID, UserID: j.UserID, TenantID: j.TenantID, Title: j.Name, SourceLanguage: j.Language, TargetLanguage: "", Status: "active"}
+	sessionID := batchSessionID(j.ID, j.UserID)
+	session := &models.Session{ID: sessionID, UserID: j.UserID, TenantID: j.TenantID, Title: j.Name, SourceLanguage: j.Language, TargetLanguage: "", Status: "active"}
 	if err := h.store.CreateSessionWithQuota(ctx, session); err != nil {
 		return err
 	}
@@ -397,7 +415,7 @@ func (h *BatchTranscribeHandler) savePersistentTranscript(ctx context.Context, j
 			}
 		}
 		segmentID := uuid.NewSHA1(uuid.MustParse(j.ID), []byte(strconv.Itoa(len(segments)))).String()
-		segments = append(segments, &models.Transcript{SessionID: j.ID, ClientSegmentID: segmentID, Speaker: a.Speaker, Text: a.Content, StartTime: word.StartTime, EndTime: &end, Status: "confirmed"})
+		segments = append(segments, &models.Transcript{SessionID: sessionID, ClientSegmentID: segmentID, Speaker: a.Speaker, Text: a.Content, StartTime: word.StartTime, EndTime: &end, Status: "confirmed"})
 	}
 	for offset := 0; offset < len(segments); offset += 200 {
 		if err := h.store.BatchCreateTranscripts(ctx, segments[offset:min(offset+200, len(segments))]); err != nil {
@@ -406,12 +424,12 @@ func (h *BatchTranscribeHandler) savePersistentTranscript(ctx context.Context, j
 	}
 	completed := "completed"
 	duration := int(math.Ceil(t.Metadata.Duration))
-	if _, err := h.store.UpdateSessionFieldsWithQuota(ctx, j.ID, j.UserID, nil, &completed, &duration); err != nil {
+	if _, err := h.store.UpdateSessionFieldsWithQuota(ctx, sessionID, j.UserID, nil, &completed, &duration); err != nil {
 		return err
 	}
 	// Link the actual saved history identity to both the reservation and settled
 	// usage, including jobs whose browser never came back.
-	if _, err := h.store.DB().ExecContext(ctx, `UPDATE usage_logs SET session_id=$1 WHERE user_id=$2 AND idempotency_key=$3`, j.ID, j.UserID, j.ReservationKey); err != nil {
+	if _, err := h.store.DB().ExecContext(ctx, `UPDATE usage_logs SET session_id=$1 WHERE user_id=$2 AND idempotency_key=$3`, sessionID, j.UserID, j.ReservationKey); err != nil {
 		return err
 	}
 	if len(segments) > 0 {
@@ -543,7 +561,7 @@ func (h *BatchTranscribeHandler) handlePersistentBatchAndWait(w http.ResponseWri
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			encodeJSONResponse(w, BatchTranscribeResponse{JobID: job.JobID, Status: "done", ServerManaged: true, SessionID: job.ID, Transcript: result})
+			encodeJSONResponse(w, BatchTranscribeResponse{JobID: job.JobID, Status: "done", ServerManaged: true, SessionID: job.SessionID, Transcript: result})
 			return
 		}
 		if job.Status == "error" {
@@ -563,7 +581,7 @@ func (h *BatchTranscribeHandler) handlePersistentBatchAndWait(w http.ResponseWri
 	}
 }
 func (h *BatchTranscribeHandler) savedBatchTranscript(ctx context.Context, job *persistentBatch) (*speechmatics.TranscriptResponse, error) {
-	segments, err := h.store.GetTranscriptsBySession(ctx, job.ID)
+	segments, err := h.store.GetTranscriptsBySession(ctx, job.SessionID)
 	if err != nil {
 		return nil, err
 	}

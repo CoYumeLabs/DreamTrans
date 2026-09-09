@@ -18,6 +18,7 @@ import (
 
 type speechmaticsBillingStub struct {
 	mu              sync.Mutex
+	route           billing.RouteDecision
 	recordErr       error
 	recorded        []billing.UsageRecord
 	settled         []billing.UsageRecord
@@ -560,7 +561,7 @@ func (s *speechmaticsBillingStub) RefundRouteDiscount(context.Context, string, s
 }
 
 func (s *speechmaticsBillingStub) RouteForUser(context.Context, string) (billing.RouteDecision, error) {
-	return billing.RouteDecision{}, nil
+	return s.route, nil
 }
 
 func (s *speechmaticsBillingStub) RecordUsageBatch(ctx context.Context, records []*billing.UsageRecord) ([]float64, error) {

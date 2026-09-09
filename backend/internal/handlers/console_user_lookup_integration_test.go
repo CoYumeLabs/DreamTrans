@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -47,4 +48,13 @@ func TestConsoleFormsAcceptEmailOrUserID(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = h.store.DB().ExecContext(context.Background(), `DELETE FROM agent_profiles WHERE user_id=$1`, userID)
 	})
+}
+
+func TestAgentFraudWritesRequireConfirmation(t *testing.T) {
+	h, claims := consoleTestAdmin(t)
+	called := false
+	response := consoleTestRequest(t, h, claims, "PUT", "/api/admin/agent-fraud", map[string]any{"flag_id": uuid.NewString(), "note": "ok"}, false, func(w http.ResponseWriter, _ *http.Request) { called = true; w.WriteHeader(200) })
+	if response.Code != http.StatusPreconditionRequired || called {
+		t.Fatalf("unconfirmed fraud-flag dismissal reached the handler: %d", response.Code)
+	}
 }

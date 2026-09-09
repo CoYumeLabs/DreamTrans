@@ -164,7 +164,11 @@ func consoleOperation(r *http.Request) string {
 		}
 		return mode("users.read", "users.write")
 	case strings.HasPrefix(path, "/api/admin/tenants"):
-		return mode("routing.read", "routing.write")
+		// Plans, quotas and kinds are entitlements; only super admins edit them.
+		if r.Method == http.MethodGet {
+			return "routing.read"
+		}
+		return "super_admin"
 	case path == "/api/admin/settings":
 		return mode("settings.read", "settings.write")
 	default:

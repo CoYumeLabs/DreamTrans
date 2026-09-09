@@ -315,7 +315,7 @@ func (h *AdminHandler) ConsoleWrites(next http.Handler) http.Handler {
 			http.Error(w, "Invalid JSON", http.StatusBadRequest)
 			return
 		}
-		money := moneySettings(payload) || strings.HasPrefix(r.URL.Path, "/api/agent/codes") || strings.Contains(r.URL.Path, "/promotions") || strings.Contains(r.URL.Path, "/agents") || strings.Contains(r.URL.Path, "/settlements") || strings.Contains(r.URL.Path, "/billing/") || strings.Contains(r.URL.Path, "/customers/") || strings.HasSuffix(r.URL.Path, "/balance") || strings.Contains(r.URL.Path, "/redeem-codes") || (strings.Contains(r.URL.Path, "/settings") && moneySettings(payload))
+		money := moneySettings(payload) || strings.HasPrefix(r.URL.Path, "/api/agent/codes") || strings.Contains(r.URL.Path, "/promotions") || strings.Contains(r.URL.Path, "/agents") || strings.Contains(r.URL.Path, "/agent-fraud") || strings.Contains(r.URL.Path, "/settlements") || strings.Contains(r.URL.Path, "/billing/") || strings.Contains(r.URL.Path, "/customers/") || strings.HasSuffix(r.URL.Path, "/balance") || strings.Contains(r.URL.Path, "/redeem-codes") || (strings.Contains(r.URL.Path, "/settings") && moneySettings(payload))
 		if money && r.Header.Get("X-Admin-Confirm") != "true" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusPreconditionRequired)

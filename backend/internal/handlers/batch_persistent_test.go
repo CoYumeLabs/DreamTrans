@@ -36,6 +36,7 @@ func TestPersistentBatchRecoversLostResponseWithoutBrowserAndSavesNetCost(t *tes
 	}
 	id := uuid.NewString()
 	key := "batch-submit:" + id
+	sessionID := batchSessionID(id, userID)
 	t.Cleanup(func() {
 		_, _ = db.ExecContext(context.Background(), `DELETE FROM batch_submissions WHERE user_id=$1`, userID)
 		_, _ = db.ExecContext(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
@@ -85,16 +86,16 @@ func TestPersistentBatchRecoversLostResponseWithoutBrowserAndSavesNetCost(t *tes
 		t.Fatalf("worker=%+v", j)
 	}
 	var text string
-	if err = db.QueryRowContext(t.Context(), `SELECT text FROM transcripts WHERE session_id=$1`, id).Scan(&text); err != nil || text != "Recovered" {
+	if err = db.QueryRowContext(t.Context(), `SELECT text FROM transcripts WHERE session_id=$1`, sessionID).Scan(&text); err != nil || text != "Recovered" {
 		t.Fatalf("text=%q err=%v", text, err)
 	}
-	costs, err := service.GetSessionCostSummaries(t.Context(), userID, []string{id})
+	costs, err := service.GetSessionCostSummaries(t.Context(), userID, []string{sessionID})
 	if err != nil || len(costs) != 1 || costs[0].TotalUSD <= 0 {
 		t.Fatalf("cost=%+v err=%v", costs, err)
 	}
 	handler.workBatch(t.Context())
 	var count int
-	if err = db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM transcripts WHERE session_id=$1`, id).Scan(&count); err != nil || count != 1 {
+	if err = db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM transcripts WHERE session_id=$1`, sessionID).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("duplicate results=%d err=%v", count, err)
 	}
 
@@ -131,7 +132,7 @@ func TestPersistentBatchRecoversLostResponseWithoutBrowserAndSavesNetCost(t *tes
 	response := httptest.NewRecorder()
 	handler.HandleTranscribeAndWait(response, request)
 	var completed BatchTranscribeResponse
-	if err = json.Unmarshal(response.Body.Bytes(), &completed); err != nil || response.Code != http.StatusOK || completed.Transcript == nil || completed.SessionID != id {
+	if err = json.Unmarshal(response.Body.Bytes(), &completed); err != nil || response.Code != http.StatusOK || completed.Transcript == nil || len(completed.Transcript.Results) == 0 || completed.Transcript.Results[0].Alternatives[0].Content != "Recovered" || completed.SessionID != sessionID {
 		t.Fatalf("Classic response=%d %s err=%v", response.Code, response.Body.String(), err)
 	}
 	for _, owner := range []string{userID, uuid.NewString()} {
@@ -181,6 +182,53 @@ func TestPersistentBatchNeverSubmittedReservationIsRefunded(t *testing.T) {
 	handler := &BatchTranscribeHandler{store: setup.store, billing: service}
 	handler.workBatch(t.Context())
 	handler.workBatch(t.Context())
+	balance, err := service.GetUserBalance(t.Context(), userID)
+	if err != nil || balance.WalletUSD != 10 {
+		t.Fatalf("refund=%+v err=%v", balance, err)
+	}
+}
+
+func TestPersistentBatchRefundsWhenProviderHasNoSuchJob(t *testing.T) {
+	setup, _, db := verificationIntegrationSetup(t)
+	tenant, err := setup.store.GetDefaultTenant(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var userID string
+	if err = db.QueryRowContext(t.Context(), `INSERT INTO users(tenant_id,email,password_hash,name) VALUES($1,gen_random_uuid()::text||'@batch.test','x','Batch') RETURNING id`, tenant.ID).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.NewString()
+	key := "batch-submit:" + id
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM batch_transcription_jobs WHERE user_id=$1`, userID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM batch_submissions WHERE user_id=$1`, userID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
+	})
+	service := billing.NewService(db)
+	if err = service.EnsureBuiltinCatalog(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.AdjustWallet(t.Context(), billing.WalletAdjustment{UserID: userID, AmountUSD: 10, Description: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.RecordUsage(t.Context(), &billing.UsageRecord{UserID: userID, TenantID: tenant.ID, Action: "transcription", Model: "speechmatics-batch-enhanced", Quantity: 1, IdempotencyKey: key}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.ExecContext(t.Context(), `INSERT INTO batch_submissions(id,user_id,tenant_id,request_hash,reservation_key,job_id,training_route,title,language,seconds,status,next_attempt_at) VALUES($1,$2,$3,'test',$4,'job-gone',false,'Vanished','en',60,'running',NOW())`, id, userID, tenant.ID, key); err != nil {
+		t.Fatal(err)
+	}
+	oldTransport := http.DefaultTransport
+	http.DefaultTransport = batchProviderTransport(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusNotFound, Body: io.NopCloser(strings.NewReader(`{"code":404}`)), Header: make(http.Header)}, nil
+	})
+	t.Cleanup(func() { http.DefaultTransport = oldTransport })
+	handler := &BatchTranscribeHandler{store: setup.store, billing: service, trainingClient: speechmatics.NewBatchClient("test-key")}
+	handler.workBatch(t.Context())
+	j, err := scanPersistentBatch(db.QueryRowContext(t.Context(), `SELECT `+batchColumns+` FROM batch_submissions WHERE id=$1`, id))
+	if err != nil || j.Status != "error" {
+		t.Fatalf("job=%+v err=%v", j, err)
+	}
 	balance, err := service.GetUserBalance(t.Context(), userID)
 	if err != nil || balance.WalletUSD != 10 {
 		t.Fatalf("refund=%+v err=%v", balance, err)

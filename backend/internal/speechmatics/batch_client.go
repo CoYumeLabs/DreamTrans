@@ -17,6 +17,10 @@ import (
 	"time"
 )
 
+// ErrJobNotFound reports that the provider has no job with that ID, so no
+// audio was processed or billed upstream.
+var ErrJobNotFound = errors.New("speechmatics job not found")
+
 const (
 	batchAPIBaseURL = "https://asr.api.speechmatics.com/v2"
 	defaultTimeout  = 30 * time.Second
@@ -305,6 +309,10 @@ func (c *BatchClient) GetJobStatusContext(ctx context.Context, jobID string) (*J
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	if resp.StatusCode == http.StatusNotFound {
+		_, _ = readBatchResponse(resp.Body, 1<<20)
+		return nil, ErrJobNotFound
+	}
 	if resp.StatusCode != http.StatusOK {
 		_, _ = readBatchResponse(resp.Body, 1<<20)
 		return nil, fmt.Errorf("speechmatics API error (status %d)", resp.StatusCode)
