@@ -1094,6 +1094,50 @@ async function openAssistantSettings(page: Page): Promise<void> {
   }
 }
 
+for (const model of ['gpt-5-mini', 'cerebras::qwen-3.8-27b']) {
+  test(`chat without a transcript session works with ${model}`, async ({ page }) => {
+    const backend = new MockAIBackend([])
+    await backend.install(page)
+    const requests: Array<Record<string, unknown>> = []
+    await page.route('**/api/rag/ask', async route => {
+      const body = jsonBody(route) ?? {}
+      requests.push(body)
+      // Match the server contract: an absent session is allowed, but a
+      // placeholder such as "current_session" must not reach UUID validation.
+      if (body.session_id !== '') {
+        await route.fulfill({ status: 400, body: 'session_id must be a UUID' })
+        return
+      }
+      await json(route, {
+        answer: `Reply ${requests.length} from ${model}`,
+        usage: { model, total_tokens: 20 },
+        context: { effective_mode: 'smart', rag_used: false, retrieval_mode: 'none', index_status: 'unindexed', estimated_tokens: 0, truncated: false },
+      })
+    })
+
+    await login(page)
+    await page.getByRole('button', { name: '跳过引导', exact: true }).click()
+    await openAssistant(page)
+    await page.locator('.dt-chat__composer textarea').fill('Hello')
+    await page.locator('.dt-chat__composer button[type="submit"]').click()
+    await expect(page.locator('.dt-chat__message--assistant')).toContainText(`Reply 1 from ${model}`)
+    await page.locator('.dt-chat__composer textarea').fill('Continue')
+    await page.locator('.dt-chat__composer button[type="submit"]').click()
+    await expect(page.locator('.dt-chat__message--assistant').last()).toContainText(`Reply 2 from ${model}`)
+    expect(requests).toHaveLength(2)
+    expect(requests[1]).toMatchObject({
+      session_id: '',
+      question: 'Continue',
+      history: expect.arrayContaining([
+        { role: 'user', content: 'Hello' },
+        { role: 'assistant', content: `Reply 1 from ${model}` },
+      ]),
+    })
+    expect(backend.records.some(({ method, path }) => method === 'POST' && path === '/api/sessions')).toBe(false)
+    expect(backend.unhandled).toEqual([])
+  })
+}
+
 test('AI project workflow survives index progress reload and keeps API contracts', async ({
   page,
 }) => {

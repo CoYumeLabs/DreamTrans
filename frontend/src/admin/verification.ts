@@ -205,21 +205,27 @@ assert(
 )
 
 const sharedModelRates: CostRate[] = [
+  { ...hourRate, provider: 'cerebras', sku: 'shared-model', service: 'llm', unit_type: 'input_token', effective_cost_per_unit_usd: 7e-6, is_active: false },
+  { ...hourRate, provider: 'cerebras', sku: 'shared-model', service: 'llm', unit_type: 'input_token', effective_cost_per_unit_usd: 0.8e-6 },
   { ...hourRate, sku: 'shared-model', service: 'llm', unit_type: 'input_token', effective_cost_per_unit_usd: 2e-6 },
   { ...hourRate, sku: 'shared-model', service: 'embedding', unit_type: 'input_token', effective_cost_per_unit_usd: 0.12e-6 },
 ]
 
 assert(
-  getModelRateCostPerMillion(sharedModelRates, 'llm', 'shared-model', 'input_token') === 2,
+  getModelRateCostPerMillion(sharedModelRates, hourRate.provider, 'llm', 'shared-model', 'input_token') === 2,
   'model cost lookup includes the llm service identity',
 )
 assert(
-  Math.abs((getModelRateCostPerMillion(sharedModelRates, 'embedding', 'shared-model', 'input_token') ?? 0) - 0.12) < 1e-9,
+  Math.abs((getModelRateCostPerMillion(sharedModelRates, hourRate.provider, 'embedding', 'shared-model', 'input_token') ?? 0) - 0.12) < 1e-9,
   'switching service reloads the matching embedding cost',
 )
 assert(
-  getModelRateCostPerMillion(sharedModelRates, 'llm', 'unknown-model', 'input_token') === null,
+  getModelRateCostPerMillion(sharedModelRates, hourRate.provider, 'llm', 'unknown-model', 'input_token') === null,
   'missing model rates are reported as null instead of zero',
+)
+assert(
+  Math.abs((getModelRateCostPerMillion(sharedModelRates, 'cerebras', 'llm', 'shared-model', 'input_token') ?? 0) - 0.8) < 1e-9,
+  'same-name models use the selected provider active cost',
 )
 
 // --- Validation --------------------------------------------------------------

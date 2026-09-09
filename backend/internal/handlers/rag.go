@@ -2636,6 +2636,8 @@ func (h *RAGHandler) HandleTitle(w http.ResponseWriter, r *http.Request) {
 				titleModel = summaryModel
 			} else {
 				log.Printf("resolve approved title model: %v", modelErr)
+				http.Error(w, "approved summary model configuration is unavailable", http.StatusServiceUnavailable)
+				return
 			}
 		}
 	}
@@ -2655,7 +2657,7 @@ func (h *RAGHandler) HandleTitle(w http.ResponseWriter, r *http.Request) {
 		rawSessionID,
 		&rag.ProviderUsage{
 			Action:       "summarize",
-			Model:        cfg.Model,
+			Model:        cfg.QualifiedModelID(""),
 			InputTokens:  conservativeRAGTokens(sys, source),
 			OutputTokens: titleMaxOutputTokens,
 		},
@@ -2689,7 +2691,7 @@ func (h *RAGHandler) HandleTitle(w http.ResponseWriter, r *http.Request) {
 	}
 	actualUsage := rag.ProviderUsage{
 		Action:       "summarize",
-		Model:        cfg.Model,
+		Model:        cfg.QualifiedModelID(""),
 		InputTokens:  conservativeRAGTokens(sys, source),
 		OutputTokens: titleMaxOutputTokens,
 	}
@@ -3455,6 +3457,7 @@ func (h *RAGHandler) isRAGAccountingError(err error) bool {
 }
 
 func (h *RAGHandler) writeRAGAccountingError(w http.ResponseWriter, err error) {
+	log.Printf("AI usage accounting failed: %v", err)
 	switch {
 	case errors.Is(err, errRAGPaymentRequired):
 		http.Error(w, "insufficient balance", http.StatusPaymentRequired)

@@ -26,9 +26,9 @@ AI_EMBEDDING_PROVIDER=openai-compatible
 
 固定变量名是为了让安装器生成的 compose 能原样透传，不需要按供应商动态加行。
 
-**模型标识**：非默认供应商的模型在系统内一律用 `供应商/模型ID`（如 `cerebras/llama-3.3-70b`），
+**模型标识**：非默认供应商的模型在系统内一律用 `供应商::模型ID`（如 `cerebras::llama-3.3-70b`），
 默认供应商保持裸 ID。目录、策略、用户偏好、用量记录、账单都存这个字符串，因此不改
-`model_policies` / `user_model_preferences` 的结构。解析时按第一个 `/` 拆出供应商；没有前缀即默认
+`model_policies` / `user_model_preferences` 的结构。解析时按第一个 `::` 拆出供应商；没有前缀即默认
 供应商。`provider_models` 表本来就按 `(provider, model_id)` 键，`model_id` 存裸 ID。
 
 **请求路由**：`openai_provider.NewConfigFromEnv()` 的调用点改为 `aiproviders.ConfigFor(modelID)`：
@@ -39,7 +39,7 @@ AI_EMBEDDING_PROVIDER=openai-compatible
 模型 ID 冲突时靠前缀区分。成本目录本来就按 `(provider, sku)` 键，非默认供应商的模型需要管理员在
 "模型与定价"里录入成本后才能被批准使用，规则与现在一致。
 
-**嵌入**：只能配一家；换嵌入供应商需要它支持 1536 维（`text-embedding-3-small` 同规格），否则拒绝启动。
+**嵌入**：只能配一家；换嵌入供应商需要它支持 1536 维（`text-embedding-3-small` 同规格），响应维度不符时拒绝写入索引。
 
 **RAG 开关**：注册表里至少有一家可用即开启，不再只看 `OPENAI_API_KEY`。
 
@@ -51,7 +51,7 @@ AI_EMBEDDING_PROVIDER=openai-compatible
 
 ## 对外可见的变化
 
-- 设置面板和账单里非默认供应商的模型显示为 `供应商/模型`。
+- 设置面板和账单里非默认供应商的模型显示为 `供应商::模型`。
 - 后台"模型与定价"多一列供应商和每家的同步状态。
 - 安装器 `.env` 和 compose 多出 `AI_PROVIDERS`、`AI_PROVIDER_KEYS`、`AI_PROVIDER_OPTIONS`、
   `AI_EMBEDDING_PROVIDER` 四个变量，默认为空即单供应商，行为与现在完全一致。

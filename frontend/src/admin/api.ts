@@ -537,12 +537,15 @@ export function costEditorScale(unitType: string): number {
 
 export function getModelRateCostPerMillion(
   rates: CostRate[],
+  provider: string,
   service: 'llm' | 'embedding',
   modelId: string,
   unitType: string,
 ): number | null {
   const rate = rates.find((item) => (
-    item.service === service
+    item.provider === provider
+    && item.is_active
+    && item.service === service
     && item.sku === modelId
     && item.unit_type === unitType
   ))

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/dreamtrans/backend/internal/modelcatalog"
 	"github.com/dreamtrans/backend/internal/rag"
 )
 
@@ -129,6 +131,27 @@ func TestRAGTitlePostGeneratesFromTranscriptText(t *testing.T) {
 	decodeTitle(t, response)
 	if got := prompts(); len(got) != 2 || got[1] != "Speaker 1: 换个话题聊聊招聘。" {
 		t.Fatalf("regenerate prompts = %#v", got)
+	}
+}
+
+func TestRAGTitleDoesNotFallbackWhenApprovedModelIsUnavailable(t *testing.T) {
+	for _, modelErr := range []error{modelcatalog.ErrNoApprovedModel, errors.New("catalog unavailable")} {
+		t.Run(modelErr.Error(), func(t *testing.T) {
+			handler, prompts := newTitleTestHandler(t)
+			handler.modelCatalog = &purposeModelCatalogStub{errors: map[string]error{modelcatalog.PurposeSummary: modelErr}}
+			response := httptest.NewRecorder()
+			handler.HandleTitle(response, authenticatedRAGRequest(http.MethodPost, "/api/rag/title", `{"session_id":"","text":"A transcript that needs a title."}`))
+			if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "approved summary model") {
+				t.Fatalf("title response: %d %s", response.Code, response.Body)
+			}
+			if len(prompts()) != 0 {
+				t.Fatal("unapproved fallback model was called")
+			}
+			records, settlements, _ := handler.billing.(*ragHTTPBillingStub).snapshot()
+			if len(records) != 0 || len(settlements) != 0 {
+				t.Fatal("unapproved title generation was billed")
+			}
+		})
 	}
 }
 

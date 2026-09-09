@@ -84,3 +84,18 @@ func TestUnknownProviderInModelIDIsAnError(t *testing.T) {
 		t.Fatal("unregistered provider accepted")
 	}
 }
+
+func TestDefaultModelRemainsAvailableWithoutExplicitModelEnv(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test")
+	t.Setenv("OPENAI_MODEL", "")
+	t.Setenv("AI_PROVIDERS", "")
+	t.Setenv("AI_EMBEDDING_PROVIDER", "")
+	r, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := r.ConfigFor("")
+	if err != nil || cfg.Model != "gpt-5.6-sol" {
+		t.Fatalf("default config=%+v err=%v", cfg, err)
+	}
+}

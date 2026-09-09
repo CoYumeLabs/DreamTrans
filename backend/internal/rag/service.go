@@ -535,13 +535,6 @@ func (s *Service) computeParagraphSummary(ctx context.Context, base string) (sum
 	if m2 := cfg.Models.Summary; m2 != "" {
 		summaryModel = m2
 	}
-	sumCfg, err := aiproviders.ConfigFor(summaryModel)
-	if err != nil {
-		return "", false, err
-	}
-	sumCfg.MaxOutputTokens = ragSummaryMaxOutputTokens
-	modelName := sumCfg.Model
-
 	s.configMu.RLock()
 	ingestSummarizeEnabled := s.ingestSummarizeEnabled
 	s.configMu.RUnlock()
@@ -549,9 +542,15 @@ func (s *Service) computeParagraphSummary(ctx context.Context, base string) (sum
 		if charCountAlphaNum(base) < 8 {
 			return "", true, nil
 		}
-		metrics.RecordSummarizeNoUsage(modelName, 0)
+		metrics.RecordSummarizeNoUsage(summaryModel, 0)
 		return base, false, nil
 	}
+	sumCfg, err := aiproviders.ConfigFor(summaryModel)
+	if err != nil {
+		return "", false, err
+	}
+	sumCfg.MaxOutputTokens = ragSummaryMaxOutputTokens
+	modelName := sumCfg.QualifiedModelID("")
 
 	translator := openaiprovider.NewTranslator(sumCfg)
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -797,6 +796,26 @@ func (s *Service) chatConfig() (*openaiprovider.Config, error) {
 	return provider()
 }
 
+func (s *Service) chatConfigWithOverrides(overrides *ChatOverrides) (*openaiprovider.Config, error) {
+	base, err := s.chatConfig()
+	if err != nil {
+		// An explicitly selected provider can work even when the deployment
+		// has no default OPENAI_* endpoint. Resolve it before requiring that
+		// unrelated endpoint's configuration.
+		if overrides != nil && overrides.APIBase != "" && overrides.APIKey != "" {
+			return applyChatOverrides(&openaiprovider.Config{}, overrides)
+		}
+		if overrides == nil || overrides.Model == "" || overrides.APIBase != "" {
+			return nil, err
+		}
+		base, err = aiproviders.ConfigFor(overrides.Model)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return applyChatOverrides(base, overrides)
+}
+
 func applyChatOverrides(base *openaiprovider.Config, overrides *ChatOverrides) (*openaiprovider.Config, error) {
 	if base == nil {
 		return nil, fmt.Errorf("chat configuration is unavailable")
@@ -936,11 +955,7 @@ func (s *Service) BuildAnswerWithConfigUsage(ctx context.Context, sessionID, use
 	if err != nil {
 		return "", nil, 0, err
 	}
-	baseCfg, err := s.chatConfig()
-	if err != nil {
-		return "", nil, 0, err
-	}
-	baseCfg, err = applyChatOverrides(baseCfg, ov)
+	baseCfg, err := s.chatConfigWithOverrides(ov)
 	if err != nil {
 		return "", nil, 0, err
 	}
@@ -986,11 +1001,7 @@ func (s *Service) BuildAnswerWithHistoryWithConfigUsage(ctx context.Context, ses
 	if err != nil {
 		return "", nil, 0, err
 	}
-	baseCfg, err := s.chatConfig()
-	if err != nil {
-		return "", nil, 0, err
-	}
-	baseCfg, err = applyChatOverrides(baseCfg, ov)
+	baseCfg, err := s.chatConfigWithOverrides(ov)
 	if err != nil {
 		return "", nil, 0, err
 	}
@@ -1029,7 +1040,7 @@ func (s *Service) BuildAnswerWithHistoryWithConfigUsage(ctx context.Context, ses
 	msgs := []map[string]string{{"role": "system", "content": sys}, {"role": "user", "content": user}}
 	reservation, err := reserveProviderUsage(ctx, &ProviderUsage{
 		Action:         "chat",
-		Model:          baseCfg.Model,
+		Model:          baseCfg.QualifiedModelID(""),
 		InputTokens:    conservativeProviderTokens(sys, user),
 		OutputTokens:   ragAnswerMaxOutputTokens,
 		CustomerFunded: ov != nil && strings.TrimSpace(ov.APIKey) != "",
@@ -1049,7 +1060,7 @@ func (s *Service) BuildAnswerWithHistoryWithConfigUsage(ctx context.Context, ses
 	}
 	actual := ProviderUsage{
 		Action:         "chat",
-		Model:          baseCfg.Model,
+		Model:          baseCfg.QualifiedModelID(""),
 		InputTokens:    conservativeProviderTokens(sys, user),
 		OutputTokens:   ragAnswerMaxOutputTokens,
 		CustomerFunded: ov != nil && strings.TrimSpace(ov.APIKey) != "",
@@ -1115,11 +1126,7 @@ func (s *Service) buildAnswerFromContextWithConfigUsage(
 	maxOutputTokens int,
 	reasoningEffort string,
 ) (string, *openaiprovider.Usage, time.Duration, error) {
-	baseCfg, err := s.chatConfig()
-	if err != nil {
-		return "", nil, 0, err
-	}
-	baseCfg, err = applyChatOverrides(baseCfg, ov)
+	baseCfg, err := s.chatConfigWithOverrides(ov)
 	if err != nil {
 		return "", nil, 0, err
 	}
@@ -1152,13 +1159,13 @@ func (s *Service) buildAnswerFromContextWithConfigUsage(
 	}
 	reservation, err := reserveProviderUsage(ctx, &ProviderUsage{
 		Action:       "chat",
-		Model:        baseCfg.Model,
+		Model:        baseCfg.QualifiedModelID(""),
 		InputTokens:  conservativeProviderTokens(systemPrompt, contextText, history, userQuery),
 		OutputTokens: baseCfg.MaxOutputTokens,
 		OperationID: exactProviderOperationID(
 			ctx,
 			"chat",
-			baseCfg.Model,
+			baseCfg.QualifiedModelID(""),
 			baseCfg.BaseURL,
 			systemPrompt,
 			contextText,
@@ -1184,7 +1191,7 @@ func (s *Service) buildAnswerFromContextWithConfigUsage(
 	duration := time.Since(start)
 	actual := ProviderUsage{
 		Action:         "chat",
-		Model:          baseCfg.Model,
+		Model:          baseCfg.QualifiedModelID(""),
 		InputTokens:    conservativeProviderTokens(systemPrompt, contextText, history, userQuery),
 		OutputTokens:   baseCfg.MaxOutputTokens,
 		CustomerFunded: ov != nil && strings.TrimSpace(ov.APIKey) != "",
@@ -1222,11 +1229,7 @@ func (s *Service) BuildAnswerWithConfig(ctx context.Context, sessionID, userQuer
 		return "", err
 	}
 
-	baseCfg, err := s.chatConfig()
-	if err != nil {
-		return "", err
-	}
-	baseCfg, err = applyChatOverrides(baseCfg, ov)
+	baseCfg, err := s.chatConfigWithOverrides(ov)
 	if err != nil {
 		return "", err
 	}

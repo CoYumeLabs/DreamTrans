@@ -271,6 +271,9 @@ func (r *Registry) ConfigFor(qualified string) (*openaiprovider.Config, error) {
 	if cfg == nil {
 		cfg = &openaiprovider.Config{}
 	}
+	if model == "" {
+		model = cfg.Model
+	}
 	cfg.Provider = p.Name
 	cfg.BaseURL = p.BaseURL
 	cfg.APIKey = p.APIKey

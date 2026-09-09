@@ -80,10 +80,10 @@ function createModelCostDraft(
   rates: CostRate[],
 ): ModelCostDraft {
   const values: [number | null, number | null, number | null, number | null] = [
-    getModelRateCostPerMillion(rates, service, model.model_id, 'input_token'),
-    getModelRateCostPerMillion(rates, service, model.model_id, 'cached_input_token'),
-    getModelRateCostPerMillion(rates, service, model.model_id, 'cache_write_token'),
-    getModelRateCostPerMillion(rates, service, model.model_id, 'output_token'),
+    getModelRateCostPerMillion(rates, model.provider, service, model.model_id, 'input_token'),
+    getModelRateCostPerMillion(rates, model.provider, service, model.model_id, 'cached_input_token'),
+    getModelRateCostPerMillion(rates, model.provider, service, model.model_id, 'cache_write_token'),
+    getModelRateCostPerMillion(rates, model.provider, service, model.model_id, 'output_token'),
   ]
   return {
     model,

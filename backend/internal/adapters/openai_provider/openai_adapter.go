@@ -60,6 +60,18 @@ type Config struct {
 	FallbackModels []string
 }
 
+// QualifiedModelID retains the endpoint identity for internal usage and billing.
+// Requests sent upstream continue to use the bare Config.Model.
+func (c *Config) QualifiedModelID(model string) string {
+	if model == "" {
+		model = c.Model
+	}
+	if c.Provider == "" || c.Provider == "openai-compatible" {
+		return model
+	}
+	return c.Provider + "::" + model
+}
+
 // NewConfigFromEnv builds Config from environment variables with sensible defaults.
 // OPENAI_API_BASE, OPENAI_API_KEY, OPENAI_MODEL, OPENAI_TEMPERATURE
 func NewConfigFromEnv() (*Config, error) {
@@ -613,6 +625,7 @@ func (t *Translator) responsesComplete(
 	}
 	u := validUsage(out.Usage.InputTokens, out.Usage.OutputTokens, out.Usage.TotalTokens, out.Model)
 	if u != nil {
+		u.Model = t.cfg.QualifiedModelID(u.Model)
 		u.CachedTokens = boundedUsageSubset(
 			out.Usage.InputDetails.CachedTokens,
 			u.PromptTokens,
@@ -774,6 +787,9 @@ func (t *Translator) ChatWithUsage(ctx context.Context, messages []map[string]st
 	}
 	if usage == nil {
 		usage = parseUsageLoose(raw.Bytes(), model)
+	}
+	if usage != nil {
+		usage.Model = t.cfg.QualifiedModelID(usage.Model)
 	}
 	if err := validateProviderText("chat completions API", content, finishReason); err != nil {
 		return "", usage, err

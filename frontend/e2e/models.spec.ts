@@ -8,6 +8,7 @@ const user = { id: 'super-user', tenant_id: 'tenant-1', email: 'super@example.te
 test('a second provider model is listed under its own status and approved by its qualified id', async ({ page }) => {
   await page.addInitScript(token => localStorage.setItem('dt_access_token', token), accessToken())
   const policies: Array<Record<string, unknown>> = []
+  const costs: Array<Record<string, unknown>> = []
   const model = (provider: string, id: string, approved = false) => ({
     provider, model_id: id, qualified_id: provider === 'openai-compatible' ? id : `${provider}::${id}`, source: 'provider', provider_available: true,
     availability_status: 'provider_confirmed', first_seen_at: '2026-09-09T00:00:00Z', last_seen_at: '2026-09-09T00:00:00Z',
@@ -19,7 +20,7 @@ test('a second provider model is listed under its own status and approved by its
       { provider: 'openai-compatible', status: 'provider_confirmed', last_success_at: '2026-09-09T01:00:00Z', last_attempt_at: '2026-09-09T01:00:00Z' },
       { provider: 'cerebras', status: 'temporarily_unavailable', last_attempt_at: '2026-09-09T01:00:00Z', last_error: 'provider models request returned status 401' },
     ],
-    models: [model('openai-compatible', 'gpt-5.6-sol', true), model('cerebras', 'qwen-3.8-27b', policies.some(p => p.model_id === 'cerebras::qwen-3.8-27b' && p.is_approved))],
+    models: [model('openai-compatible', 'qwen-3.8-27b', true), model('cerebras', 'qwen-3.8-27b', policies.some(p => p.model_id === 'cerebras::qwen-3.8-27b' && p.is_approved))],
   })
   await page.route(/^https?:\/\/[^/]+\/api\//, async route => {
     const request = route.request(), path = new URL(request.url()).pathname
@@ -28,7 +29,13 @@ test('a second provider model is listed under its own status and approved by its
     if (path === '/api/admin/access') body = { allowed: true, super: true, tenant_admin: false, role_id: 'super', role_key: 'super', name: '超级管理员', permissions: [], channels: [] }
     if (path === '/api/admin/models') body = catalog()
     if (path === '/api/admin/models/policies') { policies.push(request.postDataJSON()); body = catalog() }
-    if (path === '/api/admin/billing/catalog') body = { rates: [], markup_percent: 0, overrides: [], version: 'test' }
+    if (path === '/api/admin/billing/model-cost') costs.push(request.postDataJSON())
+    if (path === '/api/admin/billing/catalog') body = {
+      rates: ['openai-compatible', 'cerebras'].flatMap(provider => ['input_token', 'output_token'].map(unit_type => ({
+        provider, sku: 'qwen-3.8-27b', service: 'llm', unit_type, is_active: true,
+        effective_cost_per_unit_usd: provider === 'cerebras' ? 0.5e-6 : 2e-6,
+      }))), markup_percent: 0, overrides: [], version: 'test',
+    }
     await route.fulfill({ json: body })
   })
   await page.goto('/pro/admin')
@@ -40,4 +47,12 @@ test('a second provider model is listed under its own status and approved by its
   await expect.poll(() => policies.length).toBe(1)
   expect(policies[0]).toMatchObject({ purpose: 'translation', model_id: 'cerebras::qwen-3.8-27b', is_approved: true })
   await expect(row.getByRole('button', { name: '翻译 ✓', exact: true })).toBeVisible()
+  await row.getByRole('button', { name: '查看或修改成本', exact: true }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByLabel('输入', { exact: true })).toHaveValue('0.5')
+  await expect(dialog.getByLabel('输出', { exact: true })).toHaveValue('0.5')
+  await dialog.getByLabel('输入', { exact: true }).fill('0.8')
+  await dialog.getByRole('button', { name: '保存成本', exact: true }).click()
+  await expect.poll(() => costs.length).toBe(1)
+  expect(costs[0]).toMatchObject({ provider: 'cerebras', model: 'qwen-3.8-27b', input_per_million: 0.8, output_per_million: 0.5 })
 })

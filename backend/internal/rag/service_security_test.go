@@ -1,6 +1,7 @@
 package rag
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -82,5 +83,21 @@ func TestChatOverridesCloneProviderConfiguration(t *testing.T) {
 	}
 	if base.APIKey != "server-secret" || base.BaseURL != "https://api.openai.com/v1" {
 		t.Fatal("provider configuration was mutated across requests")
+	}
+}
+
+func TestRequestScopedProviderDoesNotRequireServerDefault(t *testing.T) {
+	service := &Service{}
+	service.SetChatConfigProvider(func() (*openaiprovider.Config, error) {
+		return nil, errors.New("default provider is not configured")
+	})
+	overridden, err := service.chatConfigWithOverrides(&ChatOverrides{
+		APIBase: "https://compatible.example/v1", APIKey: "user-secret", Model: "user-model",
+	})
+	if err != nil || overridden.BaseURL != "https://compatible.example/v1" || overridden.APIKey != "user-secret" || overridden.Model != "user-model" || overridden.Provider != "" {
+		t.Fatalf("request-scoped provider: %+v %v", overridden, err)
+	}
+	if _, err := service.chatConfigWithOverrides(&ChatOverrides{APIBase: "https://compatible.example/v1", Model: "user-model"}); err == nil {
+		t.Fatal("custom endpoint without user credentials accepted")
 	}
 }

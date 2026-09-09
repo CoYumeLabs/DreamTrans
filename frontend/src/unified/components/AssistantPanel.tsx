@@ -829,7 +829,7 @@ export function AssistantPanel({
       const startedAt = performance.now()
       try {
         const response = await askRag(
-          sessionId || 'current_session',
+          sessionId,
           action.question,
           6,
           config,
