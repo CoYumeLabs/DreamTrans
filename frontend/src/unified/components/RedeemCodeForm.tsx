@@ -4,15 +4,56 @@ import { useMessages } from '../../i18n'
 
 export function RedeemCodeForm({ onRefresh }: { onRefresh: () => Promise<void> }) {
   const m = useMessages().redeem
-  const [code, setCode] = useState(''), [busy, setBusy] = useState(false), [message, setMessage] = useState('')
+  const [code, setCode] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+
   async function redeem() {
     if (busy || !code.trim()) return
-    setBusy(true); setMessage('')
+    setBusy(true)
+    setMessage('')
     try {
       await authFetch('/api/user/redeem', { method: 'POST', body: JSON.stringify({ code: code.trim() }) })
-      setMessage(m.success); setCode(''); await onRefresh()
-    } catch (reason) { setMessage(reason instanceof Error ? reason.message : m.failed) }
-    finally { setBusy(false) }
+      setMessage(m.success)
+      setCode('')
+      await onRefresh()
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : m.failed)
+    } finally {
+      setBusy(false)
+    }
   }
-  return <section className="dt-billing-card"><h3>{m.title}</h3><p className="dt-muted">{m.description}</p><form onSubmit={event => { event.preventDefault(); void redeem() }}><label>{m.code}<input aria-label={m.code} autoComplete="off" maxLength={48} value={code} onChange={event => setCode(event.target.value)} disabled={busy} required /></label><button className="dt-primary-button" disabled={busy || !code.trim()} type="submit">{busy ? m.busy : m.submit}</button></form>{message && <p role="status">{message}</p>}</section>
+
+  return (
+    <section className="dt-billing-card" aria-label={m.title}>
+      <div className="dt-billing-card__head">
+        <div>
+          <strong>{m.title}</strong>
+          <small>{m.description}</small>
+        </div>
+      </div>
+      <form className="dt-redeem" onSubmit={(event) => { event.preventDefault(); void redeem() }}>
+        <label className="dt-field">
+          <span>{m.code}</span>
+          <input
+            autoComplete="off"
+            disabled={busy}
+            maxLength={48}
+            onChange={(event) => setCode(event.target.value)}
+            required
+            spellCheck={false}
+            value={code}
+          />
+        </label>
+        <button
+          className="dt-button dt-button--primary"
+          disabled={busy || !code.trim()}
+          type="submit"
+        >
+          {busy ? m.busy : m.submit}
+        </button>
+      </form>
+      {message && <p className="dt-muted" role="status">{message}</p>}
+    </section>
+  )
 }

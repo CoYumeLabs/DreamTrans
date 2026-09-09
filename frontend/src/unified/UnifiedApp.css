@@ -401,6 +401,7 @@ textarea:focus-visible {
 .dt-status--live { color: #d63f59; }
 .dt-status--warning { color: var(--dt-warning); }
 .dt-status--danger { color: var(--dt-danger); }
+.dt-status--success { color: #1d7a4f; }
 
 .dt-status--live i,
 .dt-live-dot {
@@ -2018,6 +2019,19 @@ textarea:focus-visible {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   align-items: end;
   gap: 8px;
+}
+
+.dt-redeem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.dt-redeem input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .dt-usage-source {

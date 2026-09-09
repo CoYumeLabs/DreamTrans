@@ -4,12 +4,20 @@ import { useMessages } from '../../i18n'
 import { ApiRequestError, getStoredUser } from '../../pro/api/auth'
 import { batchStatus, listBatchJobs, retryBatchJob, MAX_BATCH_BYTES, prepareBatchAudio, quoteBatch, saveBatchResult, submitBatch } from '../workspace/batchTranscription'
 import { languageOptions } from '../workspace/languageOptions'
+import { Icon } from './Icon'
 import { Sheet } from './Sheet'
 import './BatchTranscribePanel.css'
 
 type JobState = 'ready' | 'uploading' | 'running' | 'saving' | 'done' | 'failed' | 'uncertain' | 'interrupted'
 interface Job { id: string; name: string; language: string; seconds: number; cost?: number; jobId?: string; state: JobState; error?: string; audio?: Blob }
 interface Props { ownerId: string | null; allowed: boolean; open: boolean; sourceLanguage: string; onClose: () => void; onAccount: () => void; onHistory: () => void; onSaved: () => Promise<void> }
+
+const jobTone: Record<JobState, string> = { ready: 'neutral', uploading: 'working', running: 'working', saving: 'working', done: 'success', failed: 'danger', uncertain: 'warning', interrupted: 'warning' }
+function formatDuration(seconds: number): string {
+  const total = Math.max(0, Math.ceil(seconds))
+  const minutes = Math.floor(total / 60), rest = total % 60
+  return minutes ? `${minutes}:${String(rest).padStart(2, '0')}` : `${rest}s`
+}
 
 function storageKey(ownerId: string | null) { return `dt_batch_jobs_v1:${ownerId ?? 'guest'}` }
 function restoreJobs(ownerId: string | null): Job[] {
@@ -34,6 +42,7 @@ export function BatchTranscribePanel({ ownerId, allowed, open, sourceLanguage, o
   const mounted = useRef(false)
   const checking = useRef(new Set<string>())
   const [error, setError] = useState('')
+  const [dragOver, setDragOver] = useState(false)
   const callbacks = useRef({ onSaved, b })
   useEffect(() => { callbacks.current = { onSaved, b } }, [onSaved, b])
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
@@ -165,31 +174,114 @@ export function BatchTranscribePanel({ ownerId, allowed, open, sourceLanguage, o
   }
 
   const ready = jobs.filter(job => job.state === 'ready')
-  return <Sheet open={open} onClose={onClose} title={b.title} description={b.description} eyebrow="PRO" wide>
-    {!allowed ? <div className="dt-batch"><p>{b.locked}</p><button className="dt-primary-button" type="button" onClick={onAccount}>{b.upgrade}</button></div> : <div className="dt-batch">
-      <p className="dt-muted">{b.limits}</p>
-      <div className="dt-batch__controls">
-        <label>{b.language}<select aria-label={b.language} value={language} onChange={event => setLanguage(event.target.value)} disabled={busy}>{languageOptions().map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-        <label>{b.choose}<input aria-label={b.choose} type="file" accept="audio/*,.mp3,.m4a,.wav,.ogg,.flac,.webm,.aac" multiple disabled={busy} onChange={event => { const files = Array.from(event.target.files ?? []); event.target.value = ''; void choose(files) }} /></label>
-      </div>
-      {busy && <p role="status">{jobs.some(job => job.state === 'uploading') ? b.uploading : b.prepare}</p>}
-      {error && <p role="alert">{error}</p>}
-      {!jobs.length && <p className="dt-muted">{b.empty}</p>}
-      <ul className="dt-batch__jobs">{jobs.map(job => <li key={job.id}>
-        <div><strong>{job.name}</strong><small>{Math.ceil(job.seconds)} s · {job.cost === undefined ? '—' : formatUsageUSD(job.cost)}</small></div>
-        <p role="status">{b[job.state]}</p>
-        {job.error && <p role="alert">{job.error}</p>}
-        {(job.jobId || job.state === 'uncertain') && <small>ID: {job.jobId || job.id}</small>}
-        <div className="dt-batch__actions">
-          {job.state === 'uncertain' && <button type="button" onClick={() => { void retryBatchJob(job.id).catch(() => setError(b.error)) }}>{b.retry}</button>}
-          {job.error && job.jobId && job.state !== 'failed' && <button type="button" onClick={() => { try { patch(job.id, { error: undefined }) } catch { setError(b.storage) } }}>{b.retry}</button>}
-          {['done', 'failed', 'ready', 'interrupted'].includes(job.state) && <button disabled={busy} type="button" onClick={() => { try { dismissed.current.add(job.id); localStorage.setItem(`${storageKey(ownerId)}:dismissed`, JSON.stringify([...dismissed.current].slice(-200))); commit(jobsRef.current.filter(item => item.id !== job.id)) } catch { setError(b.storage) } }}>{b.remove}</button>}
+  const estimate = ready.every(job => job.cost !== undefined) ? formatUsageUSD(ready.reduce((sum, job) => sum + (job.cost ?? 0), 0)) : '—'
+  const pickFiles = (list: FileList | null) => { const files = Array.from(list ?? []); if (files.length) void choose(files) }
+  const forget = (job: Job) => {
+    try {
+      dismissed.current.add(job.id)
+      localStorage.setItem(`${storageKey(ownerId)}:dismissed`, JSON.stringify([...dismissed.current].slice(-200)))
+      commit(jobsRef.current.filter(item => item.id !== job.id))
+    } catch { setError(b.storage) }
+  }
+
+  return (
+    <Sheet open={open} onClose={onClose} title={b.title} description={b.description} eyebrow="PRO" wide>
+      {!allowed ? (
+        <div className="dt-batch">
+          <div className="dt-batch__locked">
+            <p>{b.locked}</p>
+            <button className="dt-button dt-button--primary" type="button" onClick={onAccount}>{b.upgrade}</button>
+          </div>
         </div>
-      </li>)}</ul>
-      {ready.length > 0 && <><p>{b.estimate}: {ready.every(job => job.cost !== undefined) ? formatUsageUSD(ready.reduce((sum, job) => sum + (job.cost ?? 0), 0)) : '—'}</p><p className="dt-muted">{b.pricing}</p><button className="dt-primary-button" disabled={busy} type="button" onClick={() => { void start() }}>{ready.some(job => job.cost === undefined) ? b.quoteRetry : b.start}</button></>}
-      <p className="dt-muted">{b.resume}</p>
-      <div className="dt-batch__actions">
-<button type="button" onClick={onAccount}>{b.topup}</button><button type="button" onClick={onHistory}>{b.history}</button></div>
-    </div>}
-  </Sheet>
+      ) : (
+        <div className="dt-batch">
+          <div className="dt-batch__controls">
+            <label className="dt-field">
+              <span>{b.language}</span>
+              <select aria-label={b.language} disabled={busy} value={language} onChange={event => setLanguage(event.target.value)}>
+                {languageOptions().map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+            <label
+              className={`dt-batch__drop${dragOver ? ' is-over' : ''}${busy ? ' is-disabled' : ''}`}
+              onDragEnter={event => { event.preventDefault(); if (!busy) setDragOver(true) }}
+              onDragOver={event => { event.preventDefault() }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={event => { event.preventDefault(); setDragOver(false); if (!busy) pickFiles(event.dataTransfer.files) }}
+            >
+              <Icon name="paperclip" size={20} />
+              <strong>{b.choose}</strong>
+              <small>{b.drop}</small>
+              <input
+                accept="audio/*,.mp3,.m4a,.wav,.ogg,.flac,.webm,.aac"
+                aria-label={b.choose}
+                disabled={busy}
+                multiple
+                type="file"
+                onChange={event => { const list = event.target.files; pickFiles(list); event.target.value = '' }}
+              />
+            </label>
+          </div>
+          <p className="dt-muted">{b.limits}</p>
+
+          {busy && <p className="dt-muted" role="status">{jobs.some(job => job.state === 'uploading') ? b.uploading : b.prepare}</p>}
+          {error && <p className="dt-batch__alert" role="alert">{error}</p>}
+          {!jobs.length && <p className="dt-muted">{b.empty}</p>}
+
+          {jobs.length > 0 && (
+            <ul className="dt-batch__jobs" aria-label={b.queue}>
+              {jobs.map(job => (
+                <li className="dt-batch__job" key={job.id}>
+                  <div className="dt-batch__job-head">
+                    <strong>{job.name}</strong>
+                    <small>{job.cost === undefined ? '—' : formatUsageUSD(job.cost)}</small>
+                  </div>
+                  <div className="dt-batch__job-meta">
+                    <span className={`dt-status dt-status--${jobTone[job.state]}`}><i /><span role="status">{b[job.state]}</span></span>
+                    <span>{formatDuration(job.seconds)}</span>
+                    {(job.jobId || job.state === 'uncertain') && <span className="dt-batch__job-id">ID {job.jobId || job.id}</span>}
+                  </div>
+                  {job.error && <p className="dt-batch__job-error" role="alert">{job.error}</p>}
+                  {(job.state === 'uncertain' || (job.error && job.jobId && job.state !== 'failed') || ['done', 'failed', 'ready', 'interrupted'].includes(job.state)) && (
+                    <div className="dt-batch__actions">
+                      {job.state === 'uncertain' && (
+                        <button className="dt-button dt-button--secondary dt-button--small" type="button" onClick={() => { void retryBatchJob(job.id).catch(() => setError(b.error)) }}>{b.retry}</button>
+                      )}
+                      {job.error && job.jobId && job.state !== 'failed' && (
+                        <button className="dt-button dt-button--secondary dt-button--small" type="button" onClick={() => { try { patch(job.id, { error: undefined }) } catch { setError(b.storage) } }}>{b.retry}</button>
+                      )}
+                      {['done', 'failed', 'ready', 'interrupted'].includes(job.state) && (
+                        <button className="dt-button dt-button--text dt-button--small" disabled={busy} type="button" onClick={() => forget(job)}>{b.remove}</button>
+                      )}
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {ready.length > 0 && (
+            <div className="dt-batch__summary">
+              <div>
+                <small>{b.estimate} · {ready.length} {b.files}</small>
+                <strong>{estimate}</strong>
+                <small>{b.pricing}</small>
+              </div>
+              <button className="dt-button dt-button--primary" disabled={busy} type="button" onClick={() => { void start() }}>
+                {ready.some(job => job.cost === undefined) ? b.quoteRetry : b.start}
+              </button>
+            </div>
+          )}
+
+          <div className="dt-batch__footer">
+            <p className="dt-muted">{b.resume}</p>
+            <div className="dt-batch__actions">
+              <button className="dt-button dt-button--secondary" type="button" onClick={onAccount}>{b.topup}</button>
+              <button className="dt-button dt-button--secondary" type="button" onClick={onHistory}>{b.history}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </Sheet>
+  )
 }

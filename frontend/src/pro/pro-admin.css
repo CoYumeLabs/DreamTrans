@@ -524,6 +524,8 @@ input:disabled, select:disabled { color: var(--yf-muted); background: var(--yf-w
   .pa-section__heading, .pa-subsection__heading { flex-direction: column; }
   .pa-heading-badges { justify-content: flex-start; }
   .pa-toolbar { width: 100%; }
+  .pa-filter-bar { grid-template-columns: 1fr 1fr; }
+  .pa-filter-bar .pa-button { grid-column: 1 / -1; }
   .pa-toolbar input { min-width: 0; flex: 1; }
   .pa-override { grid-template-columns: 1fr 1fr; }
   .pa-field { grid-template-columns: 1fr; }
@@ -690,6 +692,53 @@ input:disabled, select:disabled { color: var(--yf-muted); background: var(--yf-w
 
 .pa-permission-scope { border: 0; padding: 0; margin: 0; min-width: 0; }
 
-.pa-dashboard-kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; }
-.pa-dashboard-kpis strong { font-size:28px; } .pa-chart-scroll { overflow-x:auto; } .pa-chart-scroll svg { width:100%; max-height:290px; } .pa-dashboard-kpis .pa-chart-scroll svg { min-width:0!important; max-height:90px; }
-.pa-chart-legend { display:flex; flex-wrap:wrap; gap:12px; font-size:12px; margin:12px 0; } .pa-chart-legend span { display:flex; align-items:center; gap:5px; } .pa-chart-legend i { display:inline-block; width:9px; height:9px; border-radius:2px; }
+/* Dashboard: filter bar, KPI tiles with sparkline bars, and per-section charts. */
+.pa-filter-bar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  gap: 12px;
+  align-items: end;
+  padding: 16px 18px;
+}
+.pa-filter-bar label > span { display: block; color: var(--yf-muted); font-size: 13px; margin-bottom: 7px; }
+.pa-filter-bar input, .pa-filter-bar select, .pa-form-grid select {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--yf-line);
+  border-radius: var(--yf-r-sm);
+  padding: 8px 10px;
+  color: var(--yf-navy);
+  background: #fff;
+  font: inherit;
+}
+.pa-filter-bar .pa-button { min-height: 38px; }
+.pa-dashboard-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.pa-kpi strong { font-size: 28px; }
+.pa-kpi progress { width: 100%; height: 6px; margin-top: 10px; accent-color: var(--yf-accent); }
+.pa-kpi .pa-chart-scroll--compact { margin-top: 10px; }
+.pa-kpi .pa-chart-empty { margin: 10px 0 0; font-size: 12px; }
+.pa-chart-scroll { overflow-x: auto; }
+.pa-chart-scroll svg { display: block; width: 100%; max-height: 220px; color: var(--yf-navy); }
+.pa-chart-scroll--compact svg { max-height: 56px; }
+.pa-chart-empty { color: var(--yf-muted); font-size: 13px; }
+.pa-chart-legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 12px; font-size: 12px; color: var(--yf-muted); }
+.pa-chart-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.pa-chart-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; }
+.pa-details { margin-top: 14px; }
+.pa-details summary { cursor: pointer; color: var(--yf-accent); font-weight: 600; font-size: 13px; }
+.pa-details pre { margin: 8px 0 0; padding: 10px; font-size: 12px; background: var(--yf-well); border-radius: var(--yf-r-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Operations and agents: form footers, generated-code results and table sublines. */
+.pa-form-grid__footer { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-top: 4px; }
+.pa-form-grid__footer strong { color: var(--yf-navy); }
+.pa-form-result { display: grid; gap: 10px; margin-top: 16px; }
+.pa-form-result .pa-toolbar { justify-content: space-between; }
+.pa-form-result .pa-toolbar p { margin: 0; color: var(--yf-navy); }
+.pa-form-result textarea { width: 100%; padding: 10px; font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; line-height: 1.5; border: 1px solid var(--yf-line); border-radius: var(--yf-r-sm); resize: vertical; }
+.pa-toolbar--padded { padding: 16px 18px 0; }
+.pa-toolbar--padded + .pa-table-wrap { margin-top: 14px; }
+.pa-card > .pa-pagination { margin: 0 18px 16px; }
+.pa-table-sub { display: block; margin-top: 2px; color: var(--yf-muted); font-size: 12px; overflow-wrap: anywhere; }
+.pa-table .pa-toolbar { flex-wrap: wrap; }
+.pa-section h3 { margin-bottom: 12px; }
+.pa-subsection .pa-list-heading h3 { margin-bottom: 0; }
