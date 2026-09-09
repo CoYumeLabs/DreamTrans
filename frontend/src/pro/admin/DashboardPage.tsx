@@ -24,7 +24,7 @@ const latencySeries: Series[] = [
   { key: 'p90_session_p90_ms', label: 'p90 的 p90', slot: 2 },
 ]
 
-const display = (value: unknown) => value == null ? '—' : typeof value === 'number' ? value.toLocaleString(undefined, { maximumFractionDigits: 3 }) : String(value)
+const display = (value: unknown) => value == null ? '—' : typeof value === 'number' ? number(value).toLocaleString(undefined, { maximumFractionDigits: 3 }) : String(value)
 const text = (value: unknown) => value == null ? '' : String(value)
 const isoDate = (offsetDays: number) => new Date(Date.now() + offsetDays * 86400000).toISOString().slice(0, 10)
 const sum = (rows: Row[], field: string) => rows.reduce((value, row) => value + number(row[field]), 0)

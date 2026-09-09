@@ -3,7 +3,8 @@
 export type Row = Record<string, string | number | null | undefined>
 export interface Series { key: string; label: string; slot?: number }
 
-export const number = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) ? value : 0
+// Float subtraction in SQL can yield -0, which would print as "-0".
+export const number = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) && value !== 0 ? value : 0
 export const slotColor = (slot: number) => `var(--viz-${Math.min(4, Math.max(1, slot))})`
 export const ordinalColor = (index: number, total: number) => {
   const steps = 6
