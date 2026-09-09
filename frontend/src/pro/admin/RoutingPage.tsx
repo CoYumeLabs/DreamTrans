@@ -25,13 +25,13 @@ export function RoutingPage({ writable }: { writable: boolean }) {
       .catch(e => setError(e instanceof Error ? e.message : '读取失败'))
   }, [])
 
-  async function save(body: unknown) {
+  async function save(body: unknown, saved: string) {
     setBusy(true)
     setError('')
     setNotice('')
     try {
       await adminFetch('/api/admin/routing', { method: 'PUT', body: JSON.stringify(body) })
-      setNotice('已保存，新会话按更新后的路由执行')
+      setNotice(saved)
     } catch (e) {
       setError(e instanceof Error ? e.message : '保存失败')
     } finally {
@@ -49,10 +49,10 @@ export function RoutingPage({ writable }: { writable: boolean }) {
           <div className="pa-section__heading">
             <div>
               <h2>Speechmatics 额度起点</h2>
-              <p>填写该上游账户在起算时刻的真实余额。系统扣除此后已记账的上游费用；未记录路由的历史用量无法归入账户。</p>
+              <p>填写该上游账户在起算时刻的真实余额，系统扣除此后已记账的上游费用来估算剩余额度和可用天数，结果显示在概览页。这里只是估算用的参照值，不会改变任何路由。</p>
             </div>
           </div>
-          <form className="pa-form-grid" onSubmit={e => { e.preventDefault(); void save({ credit_usd: amount, started_at: started ? `${started}:00Z` : '', route }) }}>
+          <form className="pa-form-grid" onSubmit={e => { e.preventDefault(); void save({ credit_usd: amount, started_at: started ? `${started}:00Z` : '', route }, '额度起点已保存，只影响概览页的剩余额度估算，不改变任何账户的路由') }}>
             <label><span>起始余额 USD</span><input type="number" min="0" max="10000000" step="0.01" value={amount} onChange={e => setAmount(Number(e.target.value))} required /></label>
             <label><span>起算时间（UTC，留空暂停估算）</span><input type="datetime-local" value={started} onChange={e => setStarted(e.target.value)} /></label>
             <label>
@@ -73,11 +73,11 @@ export function RoutingPage({ writable }: { writable: boolean }) {
           <div className="pa-section__heading">
             <div>
               <h2>指定账户路由</h2>
-              <p>机构与赠送余额的保护规则优先于训练账号指定。留空指定可恢复自动选择。</p>
+              <p>机构与赠送余额的保护规则优先于这里的指定；指定为训练时仍需该用户本人已加入训练计划，未同意的用户会按不训练处理。留空可恢复自动选择。</p>
             </div>
           </div>
-          <form className="pa-form-grid" onSubmit={e => { e.preventDefault(); void save({ user_id: userId, route: userRoute }) }}>
-            <label><span>用户 ID</span><input required value={userId} onChange={e => setUserId(e.target.value)} /></label>
+          <form className="pa-form-grid" onSubmit={e => { e.preventDefault(); void save({ user_id: userId, route: userRoute }, '账户路由已保存，该用户之后开始的会话按新路由执行') }}>
+            <label><span>用户邮箱或 ID</span><input required placeholder="name@example.com" value={userId} onChange={e => setUserId(e.target.value)} /></label>
             <label>
               <span>路由</span>
               <select value={userRoute} onChange={e => setUserRoute(e.target.value)}>

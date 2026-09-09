@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -340,10 +341,15 @@ func (h *AdminHandler) HandleAssignConsoleRole(w http.ResponseWriter, r *http.Re
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
-	if _, err := uuid.Parse(input.UserID); err != nil {
-		http.Error(w, "Invalid user id", http.StatusBadRequest)
+	userID, err := h.resolveConsoleUser(r.Context(), input.UserID)
+	if errors.Is(err, errConsoleUserNotFound) {
+		http.Error(w, "No account matches that email or ID", http.StatusNotFound)
+		return
+	} else if err != nil {
+		http.Error(w, "Cannot look up account", http.StatusServiceUnavailable)
 		return
 	}
+	input.UserID = userID
 	tx, err := h.store.DB().BeginTx(r.Context(), nil)
 	if err != nil {
 		http.Error(w, "Role assignment unavailable", http.StatusServiceUnavailable)

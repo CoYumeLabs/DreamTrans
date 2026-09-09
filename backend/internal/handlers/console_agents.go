@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -46,7 +47,16 @@ func (h *AdminHandler) HandleConsoleAgents(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	input.Channel = strings.TrimSpace(input.Channel)
-	if _, err := uuid.Parse(input.UserID); err != nil || input.Commission < 0 || input.Commission > 100 || input.Threshold < 0 || input.Threshold > 1000000 || (input.Status != "active" && input.Status != "suspended") || input.Limit < 0 || input.Limit > 1000 || input.Value < 0.00000001 || input.Value > 10000 || input.Days < 1 || input.Days > 3650 || input.Channel == "" || len([]rune(input.Channel)) > 100 {
+	userID, lookupErr := h.resolveConsoleUser(r.Context(), input.UserID)
+	if errors.Is(lookupErr, errConsoleUserNotFound) {
+		http.Error(w, "No account matches that email or ID", http.StatusNotFound)
+		return
+	} else if lookupErr != nil {
+		http.Error(w, "Cannot look up account", http.StatusServiceUnavailable)
+		return
+	}
+	input.UserID = userID
+	if input.Commission < 0 || input.Commission > 100 || input.Threshold < 0 || input.Threshold > 1000000 || (input.Status != "active" && input.Status != "suspended") || input.Limit < 0 || input.Limit > 1000 || input.Value < 0.00000001 || input.Value > 10000 || input.Days < 1 || input.Days > 3650 || input.Channel == "" || len([]rune(input.Channel)) > 100 {
 		http.Error(w, "Invalid agent settings", http.StatusBadRequest)
 		return
 	}

@@ -126,6 +126,12 @@ func TestPromotionRegistrationRewardsAndAttribution(t *testing.T) {
 	}
 	// A paid/manual assignment wins without deleting the gift entitlement.
 	paid := &billing.Plan{Code: "promo_test_paid", Name: "Paid", Active: true, StorageGB: 100, RetentionDays: -1, MaxConcurrentSessions: 5, Seats: 1}
+	// Retention edits are rejected, so a plan row left by an earlier run with a
+	// different retention would fail the upsert; start from a clean row.
+	_, _ = h.store.DB().ExecContext(t.Context(), `DELETE FROM plans WHERE code=$1`, paid.Code)
+	t.Cleanup(func() {
+		_, _ = h.store.DB().ExecContext(context.Background(), `DELETE FROM plans WHERE code=$1`, paid.Code)
+	})
 	if _, err := h.billing.UpsertPlan(t.Context(), paid, ""); err != nil {
 		t.Fatal(err)
 	}

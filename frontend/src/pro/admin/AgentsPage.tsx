@@ -237,7 +237,7 @@ export function AgentsPage({ mode, writable = false, canReview = false, canPay =
                 <fieldset className="pa-permission-scope" disabled={busy}>
                   <h3>{profiles.some(item => item.user_id === draft.user_id && draft.user_id) ? '编辑代理' : '新建代理'}</h3>
                   <div className="pa-form-grid">
-                    <label><span>用户 ID</span><input required value={draft.user_id} onChange={e => setDraft({ ...draft, user_id: e.target.value })} /></label>
+                    <label><span>用户邮箱或 ID</span><input required placeholder="name@example.com" value={draft.user_id} onChange={e => setDraft({ ...draft, user_id: e.target.value })} /></label>
                     <label><span>来源渠道</span><input required maxLength={100} value={draft.channel} onChange={e => setDraft({ ...draft, channel: e.target.value })} /></label>
                     {profileFields.map(([key, label, min, max]) => (
                       <label key={key}>

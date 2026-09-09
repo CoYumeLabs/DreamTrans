@@ -128,7 +128,7 @@ export function RolesPage({ writable }: { writable: boolean }) {
               </div>
             </div>
             <form className="pa-form-grid" onSubmit={e => { e.preventDefault(); void mutate('/api/admin/roles/assign', 'POST', { user_id: userId, role_id: roleId }) }}>
-              <label><span>账户 ID</span><input required value={userId} onChange={e => setUserId(e.target.value)} /></label>
+              <label><span>用户邮箱或 ID</span><input required placeholder="name@example.com" value={userId} onChange={e => setUserId(e.target.value)} /></label>
               <label>
                 <span>角色</span>
                 <select value={roleId} onChange={e => setRoleId(e.target.value)}>

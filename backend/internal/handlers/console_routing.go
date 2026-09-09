@@ -2,13 +2,13 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"math"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/dreamtrans/backend/internal/auth"
-	"github.com/google/uuid"
 )
 
 // HandleConsoleRouting separates technical provider routing from financial
@@ -38,10 +38,19 @@ func (h *AdminHandler) HandleConsoleRouting(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if input.UserID != "" {
-		if _, err := uuid.Parse(input.UserID); err != nil || !validSpeechmaticsRoute(input.Route) || input.Credit != nil || input.StartedAt != nil {
+		if !validSpeechmaticsRoute(input.Route) || input.Credit != nil || input.StartedAt != nil {
 			http.Error(w, "Invalid account routing", http.StatusBadRequest)
 			return
 		}
+		userID, err := h.resolveConsoleUser(r.Context(), input.UserID)
+		if errors.Is(err, errConsoleUserNotFound) {
+			http.Error(w, "No account matches that email or ID", http.StatusNotFound)
+			return
+		} else if err != nil {
+			http.Error(w, "Cannot look up account", http.StatusServiceUnavailable)
+			return
+		}
+		input.UserID = userID
 		// Account routing does not expose balance, email or ledger information.
 		if err := h.store.SetUserSpeechmaticsRoute(r.Context(), input.UserID, input.Route); err != nil {
 			http.Error(w, "Cannot update route", http.StatusServiceUnavailable)
