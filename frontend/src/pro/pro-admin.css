@@ -712,18 +712,69 @@ input:disabled, select:disabled { color: var(--yf-muted); background: var(--yf-w
   font: inherit;
 }
 .pa-filter-bar .pa-button { min-height: 38px; }
-.pa-dashboard-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.pa-dashboard-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
 .pa-kpi strong { font-size: 28px; }
-.pa-kpi progress { width: 100%; height: 6px; margin-top: 10px; accent-color: var(--yf-accent); }
-.pa-kpi .pa-chart-scroll--compact { margin-top: 10px; }
-.pa-kpi .pa-chart-empty { margin: 10px 0 0; font-size: 12px; }
-.pa-chart-scroll { overflow-x: auto; }
-.pa-chart-scroll svg { display: block; width: 100%; max-height: 220px; color: var(--yf-navy); }
-.pa-chart-scroll--compact svg { max-height: 56px; }
-.pa-chart-empty { color: var(--yf-muted); font-size: 13px; }
-.pa-chart-legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 12px; font-size: 12px; color: var(--yf-muted); }
-.pa-chart-legend span { display: inline-flex; align-items: center; gap: 5px; }
-.pa-chart-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; }
+.pa-kpi .viz-spark { display: block; margin-top: 12px; }
+.pa-stack.is-refreshing > * { opacity: .6; transition: opacity .2s ease; }
+.pa-chart-empty { margin: 0; padding: 22px 0; color: var(--yf-muted); font-size: 13px; text-align: center; }
+.pa-table--numeric td { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Chart palette. Categorical slots 1-4 and the indigo ordinal ramp were validated
+   for CVD separation and contrast against the white card; keep the order. */
+.pa-shell {
+  --viz-1: #2b2fd8; --viz-2: #eb6834; --viz-3: #1baf7a; --viz-4: #eda100;
+  --viz-ord-1: #a3a6f1; --viz-ord-2: #7c80ea; --viz-ord-3: #585ce0; --viz-ord-4: #2b2fd8; --viz-ord-5: #1e21a8; --viz-ord-6: #141670;
+  --viz-neg: #d03b3b; --viz-dim: #c9cfda; --viz-grid: #eceff3; --viz-axis: #d5d9e0; --viz-tick: #737d8c; --viz-track: #eef0fe;
+}
+.viz { position: relative; width: 100%; min-width: 0; }
+.viz svg { display: block; overflow: visible; }
+.viz-gridline { stroke: var(--viz-grid); stroke-width: 1; shape-rendering: crispEdges; }
+.viz-baseline { stroke: var(--viz-axis); stroke-width: 1; shape-rendering: crispEdges; }
+.viz-tick { fill: var(--viz-tick); font-size: 11px; font-variant-numeric: tabular-nums; }
+.viz-hover-band { fill: var(--yf-accent-wash); }
+.viz-crosshair { stroke: var(--viz-axis); stroke-width: 1; shape-rendering: crispEdges; }
+.viz-marker { stroke: #fff; stroke-width: 2; }
+.viz-dim { opacity: .45; transition: opacity .12s ease; }
+.viz rect[tabindex]:focus-visible { outline: none; fill: var(--yf-accent-wash); }
+.viz-tooltip {
+  position: absolute; top: 8px; z-index: 2; min-width: 150px; padding: 8px 10px; pointer-events: none;
+  background: #fff; border: 1px solid var(--yf-line); border-radius: var(--yf-r-sm); box-shadow: var(--yf-shadow-xs); font-size: 12px; line-height: 1.5;
+}
+.viz-tooltip strong { display: block; margin-bottom: 4px; color: var(--yf-muted); font-weight: 600; }
+.viz-tooltip > div { display: flex; align-items: center; gap: 8px; }
+.viz-tooltip > div i { flex: 0 0 auto; width: 10px; height: 3px; border-radius: 2px; }
+.viz-tooltip > div span { flex: 1 1 auto; color: var(--yf-muted); }
+.viz-tooltip > div b { font-variant-numeric: tabular-nums; color: var(--yf-navy); }
+.viz-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 0 10px; font-size: 12px; color: var(--yf-muted); }
+.viz-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.viz-legend__key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.viz-legend__key--line { height: 3px; width: 14px; }
+.viz-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px 28px; }
+.viz-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px 28px; }
+.viz-facet { min-width: 0; }
+.viz-facet h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--yf-muted); }
+.viz-bars { display: grid; gap: 6px; }
+.viz-bars__row { display: grid; grid-template-columns: minmax(120px, 220px) minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 26px; font-size: 13px; }
+.viz-bars__label { display: grid; min-width: 0; overflow-wrap: anywhere; color: var(--yf-navy); }
+.viz-bars__label small { color: var(--yf-muted); font-size: 11px; }
+.viz-bars__track { position: relative; height: 12px; background: var(--viz-track); border-radius: 3px; overflow: hidden; }
+.viz-bars__track::before { content: ''; position: absolute; top: 0; bottom: 0; left: var(--viz-zero, 0%); width: 1px; background: var(--viz-axis); }
+.viz-bars__fill { position: absolute; top: 0; bottom: 0; display: block; border-radius: 0 3px 3px 0; min-width: 0; }
+.viz-bars__fill.is-negative { border-radius: 3px 0 0 3px; }
+.viz-bars__value { justify-self: end; min-width: 64px; text-align: right; font-variant-numeric: tabular-nums; color: var(--yf-navy); white-space: nowrap; }
+.viz-heatmap { width: 100%; border-collapse: separate; border-spacing: 2px; font-size: 13px; }
+.viz-heatmap th { padding: 6px 8px; font-weight: 500; color: var(--yf-muted); text-align: left; white-space: nowrap; }
+.viz-heatmap thead th { text-align: center; }
+.viz-heatmap td { padding: 8px; text-align: center; border-radius: 4px; font-variant-numeric: tabular-nums; }
+.viz-heatmap td.is-empty { color: var(--yf-muted); background: var(--yf-well); }
+.viz-heatmap__cell--1 { background: #e4e5fb; color: var(--yf-navy); }
+.viz-heatmap__cell--2 { background: #c9cbf7; color: var(--yf-navy); }
+.viz-heatmap__cell--3 { background: var(--viz-ord-1); color: var(--yf-navy); }
+.viz-heatmap__cell--4 { background: var(--viz-ord-3); color: #fff; }
+.viz-heatmap__cell--5 { background: var(--viz-ord-4); color: #fff; }
+.viz-heatmap__cell--6 { background: var(--viz-ord-6); color: #fff; }
+.viz-meter { display: block; height: 6px; margin-top: 12px; background: var(--viz-track); border-radius: 3px; overflow: hidden; }
+.viz-meter i { display: block; height: 100%; background: var(--viz-1); border-radius: 3px; }
 .pa-details { margin-top: 14px; }
 .pa-details summary { cursor: pointer; color: var(--yf-accent); font-weight: 600; font-size: 13px; }
 .pa-details pre { margin: 8px 0 0; padding: 10px; font-size: 12px; background: var(--yf-well); border-radius: var(--yf-r-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
