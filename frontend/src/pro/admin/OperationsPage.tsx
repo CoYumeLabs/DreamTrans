@@ -3,7 +3,7 @@ import { adminFetch } from '../../admin/api'
 import { downloadConsoleCSV } from './csv'
 import { ErrorBanner, Pagination } from './ui'
 
-interface Code { id: string; code: string; batch_id: string; invite_id: string; source: string; kind: string; channel: string; face_value_usd: number; expires_at: string; status: string }
+interface Code { id: string; code: string; source: string; channel: string; face_value_usd: number; expires_at: string; status: string }
 interface Audit { id: string; created_at: string; actor: string; action: string; target_type: string; target_id: string; details: unknown }
 
 const codeStatus: Record<string, string> = { available: '可兑换', redeemed: '已兑换', voided: '已作废', expired: '已过期' }

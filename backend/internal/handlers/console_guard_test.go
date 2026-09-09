@@ -48,3 +48,17 @@ func TestConsoleConfirmationOnlyGuardsMoneyMoves(t *testing.T) {
 		}
 	}
 }
+
+func TestIssuingCodesUnderASourceNeedsTheCodePermission(t *testing.T) {
+	for path, want := range map[string]string{
+		"/api/admin/promotions/3ddbabed-6000-4000-8000-000000000001/codes": "codes.write",
+		"/api/admin/promotions/3ddbabed-6000-4000-8000-000000000001":       "promotions.write",
+	} {
+		if got := consoleOperation(httptest.NewRequest(http.MethodPost, path, http.NoBody)); got != want {
+			t.Errorf("%s: consoleOperation=%q want %q", path, got, want)
+		}
+	}
+	if _, money := consoleConfirmation(httptest.NewRequest(http.MethodPost, "/api/admin/promotions/3ddbabed-6000-4000-8000-000000000001/codes", http.NoBody), nil); !money {
+		t.Fatal("issuing gift codes under a source skipped the money confirmation")
+	}
+}

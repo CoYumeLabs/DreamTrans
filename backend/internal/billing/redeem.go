@@ -55,6 +55,13 @@ func (s *Service) RedeemGift(ctx context.Context, userID, code string) (*GrantIt
 	if redeemedBy != "" || voided || !enabled || !expires.After(time.Now()) {
 		return nil, invalidBillingInputf("兑换码已使用、已过期或已作废")
 	}
+	// The source's pause, expiry and registration cap bind code claims exactly
+	// as they bind link sign-ups.
+	if _, err := acquisition.ReserveSourceByIDTx(ctx, tx, inviteID); errors.Is(err, acquisition.ErrInvalidSource) {
+		return nil, invalidBillingInputf("该活动已暂停、已结束或名额已满")
+	} else if err != nil {
+		return nil, err
+	}
 	var email string
 	var verified bool
 	if err := tx.QueryRowContext(ctx, `SELECT email,email_verified FROM users WHERE id=$1 AND deleted_at IS NULL`, userID).Scan(&email, &verified); err != nil {

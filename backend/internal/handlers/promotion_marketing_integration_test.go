@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dreamtrans/backend/internal/acquisition"
 	"github.com/dreamtrans/backend/internal/auth"
 	"github.com/dreamtrans/backend/internal/billing"
 	"github.com/dreamtrans/backend/internal/store"
@@ -329,5 +330,69 @@ func TestReferralAttributionOnly(t *testing.T) {
 	customers, _, err := h.billing.ListCustomers(t.Context(), friend, 20, 0)
 	if err != nil || len(customers) != 1 || customers[0].ReferrerEmail != referrerEmail {
 		t.Fatalf("customer referrer: %+v %v", customers, err)
+	}
+}
+
+// A sign-up through an agent's link is attributed to the agent, receives the
+// agent's gift terms, and is screened by the commission fraud rules with the
+// new account's own risk profile already recorded.
+func TestAgentLinkSignupIsAttributedGiftedAndScreened(t *testing.T) {
+	h, mail, db := verificationIntegrationSetup(t)
+	h.billing = billing.NewService(db)
+	agentEmail := uniqueEmail(t, "agent")
+	cleanupUser(t, db, agentEmail)
+	if res := postJSON(t, h.HandleRegister, "/api/auth/register", map[string]any{"email": agentEmail, "password": "correct horse battery", "name": "代理甲"}); res.Code != http.StatusAccepted {
+		t.Fatalf("register agent: %d %s", res.Code, res.Body.String())
+	}
+	agent, err := h.store.GetUserByEmail(t.Context(), agentEmail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(t.Context(), `INSERT INTO agent_profiles(user_id,commission_percent,settle_threshold_usd,channel,code_value_usd,grant_days) VALUES($1,10,100,'agent-link-test',4,15)`, agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := acquisition.EnsureAgentSourceTx(t.Context(), db, agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	buyerEmail := uniqueEmail(t, "buyer")
+	cleanupUser(t, db, buyerEmail)
+	t.Cleanup(func() {
+		ctx := context.Background()
+		_, _ = db.ExecContext(ctx, `DELETE FROM agent_flags WHERE agent_user_id=$1`, agent.ID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM promotion_registrations WHERE invite_id IN (SELECT id FROM promotion_invites WHERE owner_user_id=$1)`, agent.ID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM promotion_invites WHERE owner_user_id=$1`, agent.ID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM agent_profiles WHERE user_id=$1`, agent.ID)
+	})
+	code := acquisition.AgentSourceCode(agent.ID)
+	preview := httptest.NewRecorder()
+	h.HandlePromotionPreview(preview, httptest.NewRequest(http.MethodGet, "/api/auth/invite?code="+code, nil))
+	if preview.Code != 200 || !strings.Contains(preview.Body.String(), `"grant_usd":4`) {
+		t.Fatalf("agent landing offer: %d %s", preview.Code, preview.Body.String())
+	}
+	if res := postJSON(t, h.HandleRegister, "/api/auth/register", map[string]any{"email": buyerEmail, "password": "correct horse battery", "name": "买家", "invite_code": code}); res.Code != http.StatusAccepted {
+		t.Fatalf("register through agent link: %d %s", res.Code, res.Body.String())
+	}
+	buyer, err := h.store.GetUserByEmail(t.Context(), buyerEmail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reason string
+	if err := db.QueryRowContext(t.Context(), `SELECT f.reason FROM agent_flags f JOIN promotion_registrations r ON r.id=f.registration_id WHERE r.user_id=$1 AND f.agent_user_id=$2`, buyer.ID, agent.ID).Scan(&reason); err != nil || reason != "minimum_usage" {
+		t.Fatalf("link sign-up was not screened: %q %v", reason, err)
+	}
+	token := verifyLinkPattern.FindStringSubmatch(mail.last(t).Text)[1]
+	if verified := postJSON(t, h.HandleVerifyEmail, "/api/auth/verify-email", map[string]any{"token": token}); verified.Code != http.StatusOK {
+		t.Fatalf("verify buyer: %d", verified.Code)
+	}
+	if err := h.billing.GrantPromotionRewards(t.Context(), buyer.ID); err != nil {
+		t.Fatal(err)
+	}
+	balance, err := h.billing.GetUserBalance(t.Context(), buyer.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The trial credit is separate; the source's own gift is exactly the agent's terms.
+	if count, total := promoGrantTotal(t, h, balance.AccountID); count != 1 || total < 3.99 || total > 4.01 {
+		t.Fatalf("agent link gift: count=%d total=%f", count, total)
 	}
 }

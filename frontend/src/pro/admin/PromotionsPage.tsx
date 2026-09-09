@@ -347,7 +347,7 @@ export function PromotionsPage({ run, scoped = false }: { run: Runner; scoped?: 
     </Modal>}
     {codesFor && <Modal wide footer={null} title={`${codesFor.name} · 一次性兑换码`} onClose={() => setCodesFor(null)}>
       <p className="pa-form-note">兑换码继承该来源的赠送和截止时间；兑换即归因到此来源，占用一个名额。</p>
-      {codesFor.kind !== 'referral' && <form className="pa-toolbar" onSubmit={(event) => { void issueCodes(event) }}>
+      {codesFor.kind !== 'referral' && Date.parse(codesFor.expires_at) > Date.now() && <form className="pa-toolbar" onSubmit={(event) => { void issueCodes(event) }}>
         <input aria-label="生成数量" type="number" min={1} max={1000} value={codeQuantity} onChange={(event) => setCodeQuantity(event.target.value)} />
         <button className="pa-button pa-button--primary" disabled={busy} type="submit">生成兑换码</button>
         {issued.length > 0 && <button className="pa-button" type="button" onClick={() => downloadConsoleCSV(`${codesFor.code}-codes.csv`, [['兑换码', '来源', '面值 USD'], ...issued.map((code) => [code, codesFor.name, codesFor.grant_usd])])}>下载本批 CSV</button>}

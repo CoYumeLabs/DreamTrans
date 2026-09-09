@@ -170,6 +170,16 @@ jobs:
           PGUSER: dreamtrans
           PGPASSWORD: dreamtrans-ci
 
+      - name: Verify acquisition source migration replay
+        run: bash scripts/tests/acquisition_migration_test.sh
+        env:
+          MIGRATIONS_DIR: ${{ github.workspace }}/backend/migrations
+          PGHOST: 127.0.0.1
+          PGPORT: "5432"
+          PGDATABASE: dreamtrans_test
+          PGUSER: dreamtrans
+          PGPASSWORD: dreamtrans-ci
+
       - name: Lint backend with golangci-lint-action
         # v9.3.0, pinned to the immutable release commit.
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a

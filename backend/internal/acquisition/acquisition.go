@@ -49,8 +49,7 @@ type Source struct {
 	Registrations    int
 }
 
-// NormalizeCode upper-cases and trims a source code typed or pasted by a user.
-func NormalizeCode(code string) string { return strings.ToUpper(strings.TrimSpace(code)) }
+func normalizeCode(code string) string { return strings.ToUpper(strings.TrimSpace(code)) }
 
 // EmailHash is the per-mailbox attribution key.
 func EmailHash(email string) string {
@@ -62,17 +61,27 @@ func EmailHash(email string) string {
 // With requireLink the source must accept link sign-ups (code-only sources
 // attribute solely through their single-use codes).
 func ReserveSourceTx(ctx context.Context, q queryRower, code string, requireLink bool) (*Source, error) {
-	code = NormalizeCode(code)
+	code = normalizeCode(code)
 	if code == "" {
 		return nil, ErrInvalidSource
 	}
+	return reserveSource(ctx, q, "i.code=$1", code, requireLink)
+}
+
+// ReserveSourceByIDTx is ReserveSourceTx for a source already identified,
+// such as the one a single-use code belongs to.
+func ReserveSourceByIDTx(ctx context.Context, q queryRower, id string) (*Source, error) {
+	return reserveSource(ctx, q, "i.id=$1::uuid", id, false)
+}
+
+func reserveSource(ctx context.Context, q queryRower, where, value string, requireLink bool) (*Source, error) {
 	s := &Source{}
 	var owner sql.NullString
 	// Lock first, count second: a count folded into the locking statement is
 	// evaluated before the lock wait and would let two sign-ups share the
 	// last place.
 	err := q.QueryRowContext(ctx, `SELECT i.id,i.code,i.kind,i.owner_user_id,i.claim_mode,i.enabled,i.expires_at,i.max_registrations
-        FROM promotion_invites i WHERE i.code=$1 FOR UPDATE OF i`, code).Scan(&s.ID, &s.Code, &s.Kind, &owner, &s.ClaimMode, &s.Enabled, &s.ExpiresAt, &s.MaxRegistrations)
+        FROM promotion_invites i WHERE `+where+` FOR UPDATE OF i`, value).Scan(&s.ID, &s.Code, &s.Kind, &owner, &s.ClaimMode, &s.Enabled, &s.ExpiresAt, &s.MaxRegistrations)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrInvalidSource
 	}
@@ -104,13 +113,15 @@ func AttributeTx(ctx context.Context, q queryRower, sourceID, userID, email, cod
 	if err != nil {
 		return "", err
 	}
-	return id, RecordAgentFlagsTx(ctx, q, id)
+	return id, recordAgentFlagsTx(ctx, q, id)
 }
 
-// RecordAgentFlagsTx evaluates the commission fraud rules for a registration
+// recordAgentFlagsTx evaluates the commission fraud rules for a registration
 // on an agent source. Flags explain commission eligibility only; they never
-// alter the customer's gift, prices or access.
-func RecordAgentFlagsTx(ctx context.Context, q queryRower, registrationID string) error {
+// alter the customer's gift, prices or access. Callers must have written the
+// buyer's signup_risk_profiles row first, or the device and email-hash
+// rules cannot match.
+func recordAgentFlagsTx(ctx context.Context, q queryRower, registrationID string) error {
 	_, err := q.ExecContext(ctx, `INSERT INTO agent_flags(agent_user_id,registration_id,user_id,reason,minimum_seconds)
  SELECT a.user_id,r.id,r.user_id,rule.reason,rule.seconds
  FROM promotion_registrations r JOIN promotion_invites i ON i.id=r.invite_id AND i.kind='agent'

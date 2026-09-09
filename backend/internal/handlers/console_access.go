@@ -115,6 +115,21 @@ func (h *AdminHandler) HandleConsoleAccess(w http.ResponseWriter, r *http.Reques
 	WriteJSON(w, access)
 }
 
+// acquisitionOperation maps the source, code and referral endpoints. Issuing
+// codes mints gift credit, so it needs the code permission even under a
+// campaign source, not merely the right to edit campaign copy.
+func acquisitionOperation(path string, mode func(view, write string) string) (string, bool) {
+	switch {
+	case strings.HasPrefix(path, "/api/admin/redeem-codes"):
+		return mode("codes.read", "codes.write"), true
+	case strings.HasPrefix(path, "/api/admin/promotions/") && strings.HasSuffix(path, "/codes"):
+		return mode("codes.read", "codes.write"), true
+	case strings.HasPrefix(path, "/api/admin/promotions") || path == "/api/admin/referrals":
+		return mode("promotions.read", "promotions.write"), true
+	}
+	return "", false
+}
+
 func consoleOperation(r *http.Request) string {
 	read := r.Method == http.MethodGet || r.Method == http.MethodHead
 	path := strings.TrimSuffix(r.URL.Path, "/")
@@ -123,6 +138,9 @@ func consoleOperation(r *http.Request) string {
 			return view
 		}
 		return write
+	}
+	if permission, ok := acquisitionOperation(path, mode); ok {
+		return permission
 	}
 	switch {
 	case strings.HasPrefix(path, "/api/agent/"):
@@ -133,10 +151,6 @@ func consoleOperation(r *http.Request) string {
 		return "dashboard.read"
 	case path == "/api/admin/audit":
 		return "audit.read"
-	case strings.HasPrefix(path, "/api/admin/redeem-codes"):
-		return mode("codes.read", "codes.write")
-	case strings.HasPrefix(path, "/api/admin/promotions") || path == "/api/admin/referrals":
-		return mode("promotions.read", "promotions.write")
 	case strings.HasPrefix(path, "/api/admin/announcements"):
 		return mode("announcements.read", "announcements.write")
 	case strings.HasPrefix(path, "/api/admin/signup-risk"):

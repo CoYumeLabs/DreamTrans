@@ -78,7 +78,7 @@ func (h *AdminHandler) HandleConsoleDashboard(w http.ResponseWriter, r *http.Req
 	args := []any{from, to, r.URL.Query().Get("channel"), pq.Array(consoleChannels(r)), grain}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	result := map[string]any{"from": from, "to_exclusive": to, "granularity": grain, "attribution": "redeemed_batch_then_registration_promotion", "financial": consolePermission(r, "finance.read"), "metrics_available": consolePermission(r, "metrics.read"), "export_allowed": consolePermission(r, "export")}
+	result := map[string]any{"from": from, "to_exclusive": to, "granularity": grain, "attribution": "single_source_first_wins", "financial": consolePermission(r, "finance.read"), "metrics_available": consolePermission(r, "metrics.read"), "export_allowed": consolePermission(r, "export")}
 	sections := map[string]string{
 		"activity": `SELECT date_trunc($5,created_at AT TIME ZONE 'UTC') AS period,COUNT(DISTINCT user_id) AS active_users,COALESCE(SUM(quantity) FILTER(WHERE action='transcription'),0)/60 AS hours FROM usage GROUP BY 1 ORDER BY 1`,
 		"funnel": `SELECT s.channel,COUNT(*) AS registered,COUNT(*) FILTER(WHERE attributed_at IS NOT NULL AND attributed_at<$2) AS attributed,

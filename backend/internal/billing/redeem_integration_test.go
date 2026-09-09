@@ -322,3 +322,26 @@ func TestAgentLinkSignupAttributesAndGiftsNeverStack(t *testing.T) {
 		t.Fatalf("second gift accepted: %v", err)
 	}
 }
+
+// A source's registration cap binds code claims like link sign-ups.
+func TestRedeemGiftHonoursTheSourceCap(t *testing.T) {
+	s := newIntegrationService(t, integrationDB(t))
+	owner := createIntegrationUser(t, s.db, "cap-owner")
+	first := createIntegrationUser(t, s.db, "cap-first")
+	second := createIntegrationUser(t, s.db, "cap-second")
+	verifyGiftUser(t, s, first)
+	verifyGiftUser(t, s, second)
+	codeA := testGiftCode(t, s, owner, "")
+	codeB := testGiftCode(t, s, owner, "")
+	// Both codes live on their own one-slot sources; move B under A's source
+	// so the second claim hits the cap rather than a fresh source.
+	if _, err := s.db.ExecContext(t.Context(), `UPDATE redeem_codes SET invite_id=(SELECT invite_id FROM redeem_codes WHERE code=$1) WHERE code=$2`, strings.ReplaceAll(strings.ToUpper(codeA), "-", ""), strings.ReplaceAll(strings.ToUpper(codeB), "-", "")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RedeemGift(t.Context(), first.userID, codeA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RedeemGift(t.Context(), second.userID, codeB); err == nil || !strings.Contains(err.Error(), "名额已满") {
+		t.Fatalf("claim past the source cap: %v", err)
+	}
+}

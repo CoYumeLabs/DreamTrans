@@ -194,6 +194,11 @@ func (s *PostgresStore) CreateUserWithAttribution(ctx context.Context, user *mod
 	if _, err := tx.ExecContext(ctx, `UPDATE users SET billing_account_id = $1 WHERE id = $2`, accountID, user.ID); err != nil {
 		return err
 	}
+	// The risk profile must exist before attribution: agent fraud rules
+	// compare the new account's device and email hashes with the agent's.
+	if err := risk.RecordTx(ctx, tx, user.ID, signals, assessment); err != nil {
+		return err
+	}
 	if invite != nil {
 		if err := recordPromotionTx(ctx, tx, invite.ID, user); err != nil {
 			return err
@@ -204,9 +209,6 @@ func (s *PostgresStore) CreateUserWithAttribution(ctx context.Context, user *mod
 		if _, err := acquisition.AttributeTx(ctx, tx, referral.ID, user.ID, user.Email, ""); err != nil && !errors.Is(err, acquisition.ErrAlreadyAttributed) {
 			return err
 		}
-	}
-	if err := risk.RecordTx(ctx, tx, user.ID, signals, assessment); err != nil {
-		return err
 	}
 	return tx.Commit()
 }

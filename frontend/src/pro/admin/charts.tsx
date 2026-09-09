@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { niceTicks, number, slotColor, type Row, type Series } from './chartUtils'
 
-export type { Row, Series } from './chartUtils'
 
 /*
  * Small chart kit for the console. Colors are CSS custom properties defined in
@@ -213,7 +212,7 @@ export function LineChart({ rows, series, xKey, xLabel, format, title, height = 
   )
 }
 
-export interface BarItem { key: string; label: ReactNode; value: number; display?: string; color?: string; note?: string }
+export interface BarItem { key: string; label: ReactNode; value: number; display?: string; color?: string }
 
 /** Horizontal bars with the label on the left and the value at the tip. Negative values grow left from a shared zero. */
 export function BarList({ items, format, max: forcedMax }: { items: BarItem[]; format: (value: number) => string; max?: number }) {
@@ -227,7 +226,7 @@ export function BarList({ items, format, max: forcedMax }: { items: BarItem[]; f
       {items.map(item => {
         const widthPercent = (Math.abs(item.value) / span) * 100
         return (
-          <div className="viz-bars__row" key={item.key} title={item.note}>
+          <div className="viz-bars__row" key={item.key}>
             <span className="viz-bars__label">{item.label}</span>
             <span className="viz-bars__track">
               <i

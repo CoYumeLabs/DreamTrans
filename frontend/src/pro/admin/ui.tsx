@@ -74,17 +74,20 @@ export function Metric({
   value,
   loading,
   hint,
+  children,
 }: {
   label: string
   value: ReactNode
   loading?: boolean
   hint?: ReactNode
+  children?: ReactNode
 }) {
   return (
-    <article className="pa-card pa-metric">
+    <article className={`pa-card pa-metric${children ? ' pa-kpi' : ''}`}>
       <small>{label}</small>
       {loading ? <span className="pa-skeleton pa-skeleton--value" /> : <strong>{value}</strong>}
       {hint && <p>{hint}</p>}
+      {children}
     </article>
   )
 }

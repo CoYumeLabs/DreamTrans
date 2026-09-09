@@ -63,8 +63,10 @@ func (h *AdminHandler) HandlePromotions(w http.ResponseWriter, r *http.Request) 
 	switch r.Method {
 	case http.MethodGet:
 		page, size := promotionPagination(r)
+		// Referral sources carry their owners' names and are listed through
+		// /api/admin/referrals only.
 		kinds := []string{acquisition.KindCampaign, acquisition.KindAgent}
-		if kind := strings.TrimSpace(r.URL.Query().Get("kind")); kind != "" {
+		if kind := strings.TrimSpace(r.URL.Query().Get("kind")); kind == acquisition.KindCampaign || kind == acquisition.KindAgent {
 			kinds = []string{kind}
 		}
 		items, total, err := h.store.ListPromotions(r.Context(), kinds, size, (page-1)*size, strings.TrimSpace(r.URL.Query().Get("search")))
@@ -241,7 +243,7 @@ func publicPromotionOffer(offer *store.PromotionInvite) map[string]any {
 		remaining = 0
 	}
 	return map[string]any{
-		"kind": "promotion", "source_kind": offer.Kind, "name": offer.Name, "headline": offer.Headline, "description": offer.Description,
+		"kind": "promotion", "name": offer.Name, "headline": offer.Headline, "description": offer.Description,
 		"grant_usd": offer.GrantUSD, "grant_days": offer.GrantDays, "plan_code": offer.PlanCode, "plan_days": offer.PlanDays,
 		"usage_discount_percent": offer.UsageDiscountPercent, "discount_days": offer.DiscountDays,
 		"topup_bonus_percent": offer.TopupBonusPercent, "topup_bonus_days": offer.TopupBonusDays,

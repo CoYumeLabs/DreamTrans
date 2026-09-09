@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { adminFetch } from '../../admin/api'
-import { ErrorBanner } from './ui'
+import { ErrorBanner, Metric } from './ui'
 import { downloadConsoleCSV } from './csv'
 import { BarList, ColumnChart, Heatmap, Legend, LineChart, Sparkline } from './charts'
 import { formatCompact, formatPercent, formatUsd, number, ordinalColor, periodLabel, type Row, type Series } from './chartUtils'
 
-interface Credit { configured: boolean; starting_usd: number; remaining_usd?: number; days_remaining: number | null; route: string; started_at: string; daily_usd?: number }
+interface Credit { configured: boolean; starting_usd: number; remaining_usd?: number; days_remaining: number | null; route: string; started_at: string }
 interface Dashboard { financial: boolean; metrics_available: boolean; export_allowed: boolean; credit?: Credit; [key: string]: unknown }
 
-const labels: Record<string, string> = { period: '时间', channel: '渠道', registered: '注册', attributed: '来源归因', source: '来源', first_session: '首场会话', one_hour: '用满一小时', first_topup: '首充', second_topup: '二充', hours: '小时', users: '用户', active_users: '活跃用户', route: '路由', funding: '资金', tenant_kind: '组织类型', bucket: '小时区间', user_weeks: '用户周', week: '周', eligible: '可观察人数', retained: '留存人数', batch_id: '批次', plan: '会员', samples: '样本数', sessions: '会话数', final_segments: '定稿段数', edited_segments: '修改段数', edits: '修改次数', language: '目标语言', source_language: '源语言', model: '模型', kind: '类型', payments: '笔数', input_tokens: '输入 token', output_tokens: '输出 token', pending_fees: '待补手续费', topup_usd: '充值 USD', membership_usd: '会员 USD', refund_usd: '退款 USD', known_fee_usd: '已知手续费 USD', consumed_usd: '消耗 USD', gift_usd: '赠送消耗 USD', paid_consumed_usd: '付费消耗 USD', upstream_usd: '上游成本 USD', paid_usage_margin_usd: '用量毛利 USD', margin_per_hour_usd: '每小时毛利 USD', revenue_usd: '收入 USD', tier_usd: '档位 USD', wallet_usd: '钱包 USD', grants_usd: '未用额度 USD', median_session_p50_ms: '会话 p50 中位数 ms', p90_session_p90_ms: '会话 p90 的 p90 ms' }
+const labels: Record<string, string> = { period: '时间', channel: '渠道', registered: '注册', attributed: '来源归因', source: '来源', first_session: '首场会话', one_hour: '用满一小时', first_topup: '首充', second_topup: '二充', hours: '小时', users: '用户', active_users: '活跃用户', route: '路由', funding: '资金', tenant_kind: '组织类型', bucket: '小时区间', user_weeks: '用户周', week: '周', eligible: '可观察人数', retained: '留存人数', plan: '会员', samples: '样本数', sessions: '会话数', final_segments: '定稿段数', edited_segments: '修改段数', edits: '修改次数', language: '目标语言', source_language: '源语言', model: '模型', kind: '类型', payments: '笔数', input_tokens: '输入 token', output_tokens: '输出 token', pending_fees: '待补手续费', topup_usd: '充值 USD', membership_usd: '会员 USD', refund_usd: '退款 USD', known_fee_usd: '已知手续费 USD', consumed_usd: '消耗 USD', gift_usd: '赠送消耗 USD', paid_consumed_usd: '付费消耗 USD', upstream_usd: '上游成本 USD', paid_usage_margin_usd: '用量毛利 USD', margin_per_hour_usd: '每小时毛利 USD', revenue_usd: '收入 USD', tier_usd: '档位 USD', wallet_usd: '钱包 USD', grants_usd: '未用额度 USD', median_session_p50_ms: '会话 p50 中位数 ms', p90_session_p90_ms: '会话 p90 的 p90 ms' }
 const routeLabel: Record<string, string> = { training: '训练', standard: '不训练', unknown: '未知' }
 const fundingLabel: Record<string, string> = { gift: '赠送', paid: '付费', unknown: '未知' }
 const planLabel: Record<string, string> = { free: 'Free', pro: 'Pro', unknown: '未知' }
@@ -28,17 +28,6 @@ const display = (value: unknown) => value == null ? '—' : typeof value === 'nu
 const text = (value: unknown) => value == null ? '' : String(value)
 const isoDate = (offsetDays: number) => new Date(Date.now() + offsetDays * 86400000).toISOString().slice(0, 10)
 const sum = (rows: Row[], field: string) => rows.reduce((value, row) => value + number(row[field]), 0)
-
-function Kpi({ label, value, hint, children }: { label: string; value: string; hint?: string; children?: ReactNode }) {
-  return (
-    <article className="pa-card pa-metric pa-kpi">
-      <small>{label}</small>
-      <strong>{value}</strong>
-      {hint && <p>{hint}</p>}
-      {children}
-    </article>
-  )
-}
 
 function Section({ title, description, rows, exportName, exportAllowed, children }: { title: string; description: string; rows: Row[]; exportName: string; exportAllowed: boolean; children: ReactNode }) {
   const keys = [...new Set(rows.flatMap(row => Object.keys(row)))]
@@ -154,19 +143,19 @@ export function DashboardPage() {
       {data && (
         <div className={`pa-stack${busy ? ' is-refreshing' : ''}`}>
           <div className="pa-dashboard-kpis">
-            <Kpi label="活跃用户" value={display(activity.at(-1)?.active_users)} hint="最后一个有用量的周期">
+            <Metric label="活跃用户" value={display(activity.at(-1)?.active_users)} hint="最后一个有用量的周期">
               <Sparkline values={activity.map(row => number(row.active_users))} />
-            </Kpi>
-            <Kpi label="转录小时" value={formatCompact(sum(activity, 'hours'))} hint="所选期间合计">
+            </Metric>
+            <Metric label="转录小时" value={formatCompact(sum(activity, 'hours'))} hint="所选期间合计">
               <Sparkline values={activity.map(row => number(row.hours))} />
-            </Kpi>
+            </Metric>
             {data.financial && (
-              <Kpi label="实收收入" value={formatUsd(sum(finance, 'topup_usd') + sum(finance, 'membership_usd') + sum(finance, 'refund_usd'))} hint="所选期间，已扣退款；手续费另列">
+              <Metric label="实收收入" value={formatUsd(sum(finance, 'topup_usd') + sum(finance, 'membership_usd') + sum(finance, 'refund_usd'))} hint="所选期间，已扣退款；手续费另列">
                 <Sparkline values={finance.map(row => number(row.topup_usd) + number(row.membership_usd) + number(row.refund_usd))} />
-              </Kpi>
+              </Metric>
             )}
             {credit && (
-              <Kpi
+              <Metric
                 label="Speechmatics 额度"
                 value={credit.configured ? formatUsd(credit.remaining_usd ?? 0) : '待配置'}
                 hint={credit.configured ? `预计剩余 ${credit.days_remaining == null ? '—' : display(credit.days_remaining)} 天 · ${routeLabel[credit.route] ?? credit.route}账户` : '在分流与额度页填写起算余额'}
@@ -176,10 +165,10 @@ export function DashboardPage() {
                     <i style={{ width: `${creditRatio * 100}%` }} />
                   </span>
                 )}
-              </Kpi>
+              </Metric>
             )}
             {liabilities && (
-              <Kpi label="用户余额负债" value={formatUsd(number(liabilities.wallet_usd) + number(liabilities.grants_usd))} hint={`钱包 ${formatUsd(number(liabilities.wallet_usd))} · 未过期赠送 ${formatUsd(number(liabilities.grants_usd))}`} />
+              <Metric label="用户余额负债" value={formatUsd(number(liabilities.wallet_usd) + number(liabilities.grants_usd))} hint={`钱包 ${formatUsd(number(liabilities.wallet_usd))} · 未过期赠送 ${formatUsd(number(liabilities.grants_usd))}`} />
             )}
           </div>
 
@@ -197,7 +186,7 @@ export function DashboardPage() {
           )}
 
           {has('funnel') && (
-            <Section title="渠道转化漏斗" description="所选期间注册的用户，截至结束日的转化；兑换批次优先归因，其次注册推广渠道。未领码的充值用户也会计入充值阶段。" rows={funnel} exportName={`funnel-${from}-${to}.csv`} exportAllowed={exportAllowed}>
+            <Section title="渠道转化漏斗" description="所选期间注册的用户，截至结束日的转化。一个账户只归因一个来源，以最先记录的为准；未归因的计入 organic。" rows={funnel} exportName={`funnel-${from}-${to}.csv`} exportAllowed={exportAllowed}>
               {funnelChannels.length === 0 ? <p className="pa-chart-empty">所选范围内暂无数据</p> : (
                 <>
                   <div className="viz-grid">
@@ -229,7 +218,7 @@ export function DashboardPage() {
           {has('retention') && (
             <Section title="来源留存" description="按来源统计归因后第 1 / 2 / 4 周仍有转录用量的账户占比；只计入已完整经过该周的用户。" rows={retention} exportName={`retention-${from}-${to}.csv`} exportAllowed={exportAllowed}>
               <Heatmap
-                caption="兑换批次留存率"
+                caption="来源留存率"
                 rowLabels={retentionBatches.map(batch => `${batch || '—'} · ${text(retention.find(row => text(row.source) === batch)?.channel)}`)}
                 colLabels={retentionWeeks.map(week => `第 ${week} 周`)}
                 values={retentionBatches.map(batch => retentionWeeks.map(week => {

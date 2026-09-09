@@ -722,8 +722,8 @@ input:disabled, select:disabled { color: var(--yf-muted); background: var(--yf-w
 /* Chart palette. Categorical slots 1-4 and the indigo ordinal ramp were validated
    for CVD separation and contrast against the white card; keep the order. */
 .pa-shell {
-  --viz-1: #2b2fd8; --viz-2: #eb6834; --viz-3: #1baf7a; --viz-4: #eda100;
-  --viz-ord-1: #a3a6f1; --viz-ord-2: #7c80ea; --viz-ord-3: #585ce0; --viz-ord-4: #2b2fd8; --viz-ord-5: #1e21a8; --viz-ord-6: #141670;
+  --viz-1: var(--yf-accent); --viz-2: #eb6834; --viz-3: #1baf7a; --viz-4: #eda100;
+  --viz-ord-1: #a3a6f1; --viz-ord-2: #7c80ea; --viz-ord-3: #585ce0; --viz-ord-4: var(--yf-accent); --viz-ord-5: #1e21a8; --viz-ord-6: #141670;
   --viz-neg: #d03b3b; --viz-dim: #c9cfda; --viz-grid: #eceff3; --viz-axis: #d5d9e0; --viz-tick: #737d8c; --viz-track: #eef0fe;
 }
 .viz { position: relative; width: 100%; min-width: 0; }

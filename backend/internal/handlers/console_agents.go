@@ -276,7 +276,7 @@ func (h *AdminHandler) HandleAgentCodes(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Agent source unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	if codes, err := existingCodesTx(r.Context(), tx, agentID, input.RequestID); err != nil {
+	if codes, err := existingCodesTx(r.Context(), tx, agentID, input.RequestID, inviteID); err != nil {
 		http.Error(w, "Database unavailable", http.StatusServiceUnavailable)
 		return
 	} else if len(codes) > 0 {

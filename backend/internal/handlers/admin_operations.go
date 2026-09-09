@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -84,29 +85,38 @@ func (h *AdminHandler) createRedeemCodes(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
-	if codes, err := existingCodesTx(r.Context(), tx, claims.UserID, input.RequestID); err != nil {
+	tags, _ := json.Marshal(input.Tags)
+	if input.Tags == nil {
+		tags = []byte("[]")
+	}
+	if codes, err := existingCodesTx(r.Context(), tx, claims.UserID, input.RequestID, ""); err != nil {
 		http.Error(w, "Database unavailable", http.StatusServiceUnavailable)
 		return
 	} else if len(codes) > 0 {
+		// A replayed request returns the original batch only when every term
+		// still matches; otherwise the caller must use a new request id.
 		var invite string
-		var amount float64
-		var channel string
-		if err := tx.QueryRowContext(r.Context(), `SELECT i.id,i.grant_usd,i.channel FROM redeem_codes c JOIN promotion_invites i ON i.id=c.invite_id WHERE c.created_by=$1 AND c.client_request_id=$2 LIMIT 1`, claims.UserID, input.RequestID).Scan(&invite, &amount, &channel); err != nil || amount != input.Amount || channel != input.Channel || len(codes) != input.Quantity {
+		if err := tx.QueryRowContext(r.Context(), `SELECT i.id FROM redeem_codes c JOIN promotion_invites i ON i.id=c.invite_id
+ WHERE c.created_by=$1 AND c.client_request_id=$2 AND i.grant_usd=$3 AND i.grant_days=$4 AND i.channel=$5 AND i.tags=$6::jsonb AND i.expires_at=$7 AND i.max_registrations=$8 LIMIT 1`,
+			claims.UserID, input.RequestID, input.Amount, input.Days, input.Channel, tags, input.Expires, input.Quantity).Scan(&invite); err != nil || len(codes) != input.Quantity {
 			http.Error(w, `{"error":"重复请求的参数已改变，请使用新的请求标识"}`, http.StatusConflict)
 			return
 		}
 		WriteJSON(w, map[string]any{"batch_id": input.RequestID, "invite_id": invite, "codes": codes})
 		return
 	}
-	tags, _ := json.Marshal(input.Tags)
-	if input.Tags == nil {
-		tags = []byte("[]")
-	}
 	var inviteID string
 	name := input.Channel + " 兑换码 " + time.Now().UTC().Format("2006-01-02")
 	err = tx.QueryRowContext(r.Context(), `INSERT INTO promotion_invites(code,name,channel,tags,enabled,expires_at,max_registrations,grant_usd,grant_days,plan_days,created_by,kind,claim_mode)
  VALUES('RB-'||upper(replace($1,'-','')),LEFT($2,100),$3,$4,TRUE,$5,$6,$7,$8,30,$9,'campaign','code') RETURNING id`,
 		input.RequestID, name, input.Channel, tags, input.Expires, input.Quantity, input.Amount, input.Days, claims.UserID).Scan(&inviteID)
+	var pgErr *pq.Error
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		// The request id is embedded in the source code, so a different
+		// administrator reusing it is a conflict, not an outage.
+		http.Error(w, `{"error":"该请求标识已被使用，请使用新的请求标识"}`, http.StatusConflict)
+		return
+	}
 	if err != nil {
 		http.Error(w, "Failed to create code source", http.StatusServiceUnavailable)
 		return
@@ -147,7 +157,7 @@ func (h *AdminHandler) issueCodes(w http.ResponseWriter, r *http.Request, invite
 		http.Error(w, `{"error":"该来源不能发放兑换码"}`, http.StatusConflict)
 		return
 	}
-	if codes, err := existingCodesTx(r.Context(), tx, claims.UserID, requestID); err != nil {
+	if codes, err := existingCodesTx(r.Context(), tx, claims.UserID, requestID, inviteID); err != nil {
 		http.Error(w, "Database unavailable", http.StatusServiceUnavailable)
 		return
 	} else if len(codes) > 0 {
@@ -162,8 +172,10 @@ func (h *AdminHandler) issueCodes(w http.ResponseWriter, r *http.Request, invite
 	WriteJSON(w, map[string]any{"batch_id": requestID, "invite_id": inviteID, "codes": codes})
 }
 
-func existingCodesTx(ctx context.Context, tx *sql.Tx, createdBy, requestID string) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT code FROM redeem_codes WHERE created_by=$1 AND client_request_id=$2 ORDER BY code`, createdBy, requestID)
+// existingCodesTx returns the codes an earlier attempt with the same request
+// id already issued; with an invite id the match is scoped to that source.
+func existingCodesTx(ctx context.Context, tx *sql.Tx, createdBy, requestID, inviteID string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT code FROM redeem_codes WHERE created_by=$1 AND client_request_id=$2 AND ($3='' OR invite_id=$3::uuid) ORDER BY code`, createdBy, requestID, inviteID)
 	if err != nil {
 		return nil, err
 	}
@@ -428,6 +440,8 @@ func consoleConfirmation(r *http.Request, payload any) (string, bool) {
 		return "解除分成风控标记或放宽风控规则", true
 	case path == "/api/admin/promotions" && r.Method == http.MethodPost:
 		return "创建带赠送权益的推广活动", true
+	case strings.HasPrefix(path, "/api/admin/promotions/") && strings.HasSuffix(path, "/codes"):
+		return "生成可兑换的赠送额度", true
 	case strings.HasPrefix(path, "/api/admin/tenants/"):
 		return "修改组织的套餐或配额", true
 	case strings.HasPrefix(path, "/api/admin/models") || path == "/api/admin/settings":
@@ -495,7 +509,7 @@ func (h *AdminHandler) auditChannel(r *http.Request, payload any) string {
 			var channel string
 			switch parts[2] {
 			case "redeem-codes":
-				_ = h.store.DB().QueryRowContext(r.Context(), `SELECT b.channel FROM redeem_codes c JOIN redeem_batches b ON b.id=c.batch_id WHERE c.id=$1`, id).Scan(&channel)
+				_ = h.store.DB().QueryRowContext(r.Context(), `SELECT i.channel FROM redeem_codes c JOIN promotion_invites i ON i.id=c.invite_id WHERE c.id=$1`, id).Scan(&channel)
 			case "promotions":
 				_ = h.store.DB().QueryRowContext(r.Context(), `SELECT channel FROM promotion_invites WHERE id=$1`, id).Scan(&channel)
 			}

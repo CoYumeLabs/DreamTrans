@@ -70,11 +70,6 @@ func (h *AdminHandler) HandleConsoleRouting(w http.ResponseWriter, r *http.Reque
 			return
 		}
 	}
-	if r.Header.Get("X-Admin-Confirm") != "true" {
-		w.WriteHeader(http.StatusPreconditionRequired)
-		WriteJSON(w, map[string]string{"code": "confirmation_required", "error": "请确认上游额度与起算日期"})
-		return
-	}
 	started, _ := json.Marshal(*input.StartedAt)
 	route, _ := json.Marshal(input.Route)
 	actor := auth.GetUserID(r.Context())

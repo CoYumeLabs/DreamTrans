@@ -10,7 +10,7 @@ export function StudyReviewCard({ item }: { item: StudyHistoryItem }) {
       <header>
         <strong>{item.skill_label}</strong>
         <time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString(intlLocale())}</time>
-        <span>{item.grade ?? p.seen}{item.grade ? ` · ${item.xp} XP` : ''}</span>
+        <span>{item.grade || p.seen}{item.grade ? ` · ${item.xp} XP` : ''}</span>
       </header>
       {scenario ? <>
         <p>{scenario.situation}</p>

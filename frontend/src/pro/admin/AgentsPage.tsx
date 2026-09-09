@@ -5,15 +5,15 @@ import { ErrorBanner, Metric } from './ui'
 
 interface Profile { user_id: string; email?: string; commission_percent: number; settle_threshold_usd: number; daily_code_limit: number; code_value_usd: number; grant_days: number; channel: string; status: string; source_code?: string; source_id?: string }
 interface Settlement { id: string; agent_user_id?: string; email?: string; amount_usd: number; method: string; status: string; requested_at: string; review_note: string; payment_reference: string }
-interface Flag { id: string; code_id: string; reason: string; blocking?: boolean; dismissed_at: string | null; review_note: string; email?: string; minimum_seconds: number }
+interface Flag { id: string; registration_id: string; reason: string; blocking?: boolean; dismissed_at: string | null; review_note: string; email?: string; minimum_seconds: number }
 interface Code { id: string; code: string; face_value_usd: number; channel: string; expires_at: string; redeemed_at: string | null; voided_at: string | null }
-interface Balance { earned_usd: number; eligible_usd: number; reserved_usd: number; paid_usd: number; available_usd: number }
+interface Balance { earned_usd: number; reserved_usd: number; paid_usd: number; available_usd: number }
 interface Rules { check_email: boolean; check_device: boolean; minimum_usage_seconds: number }
 interface Summary { registered: number; via_code?: number; visits?: number; first_topup: number; revenue_12_month_usd: number; hours: number }
 interface AgentPortal { profile?: Profile[]; codes?: Code[]; settlements?: Settlement[]; flags?: Flag[]; balance?: Balance; summary?: Summary[]; retention?: { week: number; eligible: number; retained: number }[] }
 
 const blankProfile: Profile = { user_id: '', commission_percent: 10, settle_threshold_usd: 100, daily_code_limit: 100, code_value_usd: 10, grant_days: 30, channel: '', status: 'active' }
-const blankBalance: Balance = { earned_usd: 0, eligible_usd: 0, reserved_usd: 0, paid_usd: 0, available_usd: 0 }
+const blankBalance: Balance = { earned_usd: 0, reserved_usd: 0, paid_usd: 0, available_usd: 0 }
 const money = (amount: number | undefined) => `$${(amount ?? 0).toFixed(2)}`
 const isoDate = (offsetDays: number) => new Date(Date.now() + offsetDays * 86400000).toISOString().slice(0, 10)
 const stateLabel: Record<string, string> = { requested: '待审核', approved: '已通过', paid: '已结算', rejected: '已驳回' }
@@ -352,12 +352,12 @@ export function AgentsPage({ mode, writable = false, canReview = false, canPay =
         </div>
         <div className="pa-table-wrap">
           <table className="pa-table">
-            <thead><tr><th>兑换码 ID</th><th>原因</th><th>状态 / 说明</th><th>操作</th></tr></thead>
+            <thead><tr><th>归因账户</th><th>原因</th><th>状态 / 说明</th><th>操作</th></tr></thead>
             <tbody>
               {flags.length === 0 && <EmptyRow columns={4} text="没有被标记的分成" />}
               {flags.map(flag => (
                 <tr key={flag.id}>
-                  <td><code>{flag.code_id}</code></td>
+                  <td>{flag.email || <code>{flag.registration_id}</code>}</td>
                   <td>{reasonLabel[flag.reason] ?? flag.reason}{flag.reason === 'minimum_usage' ? `（${flag.minimum_seconds} 秒）` : ''}</td>
                   <td>
                     {flag.dismissed_at ? '已人工解除' : flag.blocking === false ? '已达到条件' : '待满足条件或审核'}
