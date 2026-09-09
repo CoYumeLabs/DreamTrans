@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -235,6 +236,9 @@ func (h *AdminHandler) HandleAgentFraud(w http.ResponseWriter, r *http.Request) 
 	WriteJSON(w, map[string]bool{"success": true})
 }
 
+// agentCodeMaxDays caps how far ahead an agent may date a printed code.
+const agentCodeMaxDays = 90
+
 func (h *AdminHandler) HandleAgentCodes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -249,8 +253,9 @@ func (h *AdminHandler) HandleAgentCodes(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
-	if _, err := uuid.Parse(input.RequestID); err != nil || input.Quantity < 1 || input.Quantity > 1000 || !input.Expires.After(time.Now()) || input.Expires.After(time.Now().AddDate(10, 0, 0)) {
-		http.Error(w, "client_request_id must be a UUID, quantity 1–1000 and expires_at a future date", http.StatusBadRequest)
+	// Printed codes are short-lived: an agent may set at most agentCodeMaxDays.
+	if _, err := uuid.Parse(input.RequestID); err != nil || input.Quantity < 1 || input.Quantity > 1000 || !input.Expires.After(time.Now()) || input.Expires.After(time.Now().AddDate(0, 0, agentCodeMaxDays)) {
+		http.Error(w, `{"error":"数量须在 1–1000 之间，截止日须在今天之后、`+strconv.Itoa(agentCodeMaxDays)+` 天以内"}`, http.StatusBadRequest)
 		return
 	}
 	agentID := auth.GetUserID(r.Context())
@@ -272,7 +277,9 @@ func (h *AdminHandler) HandleAgentCodes(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var inviteID string
-	if err := tx.QueryRowContext(r.Context(), `SELECT id FROM promotion_invites WHERE owner_user_id=$1 AND kind='agent'`, agentID).Scan(&inviteID); err != nil {
+	// Lock the source too: link sign-ups serialize on it, so the shared
+	// daily quota is counted consistently from both sides.
+	if err := tx.QueryRowContext(r.Context(), `SELECT id FROM promotion_invites WHERE owner_user_id=$1 AND kind='agent' FOR UPDATE`, agentID).Scan(&inviteID); err != nil {
 		http.Error(w, "Agent source unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -283,8 +290,8 @@ func (h *AdminHandler) HandleAgentCodes(w http.ResponseWriter, r *http.Request) 
 		WriteJSON(w, map[string]any{"batch_id": input.RequestID, "invite_id": inviteID, "codes": codes})
 		return
 	}
-	var used int
-	if err := tx.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM redeem_codes WHERE created_by=$1 AND created_at>=date_trunc('day',NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`, agentID).Scan(&used); err != nil {
+	used, _, err := acquisition.AgentDailyUsageTx(r.Context(), tx, agentID, inviteID)
+	if err != nil {
 		http.Error(w, "Quota unavailable", http.StatusServiceUnavailable)
 		return
 	}

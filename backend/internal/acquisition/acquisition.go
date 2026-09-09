@@ -95,7 +95,29 @@ func reserveSource(ctx context.Context, q queryRower, where, value string, requi
 	if !s.Enabled || !s.ExpiresAt.After(time.Now()) || s.Registrations >= s.MaxRegistrations || (requireLink && s.ClaimMode != ClaimLink) {
 		return nil, ErrInvalidSource
 	}
+	if requireLink && s.Kind == KindAgent {
+		// An agent's link shares the administrator's daily quota with the
+		// codes the agent prints, so a link cannot hand out unlimited gifts.
+		used, limit, err := AgentDailyUsageTx(ctx, q, s.OwnerUserID, s.ID)
+		if err != nil {
+			return nil, err
+		}
+		if used >= limit {
+			return nil, ErrInvalidSource
+		}
+	}
 	return s, nil
+}
+
+// AgentDailyUsageTx returns how much of the agent's daily quota is spent
+// today (UTC): link sign-ups attributed to the agent's source plus codes the
+// agent issued. An inactive or missing profile has no quota.
+func AgentDailyUsageTx(ctx context.Context, q queryRower, agentUserID, sourceID string) (used, limit int, err error) {
+	err = q.QueryRowContext(ctx, `SELECT
+        (SELECT COUNT(*) FROM promotion_registrations r WHERE r.invite_id=$2 AND r.code_id IS NULL AND r.registered_at>=date_trunc('day',NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+        +(SELECT COUNT(*) FROM redeem_codes c WHERE c.created_by=$1 AND c.created_at>=date_trunc('day',NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'),
+        COALESCE((SELECT a.daily_code_limit FROM agent_profiles a WHERE a.user_id=$1 AND a.status='active'),0)`, agentUserID, sourceID).Scan(&used, &limit)
+	return used, limit, err
 }
 
 // AttributeTx records that the user came through the source, optionally via

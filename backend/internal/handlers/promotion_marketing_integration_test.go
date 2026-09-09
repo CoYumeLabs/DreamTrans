@@ -13,6 +13,7 @@ import (
 	"github.com/dreamtrans/backend/internal/auth"
 	"github.com/dreamtrans/backend/internal/billing"
 	"github.com/dreamtrans/backend/internal/store"
+	"github.com/google/uuid"
 )
 
 // createMarketingPromotion builds an invite that promises every reward kind.
@@ -394,5 +395,28 @@ func TestAgentLinkSignupIsAttributedGiftedAndScreened(t *testing.T) {
 	// The trial credit is separate; the source's own gift is exactly the agent's terms.
 	if count, total := promoGrantTotal(t, h, balance.AccountID); count != 1 || total < 3.99 || total > 4.01 {
 		t.Fatalf("agent link gift: count=%d total=%f", count, total)
+	}
+	// The link shares the agent's daily quota with printed codes: with a
+	// limit of one, today's link sign-up closes the link and blocks a code.
+	if _, err := db.ExecContext(t.Context(), `UPDATE agent_profiles SET daily_code_limit=1 WHERE user_id=$1`, agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	closed := httptest.NewRecorder()
+	h.HandlePromotionPreview(closed, httptest.NewRequest(http.MethodGet, "/api/auth/invite?code="+code, nil))
+	if closed.Code != http.StatusBadRequest {
+		t.Fatalf("link stayed open past the daily quota: %d %s", closed.Code, closed.Body.String())
+	}
+	lateEmail := uniqueEmail(t, "late")
+	cleanupUser(t, db, lateEmail)
+	if res := postJSON(t, h.HandleRegister, "/api/auth/register", map[string]any{"email": lateEmail, "password": "correct horse battery", "invite_code": code}); res.Code != http.StatusBadRequest {
+		t.Fatalf("sign-up past the daily quota: %d %s", res.Code, res.Body.String())
+	}
+	admin := &AdminHandler{store: h.store, billing: h.billing}
+	quota := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/codes", strings.NewReader(`{"client_request_id":"`+uuid.NewString()+`","quantity":1,"expires_at":"`+time.Now().Add(24*time.Hour).UTC().Format(time.RFC3339)+`"}`))
+	req = req.WithContext(context.WithValue(req.Context(), auth.UserClaimsKey, &auth.UserClaims{UserID: agent.ID, Role: "user"}))
+	admin.HandleAgentCodes(quota, req)
+	if quota.Code != http.StatusConflict {
+		t.Fatalf("code issued past the shared daily quota: %d %s", quota.Code, quota.Body.String())
 	}
 }

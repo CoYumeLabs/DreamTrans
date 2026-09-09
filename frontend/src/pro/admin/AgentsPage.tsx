@@ -148,7 +148,7 @@ export function AgentsPage({ mode, writable = false, canReview = false, canPay =
                 {profile.source_code && (
                   <div className="pa-subsection">
                     <h3>我的邀请链接</h3>
-                    <p className="pa-form-note">通过这个链接注册的用户会获得 {money(profile.code_value_usd)} 赠送额度（有效 {profile.grant_days} 天），与兑换码相同，并归因给你。落地页自带二维码和海报。</p>
+                    <p className="pa-form-note">通过这个链接注册的用户会获得 {money(profile.code_value_usd)} 赠送额度（有效 {profile.grant_days} 天），与兑换码相同，并归因给你。链接注册占用每日限额，当天满额后链接自动关闭、次日恢复。落地页自带二维码和海报。</p>
                     <div className="pa-toolbar">
                       <input aria-label="代理邀请链接" readOnly value={`${window.location.origin}/invite?code=${profile.source_code}`} onFocus={e => e.target.select()} />
                       <button className="pa-button" type="button" onClick={() => { void navigator.clipboard.writeText(`${window.location.origin}/invite?code=${profile.source_code}`); setNotice('链接已复制') }}>复制链接</button>
@@ -166,7 +166,7 @@ export function AgentsPage({ mode, writable = false, canReview = false, canPay =
                 <div className="pa-section__heading">
                   <div>
                     <h2>生成我的一次性兑换码</h2>
-                    <p>给没有通过链接注册的用户线下发码：每码 {money(profile.code_value_usd)}，兑换后有效 {profile.grant_days} 天，每日最多 {profile.daily_code_limit} 个。已经通过活动或推荐归因过的账户不能再兑换。客户价格、赠送额度使用规则及条款与普通客户一致。</p>
+                    <p>给没有通过链接注册的用户线下发码：每码 {money(profile.code_value_usd)}，兑换后有效 {profile.grant_days} 天，截止日最多 90 天。每日限额 {profile.daily_code_limit} 个由链接注册和发码合计占用，满额后当天链接关闭。已经通过活动或推荐归因过的账户不能再兑换。客户价格、赠送额度使用规则及条款与普通客户一致。</p>
                   </div>
                 </div>
                 <form
@@ -174,7 +174,7 @@ export function AgentsPage({ mode, writable = false, canReview = false, canPay =
                   onSubmit={e => { e.preventDefault(); void mutate('/api/agent/codes', 'POST', { client_request_id: requestId, quantity, expires_at: `${expiry}T23:59:59Z` }, result => { setGenerated((result as { codes?: string[] }).codes ?? []); setRequestId(crypto.randomUUID()) }) }}
                 >
                   <label><span>数量</span><input type="number" min="1" max="1000" value={quantity} onChange={e => setQuantity(Number(e.target.value))} required /></label>
-                  <label><span>兑换截止日（UTC）</span><input type="date" value={expiry} onChange={e => setExpiry(e.target.value)} required /></label>
+                  <label><span>兑换截止日（UTC，最多 90 天）</span><input type="date" max={isoDate(90)} value={expiry} onChange={e => setExpiry(e.target.value)} required /></label>
                   <button className="pa-button pa-button--primary" disabled={busy || profile.status !== 'active'} type="submit">生成</button>
                 </form>
                 {generated.length > 0 && (
