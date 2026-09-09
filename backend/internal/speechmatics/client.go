@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	realtimeAPIURL = "wss://eu2.rt.speechmatics.com/v2"
+	realtimeAPIURL = "wss://global.rt.speechmatics.com/v2"
 	// Message types from Speechmatics
 	msgRecognitionStarted   = "RecognitionStarted"
 	msgAddTranscript        = "AddTranscript"

@@ -1,6 +1,6 @@
 import type { Locale } from '../i18n'
 
-export const LEGAL_EFFECTIVE_DATE = '2026-09-06'
+export const LEGAL_EFFECTIVE_DATE = '2026-09-09'
 export const LEGAL_OPERATOR = 'Coyume Pty Ltd'
 export const LEGAL_PRODUCT = 'Yufolo'
 export const LEGAL_CONTACT_EMAIL = 'support@coyume.com'
@@ -93,7 +93,7 @@ const privacyZh: LegalDocument = {
         {
           type: 'ul',
           items: [
-            '实时音频会流经我们的服务器，转发至语音识别服务商（当前官方路径为 Speechmatics 位于欧洲的实时接口），以便生成文字并按转发的音频字节计费。',
+            '实时音频会流经我们的服务器，转发至语音识别服务商（当前官方路径为 Speechmatics 的全球实时接口，由其自动选择处理区域），以便生成文字并按转发的音频字节计费。',
             '我们不会把完整录音作为云端会话的一部分保存或同步。产品界面中的「音频保留在你的设备」指的是：Yufolo 云端存的是文字，不是可下载的云端音轨。',
             '本地录音是可选的，由你在设置中开启，仅存在这台浏览器里。清除站点数据、更换设备或卸载浏览器都会导致本地录音丢失，且无法从云端恢复。',
             '开始录音或上传前，你应向参与者说明音频将用于转录、所选功能以及第 6 节披露的供应商模型训练用途，并取得适用法律要求的同意、许可或其他合法依据。我们无法替你取得其他说话人的同意。',
@@ -137,7 +137,7 @@ const privacyZh: LegalDocument = {
         {
           type: 'ul',
           items: [
-            '语音识别服务商（官方路径为 Speechmatics）：实时或批量音频，以及为识别所需的语言等配置。当前实时接口位于欧洲。该服务商也可能将这些数据用于改进其自身模型，详见本节末尾。',
+            '语音识别服务商（官方路径为 Speechmatics）：实时或批量音频，以及为识别所需的语言等配置。实时音频经全球接口自动路由，可能在欧洲、美国、澳大利亚等其支持的区域处理，不限定于欧洲。该服务商也可能将这些数据用于改进其自身模型，详见本节末尾。',
             '大模型 / 翻译接口（由我们或部署运营方配置的 OpenAI 兼容服务）：你主动发送的文本、提示词、检索块和生成指令。Speechmatics 内置机器翻译如被选用，则会把相应文本交给该服务。',
             '支付服务商 Stripe：为结账、订阅、退款和税务处理必要的账户与交易信息。Stripe 在部分活动中按我们的指示处理数据，也会为反欺诈、安全和履行自身法律义务等目的作为独立控制者处理数据；相关活动适用 Stripe 的隐私政策及数据处理协议。',
             '邮件发送服务（Resend 或运营方配置的 SMTP）：邮箱地址和验证 / 通知内容。',
@@ -624,7 +624,7 @@ const privacyEn: LegalDocument = {
         {
           type: 'ul',
           items: [
-            'Live audio is streamed through our servers to the speech-recognition provider (the official path uses Speechmatics’ European real-time endpoint) so we can produce text and meter forwarded audio bytes.',
+            'Live audio is streamed through our servers to the speech-recognition provider (the official path uses Speechmatics’ global real-time endpoint, which automatically selects the processing region) so we can produce text and meter forwarded audio bytes.',
             'We do not store or sync the full recording as part of a cloud session. When the product says audio stays on your device, it means Yufolo’s cloud copy is text, not a downloadable cloud soundtrack.',
             'Local recordings are optional, enabled in settings, and exist only in that browser. Clearing site data, switching devices or removing the browser deletes them; they cannot be restored from the cloud.',
             'Before recording or uploading, explain to participants that audio will be processed for transcription, selected features and the provider model-training use disclosed in section 6, and obtain the consent, permissions or other lawful basis required by applicable law. We cannot obtain consent from other speakers for you.',
@@ -668,7 +668,7 @@ const privacyEn: LegalDocument = {
         {
           type: 'ul',
           items: [
-            'Speech-recognition provider (official path: Speechmatics): live or batch audio and recognition settings. The current real-time endpoint is in Europe. This provider may also use that data to improve its own models — see the end of this section.',
+            'Speech-recognition provider (official path: Speechmatics): live or batch audio and recognition settings. Live audio is automatically routed through the global endpoint and may be processed in Europe, the United States, Australia or other supported regions; processing is not restricted to Europe. This provider may also use that data to improve its own models — see the end of this section.',
             'Model / translation APIs (OpenAI-compatible services configured by us or the deployment operator): text, prompts, retrieved chunks and generation instructions you send. If you choose Speechmatics machine translation, that text is sent there instead.',
             'Stripe: account and transaction data needed for checkout, subscriptions, refunds and tax. Stripe processes some data on our instructions and also acts as an independent controller for activities such as fraud prevention, security and its own legal obligations. Those activities are described in its Privacy Policy and Data Processing Agreement.',
             'Email delivery (Resend or operator-configured SMTP): your address and verification or notice content.',

@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	speechmaticsRealtimeURL = "wss://eu2.rt.speechmatics.com/v2"
+	speechmaticsRealtimeURL = "wss://global.rt.speechmatics.com/v2"
 
 	// WebSocket connection parameters for robustness
 	writeWait      = 10 * time.Second // Time allowed to write a message
