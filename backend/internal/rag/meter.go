@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/dreamtrans/backend/internal/aiproviders"
 	"os"
 	"strings"
 )
@@ -173,11 +174,20 @@ func settleProviderUsage(
 	return nil
 }
 
+// embeddingModelName is the qualified id of the embedding model: the
+// configured model under the registry's embedding provider.
 func embeddingModelName() string {
-	if model := strings.TrimSpace(os.Getenv("OPENAI_EMBEDDING_MODEL")); model != "" {
-		return model
+	model := strings.TrimSpace(os.Getenv("OPENAI_EMBEDDING_MODEL"))
+	if model == "" {
+		model = "text-embedding-3-small"
 	}
-	return "text-embedding-3-small"
+	provider := aiproviders.Default
+	if registry, err := aiproviders.Current(); err == nil {
+		if p, err := registry.EmbeddingProvider(); err == nil {
+			provider = p.Name
+		}
+	}
+	return aiproviders.Qualify(provider, model)
 }
 
 // EmbeddingModelName returns the configured model used for semantic indexes.

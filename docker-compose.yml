@@ -70,6 +70,12 @@ services:
       # Optional: OpenAI API (for translation/chat)
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_API_BASE=${OPENAI_API_BASE:-https://api.openai.com/v1}
+      # Optional: more OpenAI-compatible providers (name=base_url;...), their
+      # keys (name=key;...), per-provider options and the embedding provider.
+      - AI_PROVIDERS=${AI_PROVIDERS:-}
+      - AI_PROVIDER_KEYS=${AI_PROVIDER_KEYS:-}
+      - AI_PROVIDER_OPTIONS=${AI_PROVIDER_OPTIONS:-}
+      - AI_EMBEDDING_PROVIDER=${AI_EMBEDDING_PROVIDER:-}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-5.6-sol}
       - OPENAI_EMBEDDING_MODEL=${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
       # Optional: Stripe payments (wallet top-ups and membership). Without a

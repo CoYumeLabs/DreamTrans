@@ -54,19 +54,21 @@ function isModelUnavailable(model: ProviderModel) {
     || status === 'stale'
 }
 
-function catalogSyncStatusCopy(catalog: ModelCatalog | null) {
-  if (catalog?.status === 'provider_confirmed') {
-    return { label: 'Provider 同步已确认', className: 'is-good' }
+function catalogSyncStatusCopy(state: { status?: string; last_error?: string } | null | undefined) {
+  if (state?.status === 'provider_confirmed') {
+    return { label: '同步已确认', className: 'is-good' }
   }
-  if (catalog?.status === 'builtin_unverified') {
+  if (state?.status === 'builtin_unverified') {
     return { label: '内置目录尚未验证', className: 'is-warn' }
   }
-  if (catalog?.status === 'temporarily_unavailable') {
-    return { label: 'Provider 暂时不可用', className: 'is-bad' }
+  if (state?.status === 'temporarily_unavailable') {
+    return { label: '暂时不可用', className: 'is-bad' }
   }
-  if (catalog?.last_error) return { label: '最近同步失败', className: 'is-bad' }
+  if (state?.last_error) return { label: '最近同步失败', className: 'is-bad' }
   return { label: '等待首次同步', className: 'is-muted' }
 }
+
+const modelKey = (model: ProviderModel) => model.qualified_id ?? model.model_id
 
 function costInputValue(value: number | null) {
   return value === null ? '' : String(value)
@@ -194,23 +196,29 @@ export function ModelsPage({ run, canPrice = true }: { run: Runner; canPrice?: b
     Number(costDraft.cacheWrite || 0),
     Number(costDraft.output || 0),
   ].some((value, index) => value !== (costDraft.original[index] ?? 0)) : false
-  const syncStatus = catalogSyncStatusCopy(catalog)
+  const providerStates = catalog?.providers?.length ? catalog.providers : catalog ? [catalog] : []
 
   return (
     <>
       <section className="pa-card pa-section">
         <div className="pa-section__heading">
-          <div><h2>Provider 模型目录</h2><p>自动同步状态会持久化；新模型默认不开放，缺少有效成本时不能审批。</p></div>
+          <div><h2>供应商模型目录</h2><p>每家供应商各自同步；非默认供应商的模型以「供应商::模型」标识。新模型默认不开放，缺少有效成本时不能审批。</p></div>
           <button className="pa-button pa-button--primary" disabled={refreshing} onClick={() => void refreshCatalog()} type="button">
             {refreshing ? '正在刷新…' : '立即刷新'}
           </button>
         </div>
-        <div className="pa-provider-status">
-          <span className={`pa-status ${syncStatus.className}`}>{syncStatus.label}</span>
-          <span>最近尝试：{formatDate(catalog?.last_attempt_at)}</span>
-          <span>最近成功：{formatDate(catalog?.last_success_at)}</span>
-          {catalog?.last_error && <span className="pa-provider-error">{catalog.last_error}</span>}
-        </div>
+        {providerStates.map((state) => {
+          const syncStatus = catalogSyncStatusCopy(state)
+          return (
+            <div className="pa-provider-status" key={state.provider}>
+              <strong>{state.provider}</strong>
+              <span className={`pa-status ${syncStatus.className}`}>{syncStatus.label}</span>
+              <span>最近尝试：{formatDate(state.last_attempt_at)}</span>
+              <span>最近成功：{formatDate(state.last_success_at)}</span>
+              {state.last_error && <span className="pa-provider-error">{state.last_error}</span>}
+            </div>
+          )
+        })}
         <div className="pa-table-wrap"><table>
           <thead><tr><th>模型</th><th>Provider</th><th>状态</th><th>允许用途</th></tr></thead>
           <tbody>
@@ -221,9 +229,9 @@ export function ModelsPage({ run, canPrice = true }: { run: Runner; canPrice?: b
               const unavailable = isModelUnavailable(model)
               const costConfirmed = model.policies.some((policy) => policy.cost_confirmed)
               return (
-                <tr key={model.model_id}>
+                <tr key={modelKey(model)}>
                   <td>
-                    <strong>{model.model_id}</strong>
+                    <strong>{modelKey(model)}</strong>
                     <small>{model.source} · {costConfirmed ? '有效成本已配置' : '缺少有效成本'}</small>
                   </td>
                   <td>{model.provider}</td>
@@ -242,7 +250,7 @@ export function ModelsPage({ run, canPrice = true }: { run: Runner; canPrice?: b
                           <button
                             className={approved ? 'is-approved' : ''}
                             disabled={unavailable || (!policy?.cost_confirmed && !approved)}
-                            onClick={() => void changePolicy(model.model_id, purpose, {
+                            onClick={() => void changePolicy(modelKey(model), purpose, {
                               is_approved: !approved,
                               is_default: approved ? false : policy?.is_default ?? false,
                             })}
@@ -255,7 +263,7 @@ export function ModelsPage({ run, canPrice = true }: { run: Runner; canPrice?: b
                             <button
                               className={policy?.is_default ? 'is-default' : ''}
                               disabled={unavailable}
-                              onClick={() => void changePolicy(model.model_id, purpose, { is_default: true })}
+                              onClick={() => void changePolicy(modelKey(model), purpose, { is_default: true })}
                               title={unavailable ? '模型当前不可用，不能设为默认' : ''}
                               type="button"
                             >{policy?.is_default ? '默认' : '设为默认'}</button>
@@ -280,7 +288,7 @@ export function ModelsPage({ run, canPrice = true }: { run: Runner; canPrice?: b
             </>
           )}
           onClose={() => setCostDraft(null)}
-          title={`模型成本 · ${costDraft.model.model_id}`}
+          title={`模型成本 · ${modelKey(costDraft.model)}`}
         >
           <div className="pa-dialog-form">
             <p className="pa-form-note">

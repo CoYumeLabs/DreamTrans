@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/dreamtrans/backend/internal/aiproviders"
 	"io"
 	"log"
 	"net/http"
@@ -65,8 +66,11 @@ type ModelPolicy struct {
 }
 
 type ProviderModel struct {
-	Provider           string        `json:"provider"`
-	ModelID            string        `json:"model_id"`
+	Provider string `json:"provider"`
+	ModelID  string `json:"model_id"`
+	// QualifiedID is the id policies, preferences and usage records carry:
+	// bare for the default provider, "provider::model" otherwise.
+	QualifiedID        string        `json:"qualified_id"`
 	Source             string        `json:"source"`
 	ProviderAvailable  bool          `json:"provider_available"`
 	AvailabilityStatus string        `json:"availability_status"`
@@ -75,14 +79,26 @@ type ProviderModel struct {
 	Policies           []ModelPolicy `json:"policies"`
 }
 
+// ProviderStatus is one endpoint's last sync outcome.
+type ProviderStatus struct {
+	Provider      string `json:"provider"`
+	Status        string `json:"status"`
+	LastSuccessAt string `json:"last_success_at,omitempty"`
+	LastAttemptAt string `json:"last_attempt_at,omitempty"`
+	LastError     string `json:"last_error,omitempty"`
+}
+
 type CatalogStatus struct {
-	Provider       string          `json:"provider"`
-	Status         string          `json:"status"`
-	Models         []ProviderModel `json:"models"`
-	LastSuccessAt  string          `json:"last_success_at,omitempty"`
-	LastAttemptAt  string          `json:"last_attempt_at,omitempty"`
-	LastError      string          `json:"last_error,omitempty"`
-	RefreshMinutes int             `json:"refresh_minutes"`
+	// Provider, Status, LastSuccessAt, LastAttemptAt and LastError describe
+	// the default provider for older clients; Providers lists every endpoint.
+	Provider       string           `json:"provider"`
+	Status         string           `json:"status"`
+	Models         []ProviderModel  `json:"models"`
+	LastSuccessAt  string           `json:"last_success_at,omitempty"`
+	LastAttemptAt  string           `json:"last_attempt_at,omitempty"`
+	LastError      string           `json:"last_error,omitempty"`
+	RefreshMinutes int              `json:"refresh_minutes"`
+	Providers      []ProviderStatus `json:"providers"`
 }
 
 type AvailableModel struct {
@@ -251,15 +267,15 @@ func restoreBuiltinPolicyFallbacksTx(
 			    SELECT 1
 			    FROM model_policies policies
 			    JOIN provider_models models
-			      ON models.provider = $1
-			     AND models.model_id = policies.model_id
+			      ON models.provider = model_provider(policies.model_id)
+			     AND models.model_id = model_sku(policies.model_id)
 			     AND models.provider_available = TRUE
 			    WHERE policies.purpose = $2
 			      AND policies.is_approved = TRUE
 			      AND EXISTS (
 			        SELECT 1 FROM provider_cost_rates costs
-			        WHERE costs.provider = $1
-			          AND costs.sku = policies.model_id
+			        WHERE costs.provider = model_provider(policies.model_id)
+			          AND costs.sku = model_sku(policies.model_id)
 			          AND costs.service = $4
 			          AND costs.unit_type = 'input_token'
 			          AND costs.is_active = TRUE
@@ -267,8 +283,8 @@ func restoreBuiltinPolicyFallbacksTx(
 			      AND (
 			        $2 = 'embedding' OR EXISTS (
 			          SELECT 1 FROM provider_cost_rates costs
-			          WHERE costs.provider = $1
-			            AND costs.sku = policies.model_id
+			          WHERE costs.provider = model_provider(policies.model_id)
+			            AND costs.sku = model_sku(policies.model_id)
 			            AND costs.service = $4
 			            AND costs.unit_type = 'output_token'
 			            AND costs.is_active = TRUE
@@ -410,6 +426,27 @@ func (s *Service) RefreshByActor(ctx context.Context, actorID string) error {
 	return s.refresh(ctx, actorID)
 }
 
+// endpoint is one /models source: the default OPENAI_* endpoint (kept on the
+// service so tests can point it at a stub) plus every registered provider.
+type endpoint struct {
+	Name, BaseURL, APIKey string
+}
+
+func (s *Service) endpoints() []endpoint {
+	list := []endpoint{{Name: ProviderName, BaseURL: s.baseURL, APIKey: s.apiKey}}
+	if registry, err := aiproviders.Current(); err == nil {
+		for _, name := range registry.Names() {
+			if name == aiproviders.Default {
+				continue
+			}
+			if p, ok := registry.Get(name); ok {
+				list = append(list, endpoint{Name: p.Name, BaseURL: p.BaseURL, APIKey: p.APIKey})
+			}
+		}
+	}
+	return list
+}
+
 func (s *Service) refresh(ctx context.Context, actorID string) error {
 	// Background and administrator-triggered refreshes share one service.
 	// Serialize the complete attempt so an older, slower provider response can
@@ -418,50 +455,59 @@ func (s *Service) refresh(ctx context.Context, actorID string) error {
 	defer s.refreshMu.Unlock()
 
 	attemptedAt := time.Now().UTC()
-	if err := s.recordRefreshAttempt(ctx, attemptedAt); err != nil {
+	var errs []error
+	for _, endpoint := range s.endpoints() {
+		if err := s.refreshEndpoint(ctx, endpoint, attemptedAt, actorID); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", endpoint.Name, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (s *Service) refreshEndpoint(ctx context.Context, endpoint endpoint, attemptedAt time.Time, actorID string) error {
+	if err := s.recordRefreshAttempt(ctx, endpoint.Name, attemptedAt); err != nil {
 		return fmt.Errorf("persist model refresh attempt: %w", err)
 	}
-	if s.apiKey == "" {
+	if endpoint.APIKey == "" {
 		err := providerUnavailable(fmt.Errorf("OPENAI_API_KEY is not configured"))
-		s.recordRefreshError(attemptedAt, err)
+		s.recordRefreshError(endpoint.Name, attemptedAt, err)
 		return err
 	}
-	endpoint, err := modelsEndpoint(s.baseURL)
+	models, err := s.fetchModels(ctx, endpoint)
 	if err != nil {
-		s.recordRefreshError(attemptedAt, err)
+		s.recordRefreshError(endpoint.Name, attemptedAt, err)
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
+	return s.storeModels(ctx, endpoint.Name, models, attemptedAt, actorID)
+}
+
+func (s *Service) fetchModels(ctx context.Context, endpoint endpoint) ([]string, error) {
+	target, err := modelsEndpoint(endpoint.BaseURL)
 	if err != nil {
-		s.recordRefreshError(attemptedAt, err)
-		return err
+		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+s.apiKey)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+endpoint.APIKey)
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		err = providerUnavailable(err)
-		s.recordRefreshError(attemptedAt, err)
-		return err
+		return nil, providerUnavailable(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxModelsBytes+1))
 	if err != nil {
-		err = providerUnavailable(err)
-		s.recordRefreshError(attemptedAt, err)
-		return err
+		return nil, providerUnavailable(err)
 	}
 	if len(body) > maxModelsBytes {
-		err = providerUnavailable(fmt.Errorf("provider model response is too large"))
-		s.recordRefreshError(attemptedAt, err)
-		return err
+		return nil, providerUnavailable(fmt.Errorf("provider model response is too large"))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		err = providerUnavailable(fmt.Errorf(
+		return nil, providerUnavailable(fmt.Errorf(
 			"provider models request returned status %d",
 			resp.StatusCode,
 		))
-		s.recordRefreshError(attemptedAt, err)
-		return err
 	}
 	var payload struct {
 		Data []struct {
@@ -471,8 +517,7 @@ func (s *Service) refresh(ctx context.Context, actorID string) error {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	if err := decoder.Decode(&payload); err != nil {
 		err = providerUnavailable(err)
-		s.recordRefreshError(attemptedAt, err)
-		return err
+		return nil, err
 	}
 	models := make([]string, 0, len(payload.Data))
 	seen := make(map[string]bool)
@@ -486,18 +531,21 @@ func (s *Service) refresh(ctx context.Context, actorID string) error {
 	}
 	if len(models) == 0 {
 		err = providerUnavailable(fmt.Errorf("provider returned no valid models"))
-		s.recordRefreshError(attemptedAt, err)
-		return err
+		return nil, err
 	}
+	return models, nil
+}
+
+func (s *Service) storeModels(ctx context.Context, provider string, models []string, attemptedAt time.Time, actorID string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		s.recordRefreshError(attemptedAt, err)
+		s.recordRefreshError(provider, attemptedAt, err)
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 	failTransaction := func(refreshErr error) error {
 		_ = tx.Rollback()
-		s.recordRefreshError(attemptedAt, refreshErr)
+		s.recordRefreshError(provider, attemptedAt, refreshErr)
 		return refreshErr
 	}
 	if err := lockBillingRevisionTx(ctx, tx); err != nil {
@@ -514,7 +562,7 @@ func (s *Service) refresh(ctx context.Context, actorID string) error {
 		      ELSE source
 		    END
 		WHERE provider = $1
-	`, ProviderName); err != nil {
+	`, provider); err != nil {
 		return failTransaction(err)
 	}
 	refreshedAt := time.Now().UTC()
@@ -531,7 +579,7 @@ func (s *Service) refresh(ctx context.Context, actorID string) error {
 				END,
 				provider_available = TRUE,
 				last_seen_at = EXCLUDED.last_seen_at
-		`, ProviderName, id, refreshedAt); err != nil {
+		`, provider, id, refreshedAt); err != nil {
 			return failTransaction(err)
 		}
 	}
@@ -545,12 +593,12 @@ func (s *Service) refresh(ctx context.Context, actorID string) error {
 			last_success_at = EXCLUDED.last_success_at,
 			last_error = '',
 			updated_at = EXCLUDED.updated_at
-	`, ProviderName, StatusProviderConfirmed, attemptedAt, refreshedAt); err != nil {
+	`, provider, StatusProviderConfirmed, attemptedAt, refreshedAt); err != nil {
 		return failTransaction(err)
 	}
 	if actorID != "" {
 		details, marshalErr := json.Marshal(map[string]any{
-			"provider":    ProviderName,
+			"provider":    provider,
 			"model_count": len(models),
 			"status":      StatusProviderConfirmed,
 		})
@@ -561,7 +609,7 @@ func (s *Service) refresh(ctx context.Context, actorID string) error {
 			INSERT INTO admin_audit_logs
 				(actor_user_id, action, target_type, target_id, details)
 			VALUES ($1, 'model.catalog.refresh', 'model_catalog', $2, $3)
-		`, actorID, ProviderName, details); err != nil {
+		`, actorID, provider, details); err != nil {
 			return failTransaction(err)
 		}
 	}
@@ -571,7 +619,7 @@ func (s *Service) refresh(ctx context.Context, actorID string) error {
 	return nil
 }
 
-func (s *Service) recordRefreshAttempt(ctx context.Context, attemptedAt time.Time) error {
+func (s *Service) recordRefreshAttempt(ctx context.Context, provider string, attemptedAt time.Time) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -580,8 +628,10 @@ func (s *Service) recordRefreshAttempt(ctx context.Context, attemptedAt time.Tim
 	if err := lockBillingRevisionTx(ctx, tx); err != nil {
 		return err
 	}
-	if err := restoreBuiltinAvailabilityTx(ctx, tx); err != nil {
-		return err
+	if provider == ProviderName {
+		if err := restoreBuiltinAvailabilityTx(ctx, tx); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO provider_model_sync_status
@@ -590,13 +640,13 @@ func (s *Service) recordRefreshAttempt(ctx context.Context, attemptedAt time.Tim
 		ON CONFLICT (provider) DO UPDATE SET
 			last_attempt_at = EXCLUDED.last_attempt_at,
 			updated_at = EXCLUDED.updated_at
-	`, ProviderName, StatusBuiltinUnverified, attemptedAt); err != nil {
+	`, provider, StatusBuiltinUnverified, attemptedAt); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func (s *Service) recordRefreshError(attemptedAt time.Time, refreshErr error) {
+func (s *Service) recordRefreshError(provider string, attemptedAt time.Time, refreshErr error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	failedAt := time.Now().UTC()
@@ -619,7 +669,7 @@ func (s *Service) recordRefreshError(attemptedAt time.Time, refreshErr error) {
 			last_attempt_at = EXCLUDED.last_attempt_at,
 			last_error = EXCLUDED.last_error,
 			updated_at = EXCLUDED.updated_at
-	`, ProviderName, StatusTemporarilyUnavailable, attemptedAt, refreshErr.Error(), failedAt); err != nil {
+	`, provider, StatusTemporarilyUnavailable, attemptedAt, refreshErr.Error(), failedAt); err != nil {
 		log.Printf("failed to persist provider model refresh error: %v", err)
 		return
 	}
@@ -635,19 +685,30 @@ type providerSyncState struct {
 	LastError     string
 }
 
-func (s *Service) providerSyncState(ctx context.Context) (providerSyncState, error) {
-	state := providerSyncState{Status: StatusBuiltinUnverified}
-	err := s.db.QueryRowContext(ctx, `
-		SELECT status, last_attempt_at, last_success_at, last_error
-		FROM provider_model_sync_status
-		WHERE provider = $1
-	`, ProviderName).Scan(
-		&state.Status, &state.LastAttemptAt, &state.LastSuccessAt, &state.LastError,
-	)
-	if err == sql.ErrNoRows {
-		return state, nil
+// providerSyncStates returns the last sync outcome of every endpoint; an
+// endpoint never synced reads as builtin_unverified.
+func (s *Service) providerSyncStates(ctx context.Context) (map[string]providerSyncState, error) {
+	states := map[string]providerSyncState{}
+	for _, endpoint := range s.endpoints() {
+		states[endpoint.Name] = providerSyncState{Status: StatusBuiltinUnverified}
 	}
-	return state, err
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT provider, status, last_attempt_at, last_success_at, last_error
+		FROM provider_model_sync_status
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var provider string
+		var state providerSyncState
+		if err := rows.Scan(&provider, &state.Status, &state.LastAttemptAt, &state.LastSuccessAt, &state.LastError); err != nil {
+			return nil, err
+		}
+		states[provider] = state
+	}
+	return states, rows.Err()
 }
 
 func modelAvailabilityStatus(model *ProviderModel, providerStatus string) string {
@@ -665,14 +726,14 @@ func modelAvailabilityStatus(model *ProviderModel, providerStatus string) string
 }
 
 func (s *Service) AdminCatalog(ctx context.Context) (*CatalogStatus, error) {
-	syncState, err := s.providerSyncState(ctx)
+	states, err := s.providerSyncStates(ctx)
 	if err != nil {
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT provider, model_id, source, provider_available, first_seen_at, last_seen_at
 		FROM provider_models
-		ORDER BY model_id
+		ORDER BY CASE WHEN provider = 'openai-compatible' THEN 0 ELSE 1 END, provider, model_id
 	`)
 	if err != nil {
 		return nil, err
@@ -686,7 +747,8 @@ func (s *Service) AdminCatalog(ctx context.Context) (*CatalogStatus, error) {
 			&model.ProviderAvailable, &model.FirstSeenAt, &model.LastSeenAt); err != nil {
 			return nil, err
 		}
-		index[model.ModelID] = len(models)
+		model.QualifiedID = aiproviders.Qualify(model.Provider, model.ModelID)
+		index[model.QualifiedID] = len(models)
 		models = append(models, model)
 	}
 	if err := rows.Err(); err != nil {
@@ -696,8 +758,8 @@ func (s *Service) AdminCatalog(ctx context.Context) (*CatalogStatus, error) {
 		SELECT purpose, model_id, is_approved, is_default,
 		       EXISTS (
 		         SELECT 1 FROM provider_cost_rates costs
-		         WHERE costs.provider = $1
-		           AND costs.sku = model_policies.model_id
+		         WHERE costs.provider = model_provider(model_policies.model_id)
+		           AND costs.sku = model_sku(model_policies.model_id)
 		           AND costs.service = CASE
 		             WHEN model_policies.purpose = 'embedding' THEN 'embedding'
 		             ELSE 'llm'
@@ -708,8 +770,8 @@ func (s *Service) AdminCatalog(ctx context.Context) (*CatalogStatus, error) {
 		         model_policies.purpose = 'embedding'
 		         OR EXISTS (
 		           SELECT 1 FROM provider_cost_rates costs
-		           WHERE costs.provider = $1
-		             AND costs.sku = model_policies.model_id
+		           WHERE costs.provider = model_provider(model_policies.model_id)
+		             AND costs.sku = model_sku(model_policies.model_id)
 		             AND costs.service = CASE
 		               WHEN model_policies.purpose = 'embedding' THEN 'embedding'
 		               ELSE 'llm'
@@ -720,7 +782,7 @@ func (s *Service) AdminCatalog(ctx context.Context) (*CatalogStatus, error) {
 		       )
 		FROM model_policies
 		ORDER BY purpose, model_id
-	`, ProviderName)
+	`)
 	if err != nil {
 		return nil, err
 	}
@@ -739,21 +801,21 @@ func (s *Service) AdminCatalog(ctx context.Context) (*CatalogStatus, error) {
 		return nil, err
 	}
 	costRows, err := s.db.QueryContext(ctx, `
-		SELECT DISTINCT service, sku, unit_type
+		SELECT DISTINCT provider, service, sku, unit_type
 		FROM provider_cost_rates
-		WHERE provider = $1 AND is_active = TRUE
-	`, ProviderName)
+		WHERE is_active = TRUE
+	`)
 	if err != nil {
 		return nil, err
 	}
 	costUnits := make(map[string]map[string]bool)
 	for costRows.Next() {
-		var service, modelID, unitType string
-		if err := costRows.Scan(&service, &modelID, &unitType); err != nil {
+		var provider, service, modelID, unitType string
+		if err := costRows.Scan(&provider, &service, &modelID, &unitType); err != nil {
 			_ = costRows.Close()
 			return nil, err
 		}
-		key := service + "\x00" + modelID
+		key := provider + "\x00" + service + "\x00" + modelID
 		if costUnits[key] == nil {
 			costUnits[key] = make(map[string]bool)
 		}
@@ -778,25 +840,38 @@ func (s *Service) AdminCatalog(ctx context.Context) (*CatalogStatus, error) {
 			if !found {
 				service := costServiceForPurpose(purpose)
 				models[i].Policies = append(models[i].Policies, ModelPolicy{
-					Purpose: purpose, ModelID: models[i].ModelID,
+					Purpose: purpose, ModelID: models[i].QualifiedID,
 					CostConfirmed: costCompleteForPurpose(
-						costUnits[service+"\x00"+models[i].ModelID], purpose,
+						costUnits[models[i].Provider+"\x00"+service+"\x00"+models[i].ModelID], purpose,
 					),
 				})
 			}
 		}
-		models[i].AvailabilityStatus = modelAvailabilityStatus(&models[i], syncState.Status)
+		models[i].AvailabilityStatus = modelAvailabilityStatus(&models[i], states[models[i].Provider].Status)
 	}
+	syncState := states[ProviderName]
 	status := &CatalogStatus{
 		Provider: ProviderName, Status: syncState.Status, Models: models,
 		LastError:      syncState.LastError,
 		RefreshMinutes: int(refreshEvery / time.Minute),
+		Providers:      make([]ProviderStatus, 0, len(s.endpoints())),
 	}
 	if syncState.LastSuccessAt.Valid {
 		status.LastSuccessAt = syncState.LastSuccessAt.Time.UTC().Format(time.RFC3339)
 	}
 	if syncState.LastAttemptAt.Valid {
 		status.LastAttemptAt = syncState.LastAttemptAt.Time.UTC().Format(time.RFC3339)
+	}
+	for _, endpoint := range s.endpoints() {
+		state := states[endpoint.Name]
+		item := ProviderStatus{Provider: endpoint.Name, Status: state.Status, LastError: state.LastError}
+		if state.LastSuccessAt.Valid {
+			item.LastSuccessAt = state.LastSuccessAt.Time.UTC().Format(time.RFC3339)
+		}
+		if state.LastAttemptAt.Valid {
+			item.LastAttemptAt = state.LastAttemptAt.Time.UTC().Format(time.RFC3339)
+		}
+		status.Providers = append(status.Providers, item)
 	}
 	return status, nil
 }
@@ -839,6 +914,7 @@ func (s *Service) UpdatePolicy(ctx context.Context, update PolicyUpdate, actorID
 	}
 	var exists, providerAvailable, costConfirmed bool
 	costService := costServiceForPurpose(update.Purpose)
+	provider, sku := aiproviders.Split(update.ModelID)
 	if err := tx.QueryRowContext(ctx, `
 		SELECT EXISTS (
 		  SELECT 1 FROM provider_models
@@ -860,7 +936,7 @@ func (s *Service) UpdatePolicy(ctx context.Context, update PolicyUpdate, actorID
 		      AND unit_type = 'output_token' AND is_active = TRUE
 		  )
 		)
-	`, ProviderName, update.ModelID, update.Purpose, costService).Scan(
+	`, provider, sku, update.Purpose, costService).Scan(
 		&exists, &providerAvailable, &costConfirmed,
 	); err != nil {
 		return err
@@ -941,8 +1017,8 @@ func (s *Service) ReconcilePoliciesAfterBillingReset(ctx context.Context, actorI
 		UPDATE model_policies policies
 		SET cost_confirmed = EXISTS (
 		      SELECT 1 FROM provider_cost_rates costs
-		      WHERE costs.provider = $1
-		        AND costs.sku = policies.model_id
+		      WHERE costs.provider = model_provider(policies.model_id)
+		        AND costs.sku = model_sku(policies.model_id)
 		        AND costs.service = CASE
 		          WHEN policies.purpose = 'embedding' THEN 'embedding'
 		          ELSE 'llm'
@@ -952,8 +1028,8 @@ func (s *Service) ReconcilePoliciesAfterBillingReset(ctx context.Context, actorI
 		    ) AND (
 		      policies.purpose = 'embedding' OR EXISTS (
 		        SELECT 1 FROM provider_cost_rates costs
-		        WHERE costs.provider = $1
-		          AND costs.sku = policies.model_id
+		        WHERE costs.provider = model_provider(policies.model_id)
+		          AND costs.sku = model_sku(policies.model_id)
 		          AND costs.service = CASE
 		            WHEN policies.purpose = 'embedding' THEN 'embedding'
 		            ELSE 'llm'
@@ -965,8 +1041,8 @@ func (s *Service) ReconcilePoliciesAfterBillingReset(ctx context.Context, actorI
 		    is_approved = CASE
 		      WHEN EXISTS (
 		        SELECT 1 FROM provider_cost_rates costs
-		        WHERE costs.provider = $1
-		          AND costs.sku = policies.model_id
+		        WHERE costs.provider = model_provider(policies.model_id)
+		          AND costs.sku = model_sku(policies.model_id)
 		          AND costs.service = CASE
 		            WHEN policies.purpose = 'embedding' THEN 'embedding'
 		            ELSE 'llm'
@@ -976,8 +1052,8 @@ func (s *Service) ReconcilePoliciesAfterBillingReset(ctx context.Context, actorI
 		      ) AND (
 		        policies.purpose = 'embedding' OR EXISTS (
 		          SELECT 1 FROM provider_cost_rates costs
-		          WHERE costs.provider = $1
-		            AND costs.sku = policies.model_id
+		          WHERE costs.provider = model_provider(policies.model_id)
+		            AND costs.sku = model_sku(policies.model_id)
 		            AND costs.service = CASE
 		              WHEN policies.purpose = 'embedding' THEN 'embedding'
 		              ELSE 'llm'
@@ -987,8 +1063,8 @@ func (s *Service) ReconcilePoliciesAfterBillingReset(ctx context.Context, actorI
 		        )
 		      ) AND EXISTS (
 		        SELECT 1 FROM provider_models models
-		        WHERE models.provider = $1
-		          AND models.model_id = policies.model_id
+		        WHERE models.provider = model_provider(policies.model_id)
+		          AND models.model_id = model_sku(policies.model_id)
 		          AND models.provider_available = TRUE
 		      ) THEN policies.is_approved
 		      ELSE FALSE
@@ -996,8 +1072,8 @@ func (s *Service) ReconcilePoliciesAfterBillingReset(ctx context.Context, actorI
 		    is_default = CASE
 		      WHEN EXISTS (
 		        SELECT 1 FROM provider_cost_rates costs
-		        WHERE costs.provider = $1
-		          AND costs.sku = policies.model_id
+		        WHERE costs.provider = model_provider(policies.model_id)
+		          AND costs.sku = model_sku(policies.model_id)
 		          AND costs.service = CASE
 		            WHEN policies.purpose = 'embedding' THEN 'embedding'
 		            ELSE 'llm'
@@ -1007,8 +1083,8 @@ func (s *Service) ReconcilePoliciesAfterBillingReset(ctx context.Context, actorI
 		      ) AND (
 		        policies.purpose = 'embedding' OR EXISTS (
 		          SELECT 1 FROM provider_cost_rates costs
-		          WHERE costs.provider = $1
-		            AND costs.sku = policies.model_id
+		          WHERE costs.provider = model_provider(policies.model_id)
+		            AND costs.sku = model_sku(policies.model_id)
 		            AND costs.service = CASE
 		              WHEN policies.purpose = 'embedding' THEN 'embedding'
 		              ELSE 'llm'
@@ -1018,15 +1094,15 @@ func (s *Service) ReconcilePoliciesAfterBillingReset(ctx context.Context, actorI
 		        )
 		      ) AND EXISTS (
 		        SELECT 1 FROM provider_models models
-		        WHERE models.provider = $1
-		          AND models.model_id = policies.model_id
+		        WHERE models.provider = model_provider(policies.model_id)
+		          AND models.model_id = model_sku(policies.model_id)
 		          AND models.provider_available = TRUE
 		      ) THEN policies.is_default
 		      ELSE FALSE
 		    END,
 		    updated_at = NOW(),
-		    updated_by = $2
-	`, ProviderName, actorID); err != nil {
+		    updated_by = $1
+	`, actorID); err != nil {
 		return err
 	}
 
@@ -1126,18 +1202,18 @@ func (s *Service) Available(ctx context.Context, purpose string) ([]AvailableMod
 	filter := ""
 	if purpose != "" {
 		args = append(args, purpose)
-		filter = " AND policies.purpose = $2"
+		filter = " AND policies.purpose = $1"
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT policies.model_id, policies.purpose, policies.is_default
 		FROM model_policies policies
 		JOIN provider_models models
-		  ON models.provider = $1 AND models.model_id = policies.model_id
+		  ON models.provider = model_provider(policies.model_id) AND models.model_id = model_sku(policies.model_id)
 		WHERE policies.is_approved = TRUE
 		  AND EXISTS (
 		    SELECT 1 FROM provider_cost_rates costs
-		    WHERE costs.provider = $1
-		      AND costs.sku = policies.model_id
+		    WHERE costs.provider = model_provider(policies.model_id)
+		      AND costs.sku = model_sku(policies.model_id)
 		      AND costs.service = CASE
 		        WHEN policies.purpose = 'embedding' THEN 'embedding'
 		        ELSE 'llm'
@@ -1148,8 +1224,8 @@ func (s *Service) Available(ctx context.Context, purpose string) ([]AvailableMod
 		  AND (
 		    policies.purpose = 'embedding' OR EXISTS (
 		      SELECT 1 FROM provider_cost_rates costs
-		      WHERE costs.provider = $1
-		        AND costs.sku = policies.model_id
+		      WHERE costs.provider = model_provider(policies.model_id)
+		        AND costs.sku = model_sku(policies.model_id)
 		        AND costs.service = CASE
 		          WHEN policies.purpose = 'embedding' THEN 'embedding'
 		          ELSE 'llm'
@@ -1160,7 +1236,7 @@ func (s *Service) Available(ctx context.Context, purpose string) ([]AvailableMod
 		  )
 		  AND models.provider_available = TRUE`+filter+`
 		ORDER BY policies.purpose, policies.is_default DESC, policies.model_id
-	`, append([]any{ProviderName}, args...)...)
+	`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1221,13 +1297,13 @@ func (s *Service) effectiveModel(ctx context.Context, userID, purpose string) (s
 			  SELECT 1
 			  FROM model_policies policies
 			  JOIN provider_models models
-			    ON models.provider = $1 AND models.model_id = policies.model_id
-			  WHERE policies.purpose = $2 AND policies.model_id = $3
+			    ON models.provider = model_provider(policies.model_id) AND models.model_id = model_sku(policies.model_id)
+			  WHERE policies.purpose = $1 AND policies.model_id = $2
 			    AND policies.is_approved = TRUE
 			    AND EXISTS (
 			      SELECT 1 FROM provider_cost_rates costs
-			      WHERE costs.provider = $1
-			        AND costs.sku = policies.model_id
+			      WHERE costs.provider = model_provider(policies.model_id)
+			        AND costs.sku = model_sku(policies.model_id)
 			        AND costs.service = CASE
 			          WHEN policies.purpose = 'embedding' THEN 'embedding'
 			          ELSE 'llm'
@@ -1238,8 +1314,8 @@ func (s *Service) effectiveModel(ctx context.Context, userID, purpose string) (s
 			    AND (
 			      policies.purpose = 'embedding' OR EXISTS (
 			        SELECT 1 FROM provider_cost_rates costs
-			        WHERE costs.provider = $1
-			          AND costs.sku = policies.model_id
+			        WHERE costs.provider = model_provider(policies.model_id)
+			          AND costs.sku = model_sku(policies.model_id)
 			          AND costs.service = CASE
 			            WHEN policies.purpose = 'embedding' THEN 'embedding'
 			            ELSE 'llm'
@@ -1250,7 +1326,7 @@ func (s *Service) effectiveModel(ctx context.Context, userID, purpose string) (s
 			    )
 			    AND models.provider_available = TRUE
 			)
-		`, ProviderName, purpose, preferred.String).Scan(&allowed); err != nil {
+		`, purpose, preferred.String).Scan(&allowed); err != nil {
 			return "", err
 		}
 		if allowed {
@@ -1262,13 +1338,13 @@ func (s *Service) effectiveModel(ctx context.Context, userID, purpose string) (s
 		SELECT policies.model_id
 		FROM model_policies policies
 		JOIN provider_models models
-		  ON models.provider = $1 AND models.model_id = policies.model_id
-		WHERE policies.purpose = $2
+		  ON models.provider = model_provider(policies.model_id) AND models.model_id = model_sku(policies.model_id)
+		WHERE policies.purpose = $1
 		  AND policies.is_approved = TRUE
 		  AND EXISTS (
 		    SELECT 1 FROM provider_cost_rates costs
-		    WHERE costs.provider = $1
-		      AND costs.sku = policies.model_id
+		    WHERE costs.provider = model_provider(policies.model_id)
+		      AND costs.sku = model_sku(policies.model_id)
 		      AND costs.service = CASE
 		        WHEN policies.purpose = 'embedding' THEN 'embedding'
 		        ELSE 'llm'
@@ -1279,8 +1355,8 @@ func (s *Service) effectiveModel(ctx context.Context, userID, purpose string) (s
 		  AND (
 		    policies.purpose = 'embedding' OR EXISTS (
 		      SELECT 1 FROM provider_cost_rates costs
-		      WHERE costs.provider = $1
-		        AND costs.sku = policies.model_id
+		      WHERE costs.provider = model_provider(policies.model_id)
+		        AND costs.sku = model_sku(policies.model_id)
 		        AND costs.service = CASE
 		          WHEN policies.purpose = 'embedding' THEN 'embedding'
 		          ELSE 'llm'
@@ -1292,7 +1368,7 @@ func (s *Service) effectiveModel(ctx context.Context, userID, purpose string) (s
 		  AND models.provider_available = TRUE
 		ORDER BY policies.is_default DESC, policies.model_id
 		LIMIT 1
-	`, ProviderName, purpose).Scan(&fallback)
+	`, purpose).Scan(&fallback)
 	if err == sql.ErrNoRows {
 		return "", fmt.Errorf("%w: %s", ErrNoApprovedModel, purpose)
 	}
@@ -1326,13 +1402,13 @@ func (s *Service) IsAllowed(ctx context.Context, purpose, modelID string) (bool,
 		  SELECT 1
 		  FROM model_policies policies
 		  JOIN provider_models models
-		    ON models.provider = $1 AND models.model_id = policies.model_id
-		  WHERE policies.purpose = $2 AND policies.model_id = $3
+		    ON models.provider = model_provider(policies.model_id) AND models.model_id = model_sku(policies.model_id)
+		  WHERE policies.purpose = $1 AND policies.model_id = $2
 		    AND policies.is_approved = TRUE
 		    AND EXISTS (
 		      SELECT 1 FROM provider_cost_rates costs
-		      WHERE costs.provider = $1
-		        AND costs.sku = policies.model_id
+		      WHERE costs.provider = model_provider(policies.model_id)
+		        AND costs.sku = model_sku(policies.model_id)
 		        AND costs.service = CASE
 		          WHEN policies.purpose = 'embedding' THEN 'embedding'
 		          ELSE 'llm'
@@ -1343,8 +1419,8 @@ func (s *Service) IsAllowed(ctx context.Context, purpose, modelID string) (bool,
 		    AND (
 		      policies.purpose = 'embedding' OR EXISTS (
 		        SELECT 1 FROM provider_cost_rates costs
-		        WHERE costs.provider = $1
-		          AND costs.sku = policies.model_id
+		        WHERE costs.provider = model_provider(policies.model_id)
+		          AND costs.sku = model_sku(policies.model_id)
 		          AND costs.service = CASE
 		            WHEN policies.purpose = 'embedding' THEN 'embedding'
 		            ELSE 'llm'
@@ -1355,7 +1431,7 @@ func (s *Service) IsAllowed(ctx context.Context, purpose, modelID string) (bool,
 		    )
 		    AND models.provider_available = TRUE
 		)
-	`, ProviderName, purpose, modelID).Scan(&allowed)
+	`, purpose, modelID).Scan(&allowed)
 	return allowed, err
 }
 
@@ -1375,13 +1451,13 @@ func (s *Service) SavePreferences(ctx context.Context, userID string, prefs Pref
 			  SELECT 1
 			  FROM model_policies policies
 			  JOIN provider_models models
-			    ON models.provider = $1 AND models.model_id = policies.model_id
-			  WHERE policies.purpose = $2 AND policies.model_id = $3
+			    ON models.provider = model_provider(policies.model_id) AND models.model_id = model_sku(policies.model_id)
+			  WHERE policies.purpose = $1 AND policies.model_id = $2
 			    AND policies.is_approved = TRUE
 			    AND EXISTS (
 			      SELECT 1 FROM provider_cost_rates costs
-			      WHERE costs.provider = $1
-			        AND costs.sku = policies.model_id
+			      WHERE costs.provider = model_provider(policies.model_id)
+			        AND costs.sku = model_sku(policies.model_id)
 			        AND costs.service = CASE
 			          WHEN policies.purpose = 'embedding' THEN 'embedding'
 			          ELSE 'llm'
@@ -1392,8 +1468,8 @@ func (s *Service) SavePreferences(ctx context.Context, userID string, prefs Pref
 			    AND (
 			      policies.purpose = 'embedding' OR EXISTS (
 			        SELECT 1 FROM provider_cost_rates costs
-			        WHERE costs.provider = $1
-			          AND costs.sku = policies.model_id
+			        WHERE costs.provider = model_provider(policies.model_id)
+			          AND costs.sku = model_sku(policies.model_id)
 			          AND costs.service = CASE
 			            WHEN policies.purpose = 'embedding' THEN 'embedding'
 			            ELSE 'llm'
@@ -1404,7 +1480,7 @@ func (s *Service) SavePreferences(ctx context.Context, userID string, prefs Pref
 			    )
 			    AND models.provider_available = TRUE
 			)
-		`, ProviderName, purpose, model).Scan(&allowed); err != nil {
+		`, purpose, model).Scan(&allowed); err != nil {
 			return Preferences{}, err
 		}
 		if !allowed {

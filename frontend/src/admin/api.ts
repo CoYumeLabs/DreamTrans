@@ -421,6 +421,8 @@ export type ProviderAvailability =
 export interface ProviderModel {
   provider: string
   model_id: string
+  /** The id policies and preferences use: bare for the default provider, `provider::model` otherwise. */
+  qualified_id?: string
   source: string
   provider_available: boolean
   availability_status?: ProviderAvailability
@@ -429,7 +431,16 @@ export interface ProviderModel {
   policies: ModelPolicy[]
 }
 
+export interface ProviderSyncStatus {
+  provider: string
+  status?: string
+  last_success_at?: string
+  last_attempt_at?: string
+  last_error?: string
+}
+
 export interface ModelCatalog {
+  /** Default provider fields; `providers` lists every configured endpoint. */
   provider: string
   status?: string
   models: ProviderModel[]
@@ -437,6 +448,7 @@ export interface ModelCatalog {
   last_attempt_at?: string
   last_error?: string
   refresh_minutes: number
+  providers?: ProviderSyncStatus[]
 }
 
 // ---------------------------------------------------------------------------

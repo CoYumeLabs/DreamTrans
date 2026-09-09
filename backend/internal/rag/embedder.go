@@ -6,9 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/dreamtrans/backend/internal/aiproviders"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 )
@@ -43,25 +43,21 @@ type openAIEmbeddingProvider struct {
 const productionEmbeddingDimensions = 1536
 
 // NewOpenAIEmbeddingFromEnv creates an embedding provider compatible with OpenAI APIs.
+// The endpoint is the registry's embedding provider (AI_EMBEDDING_PROVIDER,
+// default the OPENAI_* endpoint); the model is OPENAI_EMBEDDING_MODEL.
 func NewOpenAIEmbeddingFromEnv() (EmbeddingProvider, error) {
-	base := os.Getenv("OPENAI_API_BASE")
-	if base == "" {
-		base = os.Getenv("OPENAI_BASE")
+	registry, err := aiproviders.Current()
+	if err != nil {
+		return nil, err
 	}
-	if base == "" {
-		base = "https://api.openai.com/v1"
-	}
-	key := os.Getenv("OPENAI_API_KEY")
-	if key == "" {
+	provider, err := registry.EmbeddingProvider()
+	if err != nil {
 		return nil, fmt.Errorf("OPENAI_API_KEY not set")
 	}
-	model := os.Getenv("OPENAI_EMBEDDING_MODEL")
-	if model == "" {
-		model = "text-embedding-3-small"
-	}
+	_, model := aiproviders.Split(EmbeddingModelName())
 	return &openAIEmbeddingProvider{
-		baseURL:    base,
-		apiKey:     key,
+		baseURL:    provider.BaseURL,
+		apiKey:     provider.APIKey,
 		model:      model,
 		dimensions: productionEmbeddingDimensions,
 		timeout:    60 * time.Second,

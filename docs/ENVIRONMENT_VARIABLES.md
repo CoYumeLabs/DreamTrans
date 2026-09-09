@@ -108,9 +108,29 @@ AI_CONTEXT_OUTPUT_RESERVE_TOKENS=4096
 AI_MODEL_CONTEXT_WINDOW_TOKENS=260096
 ```
 
-未设置 `OPENAI_API_KEY` 时，AI/RAG 工作区会明确返回不可用，实时转录仍可独立
+未设置 `OPENAI_API_KEY` 且没有配置其他供应商时，AI/RAG 工作区会明确返回不可用，实时转录仍可独立
 工作。自定义 API Base 只允许 HTTP(S)，服务端请求有超时、响应体上限和安全错误
 处理。
+
+### 多家 OpenAI 兼容供应商
+
+```dotenv
+AI_PROVIDERS=cerebras=https://api.cerebras.ai/v1;groq=https://api.groq.com/openai/v1
+AI_PROVIDER_KEYS=cerebras=csk-…;groq=gsk-…
+AI_PROVIDER_OPTIONS=cerebras=chat
+AI_EMBEDDING_PROVIDER=openai-compatible
+```
+
+- `OPENAI_*` 注册的是名为 `openai-compatible` 的默认供应商，其模型保持原有的裸 ID；`AI_PROVIDERS`
+  追加的供应商用 `名称=基址` 列出，名称只允许小写字母、数字和连字符，`openai-compatible` 与
+  `speechmatics` 为保留名。每个追加的供应商必须在 `AI_PROVIDER_KEYS` 里有密钥，否则应用拒绝启动。
+- 追加供应商的模型在目录、策略、用户偏好、用量和账单里一律写作 `名称::模型ID`（如
+  `cerebras::llama-3.3-70b`），成本目录按供应商与模型分别录入，录入前不能审批。
+- `AI_PROVIDER_OPTIONS` 每家可选 `chat`（默认）、`responses`、`cache`；追加供应商默认走 chat
+  completions、不开提示缓存。回退模型只在同一供应商内生效。
+- 嵌入只能走一家供应商（`AI_EMBEDDING_PROVIDER`，默认 `openai-compatible`），模型仍由
+  `OPENAI_EMBEDDING_MODEL` 指定且必须是 1536 维。
+- 设计说明见 `docs/plans/ai-multi-provider.md`。
 
 ### 计费与在线支付
 

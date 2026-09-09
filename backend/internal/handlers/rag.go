@@ -21,6 +21,7 @@ import (
 
 	openaiprovider "github.com/dreamtrans/backend/internal/adapters/openai_provider"
 	aicontext "github.com/dreamtrans/backend/internal/ai"
+	"github.com/dreamtrans/backend/internal/aiproviders"
 	"github.com/dreamtrans/backend/internal/auth"
 	"github.com/dreamtrans/backend/internal/billing"
 	"github.com/dreamtrans/backend/internal/config"
@@ -2622,29 +2623,27 @@ func (h *RAGHandler) HandleTitle(w http.ResponseWriter, r *http.Request) {
 		}
 		source = sum
 	}
-	cfg, err := openaiprovider.NewConfigFromEnv()
-	if err != nil {
-		log.Printf("rag title configuration error: %v", err)
-		http.Error(w, "title service is unavailable", http.StatusServiceUnavailable)
-		return
-	}
 	// prefer summary/chat model from centralized config
-	if m := os.Getenv("OPENAI_SUMMARY_MODEL"); m != "" {
-		cfg.Model = m
-	}
+	titleModel := os.Getenv("OPENAI_SUMMARY_MODEL")
 	if m2 := config.Get().Models.Summary; m2 != "" {
-		cfg.Model = m2
+		titleModel = m2
 	}
 	if h.modelCatalog != nil {
 		if claims := auth.GetUserClaims(r.Context()); claims != nil {
 			if summaryModel, modelErr := h.modelCatalog.EffectiveModel(
 				r.Context(), claims.UserID, modelcatalog.PurposeSummary,
 			); modelErr == nil {
-				cfg.Model = summaryModel
+				titleModel = summaryModel
 			} else {
 				log.Printf("resolve approved title model: %v", modelErr)
 			}
 		}
+	}
+	cfg, err := aiproviders.ConfigFor(titleModel)
+	if err != nil {
+		log.Printf("rag title configuration error: %v", err)
+		http.Error(w, "title service is unavailable", http.StatusServiceUnavailable)
+		return
 	}
 	const titleMaxOutputTokens = 128
 	cfg.MaxOutputTokens = titleMaxOutputTokens

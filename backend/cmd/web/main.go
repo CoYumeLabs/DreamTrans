@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/dreamtrans/backend/internal/aiproviders"
 	"github.com/dreamtrans/backend/internal/auth"
 	"github.com/dreamtrans/backend/internal/billing"
 	"github.com/dreamtrans/backend/internal/config"
@@ -249,8 +250,11 @@ func buildHandler() (http.Handler, func()) {
 	}
 	tokenHandler.SetTrainingOptInLookup(trainingOptIn)
 	batchHandler.SetTrainingOptInLookup(trainingOptIn)
+	if _, err := aiproviders.Current(); err != nil {
+		log.Fatalf("AI provider configuration is invalid: %v", err)
+	}
 	var ragHandler *handlers.RAGHandler
-	if strings.TrimSpace(os.Getenv("OPENAI_API_KEY")) != "" {
+	if aiproviders.Configured() {
 		ragHandler, err = handlers.NewRAGHandler(billingSvc, pgStore)
 		if err != nil {
 			log.Printf("RAG is disabled because initialization failed: %v", err)
@@ -259,7 +263,7 @@ func buildHandler() (http.Handler, func()) {
 			ragHandler.SetModelCatalog(modelCatalogSvc)
 		}
 	} else {
-		log.Println("RAG is disabled because OPENAI_API_KEY is not configured")
+		log.Println("RAG is disabled because no AI provider is configured (OPENAI_API_KEY or AI_PROVIDERS)")
 	}
 	cleanup := func() {}
 	if ragHandler != nil {

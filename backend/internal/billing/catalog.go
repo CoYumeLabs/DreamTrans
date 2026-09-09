@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 
 	"strings"
 	"time"
@@ -322,10 +323,17 @@ func applyRetailPrices(rates []CostRate, cfg *BillingConfig) {
 	}
 }
 
+var qualifiedProviderName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
+
 // CanonicalSKU normalizes compatibility identifiers before cost lookup.
 func CanonicalSKU(provider, sku, actionOrService string) (string, string) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	sku = strings.TrimSpace(sku)
+	// "provider::model" ids name their own provider; that wins over the
+	// caller's hint so a Cerebras model is never priced from OpenAI rates.
+	if name, bare, ok := strings.Cut(sku, "::"); ok && qualifiedProviderName.MatchString(name) {
+		provider, sku = name, bare
+	}
 	hint := strings.ToLower(strings.TrimSpace(actionOrService))
 	lowerSKU := strings.ToLower(sku)
 	if provider == "openai" {

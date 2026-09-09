@@ -12,6 +12,7 @@ import (
 	"unicode"
 
 	openaiprovider "github.com/dreamtrans/backend/internal/adapters/openai_provider"
+	"github.com/dreamtrans/backend/internal/aiproviders"
 	"github.com/dreamtrans/backend/internal/config"
 	"github.com/dreamtrans/backend/internal/metrics"
 )
@@ -123,15 +124,9 @@ func NewServiceFromEnv() (*Service, error) {
 		return nil, err
 	}
 	chatCfg := func() (*openaiprovider.Config, error) {
-		cfg, err := openaiprovider.NewConfigFromEnv()
-		if err != nil {
-			return nil, err
-		}
-		// Use Chat default model for Q&A
-		if m := config.Get().Models.Chat; m != "" {
-			cfg.Model = m
-		}
-		return cfg, nil
+		// The chat model names its provider; an empty id means the default
+		// provider's default model.
+		return aiproviders.ConfigFor(config.Get().Models.Chat)
 	}
 	return &Service{
 		store:                  st,
@@ -536,15 +531,13 @@ func cosine(a, b []float32, anorm float64) float64 {
 
 func (s *Service) computeParagraphSummary(ctx context.Context, base string) (summary string, skip bool, err error) {
 	cfg := config.Get()
-	sumCfg, err := openaiprovider.NewConfigFromEnv()
+	summaryModel := os.Getenv("OPENAI_SUMMARY_MODEL")
+	if m2 := cfg.Models.Summary; m2 != "" {
+		summaryModel = m2
+	}
+	sumCfg, err := aiproviders.ConfigFor(summaryModel)
 	if err != nil {
 		return "", false, err
-	}
-	if m := os.Getenv("OPENAI_SUMMARY_MODEL"); m != "" {
-		sumCfg.Model = m
-	}
-	if m2 := cfg.Models.Summary; m2 != "" {
-		sumCfg.Model = m2
 	}
 	sumCfg.MaxOutputTokens = ragSummaryMaxOutputTokens
 	modelName := sumCfg.Model
@@ -823,9 +816,25 @@ func applyChatOverrides(base *openaiprovider.Config, overrides *ChatOverrides) (
 		configCopy.BaseURL = overrides.APIBase
 		configCopy.UseResponsesAPI = openaiprovider.IsOfficialOpenAIBase(overrides.APIBase)
 		configCopy.EnablePromptCache = configCopy.UseResponsesAPI
+		configCopy.Provider = ""
+		configCopy.FallbackModels = []string{}
 	}
 	if overrides.Model != "" {
-		configCopy.Model = overrides.Model
+		if overrides.APIBase != "" {
+			// A caller-supplied endpoint hosts bare model ids; the provider
+			// prefix only routes within our own registry.
+			_, configCopy.Model = aiproviders.Split(overrides.Model)
+		} else {
+			provided, err := aiproviders.ConfigFor(overrides.Model)
+			if err != nil {
+				return nil, err
+			}
+			configCopy.Provider, configCopy.BaseURL, configCopy.Model = provided.Provider, provided.BaseURL, provided.Model
+			configCopy.UseResponsesAPI, configCopy.EnablePromptCache, configCopy.FallbackModels = provided.UseResponsesAPI, provided.EnablePromptCache, provided.FallbackModels
+			if overrides.APIKey == "" {
+				configCopy.APIKey = provided.APIKey
+			}
+		}
 	}
 	return &configCopy, nil
 }

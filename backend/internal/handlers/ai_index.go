@@ -19,6 +19,7 @@ import (
 	"time"
 
 	aicontext "github.com/dreamtrans/backend/internal/ai"
+	"github.com/dreamtrans/backend/internal/aiproviders"
 	"github.com/dreamtrans/backend/internal/auth"
 	"github.com/dreamtrans/backend/internal/billing"
 	"github.com/dreamtrans/backend/internal/metrics"
@@ -259,7 +260,7 @@ func (h *RAGHandler) previewAIIndex(
 			inputTokens = maxInt
 		}
 		if estimate, estimateErr := estimator.EstimateCharge(ctx, userID, &billing.UsageRecord{
-			Action: "embedding", Provider: "openai-compatible", Model: model, InputTokens: int(inputTokens),
+			Action: "embedding", Provider: aiproviders.ProviderOf(model), Model: model, InputTokens: int(inputTokens),
 		}); estimateErr == nil {
 			preview.EstimatedDP = estimate
 		}

@@ -1920,6 +1920,20 @@ harden_existing_compose() {
         fi
     fi
 
+    # Additional AI providers were introduced after the single-endpoint
+    # installs; forward their variables so .env values reach the app.
+    if ! grep -q 'AI_PROVIDERS=' "$compose_file"; then
+        if ! grep -q 'OPENAI_API_BASE=' "$compose_file"; then
+            error "Cannot safely add AI provider variables to $compose_file"
+            return 1
+        fi
+        sed -i '/OPENAI_API_BASE=/a\
+      - AI_PROVIDERS=${AI_PROVIDERS:-}\
+      - AI_PROVIDER_KEYS=${AI_PROVIDER_KEYS:-}\
+      - AI_PROVIDER_OPTIONS=${AI_PROVIDER_OPTIONS:-}\
+      - AI_EMBEDDING_PROVIDER=${AI_EMBEDDING_PROVIDER:-}' "$compose_file" || return 1
+    fi
+
     # AI tuning and knowledge-extraction limits are optional overrides with
     # code defaults; forward them so .env values actually reach the app.
     if ! grep -q 'OPENAI_MODEL=' "$compose_file"; then
@@ -2316,6 +2330,16 @@ CLASSIC_TOKEN_BILLING_MINUTES=10
 # === OpenAI (optional) ===
 OPENAI_API_KEY=${OPENAI_API_KEY:-}
 OPENAI_API_BASE=${OPENAI_API_BASE:-https://api.openai.com/v1}
+# Additional OpenAI-compatible providers (optional). Their models appear in the
+# console as "name::model". Example:
+#   AI_PROVIDERS=cerebras=https://api.cerebras.ai/v1
+#   AI_PROVIDER_KEYS=cerebras=csk-...
+#   AI_PROVIDER_OPTIONS=cerebras=chat
+#   AI_EMBEDDING_PROVIDER=openai-compatible
+AI_PROVIDERS=${AI_PROVIDERS:-}
+AI_PROVIDER_KEYS=${AI_PROVIDER_KEYS:-}
+AI_PROVIDER_OPTIONS=${AI_PROVIDER_OPTIONS:-}
+AI_EMBEDDING_PROVIDER=${AI_EMBEDDING_PROVIDER:-}
 # Optional overrides (code defaults apply when unset):
 #   OPENAI_MODEL, OPENAI_EMBEDDING_MODEL, OPENAI_USE_RESPONSES,
 #   OPENAI_PROMPT_CACHE, OPENAI_PROMPT_CACHE_TTL, AI_MAX_CONTEXT_TOKENS,
@@ -2486,6 +2510,10 @@ services:
       - CLASSIC_TOKEN_BILLING_MINUTES=\${CLASSIC_TOKEN_BILLING_MINUTES:-10}
       - OPENAI_API_KEY=\${OPENAI_API_KEY:-}
       - OPENAI_API_BASE=\${OPENAI_API_BASE:-https://api.openai.com/v1}
+      - AI_PROVIDERS=\${AI_PROVIDERS:-}
+      - AI_PROVIDER_KEYS=\${AI_PROVIDER_KEYS:-}
+      - AI_PROVIDER_OPTIONS=\${AI_PROVIDER_OPTIONS:-}
+      - AI_EMBEDDING_PROVIDER=\${AI_EMBEDDING_PROVIDER:-}
       - OPENAI_MODEL=\${OPENAI_MODEL:-gpt-5.6-sol}
       - OPENAI_EMBEDDING_MODEL=\${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
       - OPENAI_USE_RESPONSES=\${OPENAI_USE_RESPONSES:-}

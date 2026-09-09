@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	openai "github.com/dreamtrans/backend/internal/adapters/openai_provider"
+	"github.com/dreamtrans/backend/internal/aiproviders"
 	"github.com/dreamtrans/backend/internal/auth"
 	"github.com/dreamtrans/backend/internal/billing"
 	"github.com/dreamtrans/backend/internal/config"
@@ -1109,12 +1110,9 @@ func (st *connState) ensureTranslatorTransLocked() error {
 	if st.trTrans != nil {
 		return nil
 	}
-	cfg, err := openai.NewConfigFromEnv()
+	cfg, err := aiproviders.ConfigFor(st.selectedModelTranslate)
 	if err != nil {
 		return err
-	}
-	if st.selectedModelTranslate != "" {
-		cfg.Model = st.selectedModelTranslate
 	}
 	cfg.MaxOutputTokens = realtimeProviderMaxOutputTokens
 	// Realtime translation is latency-critical. GPT-5.6 family (including
@@ -1132,12 +1130,9 @@ func (st *connState) ensureTranslatorSumLocked() error {
 	if strings.TrimSpace(st.selectedModelSummary) == "" {
 		return errors.New("approved summary model is unavailable")
 	}
-	cfg, err := openai.NewConfigFromEnv()
+	cfg, err := aiproviders.ConfigFor(st.selectedModelSummary)
 	if err != nil {
 		return err
-	}
-	if st.selectedModelSummary != "" {
-		cfg.Model = st.selectedModelSummary
 	}
 	cfg.MaxOutputTokens = realtimeProviderMaxOutputTokens
 	st.trSum = openai.NewTranslator(cfg)
@@ -2086,7 +2081,7 @@ func (h *WebSocketHandler) Handle(w http.ResponseWriter, r *http.Request) {
 			claims.UserID,
 			&billing.UsageRecord{
 				Action:       "translation",
-				Provider:     "openai-compatible",
+				Provider:     aiproviders.ProviderOf(state.selectedModelTranslate),
 				Model:        state.selectedModelTranslate,
 				InputTokens:  realtimeInputReservationTokens(),
 				OutputTokens: realtimeOutputReservationTokens(""),
@@ -3065,14 +3060,7 @@ readLoop:
 					if strings.TrimSpace(model) == "" {
 						return nil, errors.New("approved summary model is unavailable")
 					}
-					cfg, err := openai.NewConfigFromEnv()
-					if err != nil {
-						return nil, err
-					}
-					if model != "" {
-						cfg.Model = model
-					}
-					return cfg, nil
+					return aiproviders.ConfigFor(model)
 				})
 			}
 			state.mu.Lock()

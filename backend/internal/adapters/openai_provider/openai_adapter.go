@@ -34,6 +34,9 @@ var gptModelFamilyPattern = regexp.MustCompile(`(?i)^gpt-(\d+)(?:\.(\d+))?(?:-|$
 
 // Config holds OpenAI-style API configuration.
 type Config struct {
+	// Provider names the registered endpoint this configuration was built
+	// for; empty means the default OPENAI_* endpoint.
+	Provider    string
 	BaseURL     string
 	APIKey      string
 	Model       string
@@ -51,6 +54,10 @@ type Config struct {
 	UseResponsesAPI   bool
 	EnablePromptCache bool
 	PromptCacheTTL    int // seconds
+	// FallbackModels are tried after Model fails. nil keeps the historical
+	// OPENAI_FALLBACK_MODELS / gpt-5 family behavior for the default
+	// provider; other providers get no fallback unless configured.
+	FallbackModels []string
 }
 
 // NewConfigFromEnv builds Config from environment variables with sensible defaults.
@@ -312,21 +319,23 @@ func (t *Translator) chatComplete(ctx context.Context, messages []map[string]str
 		return content, resp.StatusCode, raw.String(), nil
 	}
 
-	// Build model candidates: primary + env fallbacks (default only gpt-5 family; never fallback to gpt-4 series)
+	// Build model candidates: primary + fallbacks. The default provider keeps
+	// the historical env / gpt-5 family list; any other provider only falls
+	// back to models explicitly configured for it, never across providers.
 	modelPrimary := t.cfg.Model
 	fallbacks := []string{}
-	if v := os.Getenv("OPENAI_FALLBACK_MODELS"); v != "" {
-		for _, p := range strings.Split(v, ",") {
-			p = strings.TrimSpace(p)
-			if p != "" && !strings.EqualFold(p, modelPrimary) {
-				fallbacks = append(fallbacks, p)
-			}
+	candidates := t.cfg.FallbackModels
+	if candidates == nil && (t.cfg.Provider == "" || t.cfg.Provider == "openai-compatible") {
+		if v := os.Getenv("OPENAI_FALLBACK_MODELS"); v != "" {
+			candidates = strings.Split(v, ",")
+		} else {
+			candidates = []string{"gpt-5.6-luna", "gpt-5-mini"}
 		}
-	} else {
-		for _, p := range []string{"gpt-5.6-luna", "gpt-5-mini"} {
-			if !strings.EqualFold(p, modelPrimary) {
-				fallbacks = append(fallbacks, p)
-			}
+	}
+	for _, p := range candidates {
+		p = strings.TrimSpace(p)
+		if p != "" && !strings.EqualFold(p, modelPrimary) {
+			fallbacks = append(fallbacks, p)
 		}
 	}
 	models := append([]string{modelPrimary}, fallbacks...)

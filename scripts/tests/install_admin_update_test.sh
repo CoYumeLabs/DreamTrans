@@ -220,7 +220,7 @@ if grep -q 'soaringjerry' "$INSTALL_DIR/docker-compose.yml"; then
     echo "Hardened Compose still pulls from the old image owner" >&2
     exit 1
 fi
-for ai_key in OPENAI_MODEL OPENAI_EMBEDDING_MODEL AI_INDEX_WORKERS KNOWLEDGE_MAX_PDF_PAGES; do
+for ai_key in OPENAI_MODEL OPENAI_EMBEDDING_MODEL AI_INDEX_WORKERS KNOWLEDGE_MAX_PDF_PAGES AI_PROVIDERS AI_PROVIDER_KEYS AI_PROVIDER_OPTIONS AI_EMBEDDING_PROVIDER; do
     test "$(grep -c "${ai_key}=" "$INSTALL_DIR/docker-compose.yml")" = "1"
 done
 for payment_key in STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET APP_BASE_URL STRIPE_CURRENCY STRIPE_USD_EXCHANGE_RATE STRIPE_FX_MARKUP_PERCENT STRIPE_FX_RATE_URL; do
