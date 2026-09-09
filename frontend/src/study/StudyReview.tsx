@@ -84,7 +84,7 @@ export function StudyHistory({ projectId }: { projectId: string }) {
         {items.map((item) => <li key={item.id}>
           <button className="st-btn" onClick={() => setSelected(item.id)} type="button">
             <strong>{item.scenario?.question || item.skill_label}</strong>
-            <span>{item.skill_label} · {item.grade} · {new Date(item.created_at).toLocaleString(intlLocale())}</span>
+            <span>{item.skill_label} · {item.grade || p.seen} · {new Date(item.created_at).toLocaleString(intlLocale())}</span>
           </button>
         </li>)}
       </ol>}

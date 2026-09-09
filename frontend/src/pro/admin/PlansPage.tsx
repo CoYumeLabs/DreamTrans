@@ -17,17 +17,20 @@ import { formatInteger, formatPercent, limitLabel, type Runner } from './shared'
 import { ErrorBanner, Modal } from './ui'
 
 // Only byok, batch and auto_topup are checked by the backend today. The other
-// flags came with the original membership schema and gate nothing yet, so the
-// label says so instead of letting an administrator believe a switch works.
+// flags came with the original membership schema and gate nothing yet, so they
+// are rendered read-only instead of letting an administrator believe a switch
+// works.
 const featureLabels: Record<PlanFeatureKey, string> = {
-  premium_models: '高级模型（未实现，开关暂无效果）',
+  premium_models: '高级模型',
   byok: '自带 Provider Key',
   batch: '批量处理',
-  custom_prompt: '自定义提示词（未实现，开关暂无效果）',
+  custom_prompt: '自定义提示词',
   auto_topup: '自动充值',
-  export_ledger: '导出账单（未实现，开关暂无效果）',
-  api_access: 'API 访问（未实现，开关暂无效果）',
+  export_ledger: '导出账单',
+  api_access: 'API 访问',
 }
+
+const unimplementedFeatures: PlanFeatureKey[] = ['premium_models', 'custom_prompt', 'export_ledger', 'api_access']
 
 interface PlanDraft {
   isNew: boolean
@@ -378,11 +381,12 @@ export function PlansPage({ run, onOpenSettings }: { run: Runner; onOpenSettings
               <div className="pa-checkbox-grid">
                 {planFeatureKeys.map((key) => (
                   <label className="pa-checkbox" key={key}>
-                    <input checked={Boolean(planDraft.features[key])} onChange={(event) => setPlanDraft({ ...planDraft, features: { ...planDraft.features, [key]: event.target.checked } })} type="checkbox" />
+                    <input checked={Boolean(planDraft.features[key])} disabled={unimplementedFeatures.includes(key)} onChange={(event) => setPlanDraft({ ...planDraft, features: { ...planDraft.features, [key]: event.target.checked } })} type="checkbox" />
                     <span>{featureLabels[key]}</span>
                   </label>
                 ))}
               </div>
+              <p className="pa-form-note">以下开关尚未接入，暂不可配置：{unimplementedFeatures.map((key) => featureLabels[key]).join('、')}。</p>
             </fieldset>
             <div className="pa-dialog-grid">
               <label><span>Stripe 月付价格 ID（可选）</span><input maxLength={120} onChange={(event) => setPlanDraft({ ...planDraft, stripe_price_id_month: event.target.value })} placeholder="price_…" value={planDraft.stripe_price_id_month} /></label>

@@ -85,7 +85,7 @@ test('previous question preserves drafts and distinct retry answers without gene
   await practice.getByRole('button', { name: '收工', exact: true }).click()
   await page.getByRole('button', { name: '回顾本次练习', exact: true }).click()
   await expect(review.getByText('My first answer', { exact: true })).toBeVisible()
-  await review.getByRole('button', { name: '收工', exact: true }).click()
+  await review.getByRole('button', { name: '返回报告', exact: true }).click()
   await page.getByRole('button', { name: '再来几道', exact: true }).click()
   await expect(practice.locator('textarea')).toHaveValue('Unfinished current answer')
   expect(counts.next).toBe(3)

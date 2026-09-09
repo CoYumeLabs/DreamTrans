@@ -139,7 +139,7 @@ export default function InviteLanding() {
     ctx.fillStyle = '#4b5160'
     ctx.font = '400 34px system-ui, -apple-system, "PingFang SC", "Noto Sans CJK SC", sans-serif'
     y = wrap(isReferral ? t.referralLead : (offer.description || t.defaultLead), 120, y + 20, w - 240, 50, 4)
-    const bullets = rewards.length ? rewards : [t.benefitTrial]
+    const bullets = rewards.length ? rewards : [isReferral ? t.benefitTrialPlain : t.benefitTrial]
     ctx.font = '500 34px system-ui, -apple-system, "PingFang SC", "Noto Sans CJK SC", sans-serif'
     y += 30
     for (const line of bullets.slice(0, 6)) {
@@ -207,11 +207,13 @@ export default function InviteLanding() {
               {!isReferral && offer.headline && offer.name && offer.headline !== offer.name && <p className="iv-campaign">{offer.name}</p>}
               <p className="iv-lead">{isReferral ? t.referralLead : (offer.description || t.defaultLead)}</p>
 
-              <h2 className="iv-subhead">{t.benefits}</h2>
-              <ul className="iv-benefits">
-                {rewards.map((line) => <li key={line}><Icon name="check" size={15} />{line}</li>)}
-                <li><Icon name="check" size={15} />{t.benefitTrial}</li>
-              </ul>
+              {!closed && <>
+                <h2 className="iv-subhead">{t.benefits}</h2>
+                <ul className="iv-benefits">
+                  {rewards.map((line) => <li key={line}><Icon name="check" size={15} />{line}</li>)}
+                  <li><Icon name="check" size={15} />{isReferral ? t.benefitTrialPlain : t.benefitTrial}</li>
+                </ul>
+              </>}
 
               {!isReferral && (countdown || offer.remaining !== undefined) && (
                 <div className="iv-urgency" aria-live="polite">

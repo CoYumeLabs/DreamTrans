@@ -45,12 +45,12 @@ export function TenantsPage({ run }: { run: Runner }) {
               }, '组织类型已更新')}>
                 <option value="personal">个人</option><option value="institution">机构（不训练）</option>
               </select></td>
-              <td><select aria-label={`${tenant.name} Speechmatics 账号`} value={tenant.speechmatics_route ?? ''} onChange={(event) => void run(async () => {
+              <td><select aria-label={`${tenant.name} Speechmatics 账号`} disabled={tenant.kind === 'institution'} title={tenant.kind === 'institution' ? '机构固定为不训练' : undefined} value={tenant.kind === 'institution' ? 'standard' : tenant.speechmatics_route ?? ''} onChange={(event) => void run(async () => {
                 await updateTenant(tenant.id, { speechmatics_route: event.target.value as Tenant['speechmatics_route'] })
                 await load()
               }, '账号路由已更新')}>
-                <option value="">按规则</option><option value="standard">强制不训练</option><option value="training">强制训练</option>
-              </select></td>
+                <option value="">语音服务账号：默认（按训练计划规则）</option><option value="standard">不用于训练</option><option value="training">用于训练</option>
+              </select>{tenant.kind === 'institution' && <small>机构固定为不训练</small>}</td>
               <td>{tenant.storage_quota_gb} GB</td>
             </tr>
           ))}

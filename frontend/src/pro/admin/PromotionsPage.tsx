@@ -126,6 +126,9 @@ export function PromotionsPage({ run, scoped = false }: { run: Runner; scoped?: 
   const [editing, setEditing] = useState<Promotion | null>(null)
   const [copyDraft, setCopyDraft] = useState({ headline: '', description: '' })
   const [created, setCreated] = useState<Promotion | null>(null)
+  // The same panel is reused by 复制链接 on an existing row, where the link is
+  // not a newly created one.
+  const [createdIsNew, setCreatedIsNew] = useState(false)
   const [utm, setUtm] = useState<UTM>(emptyUTM)
   const [referrers, setReferrers] = useState<ReferrersResult>({ referrers: [], total: 0 })
   const [referrerPage, setReferrerPage] = useState(1)
@@ -178,7 +181,7 @@ export function PromotionsPage({ run, scoped = false }: { run: Runner; scoped?: 
       }),
     }), '推广邀请已创建')
     setBusy(false)
-    if (saved) { setCreating(false); setCreated(saved); setUtm(emptyUTM); reload() }
+    if (saved) { setCreating(false); setCreated(saved); setCreatedIsNew(true); setUtm(emptyUTM); reload() }
   }
 
   async function saveCopy(event: FormEvent) {
@@ -216,7 +219,7 @@ export function PromotionsPage({ run, scoped = false }: { run: Runner; scoped?: 
         <input aria-label="utm_campaign" onChange={(event) => setUtm({ ...utm, campaign: event.target.value })} placeholder="utm_campaign" value={utm.campaign} />
         <input aria-label="utm_content" onChange={(event) => setUtm({ ...utm, content: event.target.value })} placeholder="utm_content（如 博主A）" value={utm.content} />
       </div>
-      <input aria-label="新建邀请链接" readOnly value={inviteLink(created.code, utm)} onFocus={(event) => event.target.select()} />
+      <input aria-label={createdIsNew ? '新建邀请链接' : `${created.name} 邀请链接`} readOnly value={inviteLink(created.code, utm)} onFocus={(event) => event.target.select()} />
       <div className="pa-promotion-actions">
         <button className="pa-button" onClick={() => { void run(() => navigator.clipboard.writeText(inviteLink(created.code, utm)), '链接已复制') }} type="button">复制邀请链接</button>
         <a className="pa-button" href={inviteLink(created.code, utm)} rel="noopener" target="_blank">打开落地页 / 海报</a>
@@ -233,7 +236,7 @@ export function PromotionsPage({ run, scoped = false }: { run: Runner; scoped?: 
           <td><strong className="pa-tabular">{p.visits} → {p.registrations} → {p.verified} → {p.rewarded} → {p.paid}</strong><small>注册上限 {p.max_registrations} 人 · 访问转化 {rate(p.registrations, p.visits)} · 付费转化 {rate(p.paid, p.verified)} · 收入 {formatUSD(p.revenue_usd)}</small><progress className="pa-progress" aria-label={`${p.name} 注册名额使用情况`} value={p.registrations} max={p.max_registrations} /></td>
           <td><span className={`pa-status ${stateLabel(p) === '启用中' ? 'pa-status--good' : ''}`}>{stateLabel(p)}</span><small>{formatDate(p.expires_at)}</small></td>
           <td><div className="pa-promotion-actions">
-            <button className="pa-button" type="button" onClick={() => { setCreated(p); setUtm(emptyUTM); void run(() => navigator.clipboard.writeText(inviteLink(p.code)), '链接已复制') }}>复制链接</button>
+            <button className="pa-button" type="button" onClick={() => { setCreated(p); setCreatedIsNew(false); setUtm(emptyUTM); void run(() => navigator.clipboard.writeText(inviteLink(p.code)), '链接已复制') }}>复制链接</button>
             <button className="pa-button" type="button" onClick={() => setFunnelFor(p)}>漏斗</button>
             <button className="pa-button" type="button" onClick={() => { setRecipientPage(1); setRecipients({ registrations: [], total: 0 }); setSelected(p) }}>注册记录</button>
             <button className="pa-button" type="button" onClick={() => { setCopyDraft({ headline: p.headline, description: p.description }); setEditing(p) }}>文案</button>

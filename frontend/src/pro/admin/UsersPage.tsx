@@ -225,12 +225,6 @@ function BasicUserList({
                       标记已验证
                     </button>
                   )}
-                  <select aria-label={`${user.email} Speechmatics 账号`} title="强制此账户走某个 Speechmatics 账号（仅超级管理员）" value={user.speechmatics_route ?? ''} onChange={(event) => void run(async () => {
-                    await updateUser(user.id, { speechmatics_route: event.target.value as '' | 'training' | 'standard' })
-                    await load()
-                  }, '账号路由已更新')}>
-                    <option value="">账号：按规则</option><option value="standard">账号：强制不训练</option><option value="training">账号：强制训练</option>
-                  </select>
                 </td>
               </tr>
             ))}

@@ -55,6 +55,10 @@ export function SettingsPanel({
   const m = useMessages()
   const s = m.settings
   const nextSessionLocked = recorderStatus !== 'idle'
+  // An institution tenant or an administrator-pinned route decides the account
+  // for this user, so joining could never earn the discount.
+  const routeIneligible = trainingRoute?.reason === 'institution'
+    || ((trainingRoute?.reason === 'tenant_pinned' || trainingRoute?.reason === 'user_pinned') && !trainingRoute.training)
   const [trainingStatus, setTrainingStatus] = useState('')
 
   async function changeTrainingOptIn(optIn: boolean) {
@@ -412,9 +416,10 @@ export function SettingsPanel({
                   : trainingRoute.gift_funded ? s.training.routeGift : ''
           }</p>}
           {trainingProgram.available && <Toggle
-            checked={trainingOptIn === true}
-            description={trainingOptIn === null ? s.training.unanswered : s.training.toggleBody}
-            label={s.training.toggle(trainingProgram.discountPercent)}
+            checked={trainingOptIn === true && !routeIneligible}
+            description={routeIneligible ? s.training.notEligible : trainingOptIn === null ? s.training.unanswered : s.training.toggleBody}
+            disabled={routeIneligible}
+            label={routeIneligible ? s.training.notEligible : s.training.toggle(trainingProgram.discountPercent)}
             onChange={(optIn) => void changeTrainingOptIn(optIn)}
           />}
           {trainingStatus && <p className="dt-muted" role="status">{trainingStatus}</p>}

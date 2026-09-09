@@ -173,7 +173,7 @@ export default function ProAdmin() {
             {can('pricing.read') && <fieldset className="pa-permission-scope" disabled={!can('pricing.write')}><CostsPage run={run} /></fieldset>}
           </div>
         )}
-        {tab === 'tenants' && <fieldset className="pa-permission-scope" disabled={!can('routing.write')}><TenantsPage run={run} /></fieldset>}
+        {tab === 'tenants' && <fieldset className="pa-permission-scope" disabled={!isSuper}><TenantsPage run={run} /></fieldset>}
         {tab === 'settings' && <fieldset className="pa-permission-scope" disabled={!can('settings.write')}><SettingsPage run={run} /></fieldset>}
       </main>
     </div>

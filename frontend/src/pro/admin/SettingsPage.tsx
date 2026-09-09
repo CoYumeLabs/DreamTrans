@@ -44,12 +44,12 @@ const settingCopy: Record<SettingKey, { label: string; description: string; dang
   },
   training_discount_percent: {
     label: '训练计划转录折扣（%）',
-    description: '加入训练计划的用户在转录费用上的折扣，只在配置了 SM_API_KEY_NO_TRAINING 的部署上生效。首页、引导和设置页自动显示当前值；下调折扣对已加入用户属于不利变更，按条款第 13 节需提前 30 天通知。',
+    description: '加入训练计划的用户在转录费用上的折扣，仅在部署配置了第二个（不训练）语音账号时生效。首页、引导和设置页自动显示当前值；下调折扣对已加入用户属于不利变更，按条款第 13 节需提前 30 天通知。',
     dangerous: true,
   },
   training_program_enabled: {
     label: '训练计划总开关',
-    description: '关闭即暂停整个训练计划：前端隐藏训练相关内容，所有人走未开启训练的账户，折扣停止。重新开启后用户需重新选择（清零逻辑后续提供）。',
+    description: '关闭后所有用户改走不训练账号、折扣停止，并清空已有的加入记录；重新开启后需要用户重新选择加入。',
     dangerous: true,
   },
   gift_training_discount: {
@@ -92,10 +92,13 @@ export function SettingsPage({ run }: { run: Runner }) {
   const [resetPreview, setResetPreview] = useState<SystemSettingsResetPreview | null>(null)
   const [resetText, setResetText] = useState('')
   const [trainingStats, setTrainingStats] = useState<TrainingProgramStats | null>(null)
+  const [trainingStatsFailed, setTrainingStatsFailed] = useState(false)
 
   useEffect(() => {
     let active = true
-    void getTrainingProgramStats().then((stats) => { if (active) setTrainingStats(stats) }).catch(() => undefined)
+    void getTrainingProgramStats()
+      .then((stats) => { if (active) setTrainingStats(stats) })
+      .catch(() => { if (active) setTrainingStatsFailed(true) })
     return () => { active = false }
   }, [])
 
@@ -211,7 +214,8 @@ export function SettingsPage({ run }: { run: Runner }) {
 
         <section className="pa-card pa-section">
           <div className="pa-section__heading"><div><h2>训练计划统计</h2><p>领码时、首充时的训练开关状态，以及两个账号各自的转录小时数。</p></div></div>
-          {!trainingStats && <p className="pa-form-note">正在读取…</p>}
+          {!trainingStats && !trainingStatsFailed && <p className="pa-form-note">正在读取…</p>}
+          {!trainingStats && trainingStatsFailed && <p className="pa-form-note" role="alert">统计读取失败，请刷新</p>}
           {trainingStats && (
             <div className="pa-summary-grid pa-summary-grid--four">
               <div><small>状态 / 折扣</small><strong>{trainingStats.enabled ? '开启' : '已暂停'} · {trainingStats.discount_percent}%</strong></div>

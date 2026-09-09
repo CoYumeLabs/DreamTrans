@@ -541,7 +541,7 @@ export function PracticePanel({
             <button className="st-btn" disabled={reviewIndex === 0} onClick={() => openReview(reviewIndex - 1)} type="button">{p.previous}</button>
             <span>#{pad(history[reviewIndex].questionNumber)}</span>
             <button className="st-btn" disabled={reviewIndex === history.length - 1} onClick={() => openReview(reviewIndex + 1)} type="button">{p.next}</button>
-            <button className="st-btn st-btn--primary" onClick={() => setReviewIndex(null)} type="button">{stage === 'report' ? p.reportAria : p.backToCurrent}</button>
+            <button className="st-btn st-btn--primary" onClick={() => setReviewIndex(null)} type="button">{stage === 'report' ? p.backToReport : p.backToCurrent}</button>
           </nav>
           <StudyReviewCard item={history[reviewIndex].review} />
         </div>

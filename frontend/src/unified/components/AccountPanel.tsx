@@ -666,7 +666,7 @@ export function AccountPanel({
               />
               <span aria-hidden="true" className="dt-toggle__track"><span /></span>
             </label>
-            {account.auto_topup_error && <p role="status">{b.autoTopupFailed}</p>}
+            {account.auto_topup_status === 'failed' && <p role="status">{b.autoTopupFailed(account.auto_topup_error || '')}</p>}
             <div className="dt-billing-autotopup__form">
               <label className="dt-field">
                 <span>{b.below}</span>
