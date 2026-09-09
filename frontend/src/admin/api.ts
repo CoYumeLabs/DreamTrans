@@ -762,7 +762,7 @@ export async function adminFetch<T>(endpoint: string, options: RequestInit = {})
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Request failed' }))
     if (response.status === 428 && error.code === 'confirmation_required' && new Headers(options.headers).get('X-Admin-Confirm') !== 'true') {
-      if (!window.confirm('这项操作会影响价格、赠送额度或账户余额。请核对当前表单，确认后继续。')) throw new AdminAPIError('已取消，未作任何修改', 428)
+      if (!window.confirm(typeof error.error === 'string' && error.error ? error.error : '这项操作会影响价格、赠送额度或账户余额。请核对当前表单，确认后继续。')) throw new AdminAPIError('已取消，未作任何修改', 428)
       if (getStoredUser()?.id !== identity) throw new AdminAPIError('账户已切换，请刷新页面', 401)
       return adminFetch<T>(endpoint, { ...options, headers: { ...options.headers, 'X-Admin-Confirm': 'true' } })
     }

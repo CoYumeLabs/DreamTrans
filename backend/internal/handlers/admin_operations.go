@@ -315,11 +315,10 @@ func (h *AdminHandler) ConsoleWrites(next http.Handler) http.Handler {
 			http.Error(w, "Invalid JSON", http.StatusBadRequest)
 			return
 		}
-		money := moneySettings(payload) || strings.HasPrefix(r.URL.Path, "/api/agent/codes") || strings.Contains(r.URL.Path, "/promotions") || strings.Contains(r.URL.Path, "/agents") || strings.Contains(r.URL.Path, "/agent-fraud") || strings.Contains(r.URL.Path, "/settlements") || strings.Contains(r.URL.Path, "/billing/") || strings.Contains(r.URL.Path, "/customers/") || strings.HasSuffix(r.URL.Path, "/balance") || strings.Contains(r.URL.Path, "/redeem-codes") || (strings.Contains(r.URL.Path, "/settings") && moneySettings(payload))
-		if money && r.Header.Get("X-Admin-Confirm") != "true" {
+		if action, money := consoleConfirmation(r, payload); money && r.Header.Get("X-Admin-Confirm") != "true" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusPreconditionRequired)
-			WriteJSON(w, map[string]string{"error": "请核对价格、赠送额度或余额变更后再次确认", "code": "confirmation_required"})
+			WriteJSON(w, map[string]string{"error": "此操作将" + action + "，会直接影响客户实际支付的价格、赠送额度或余额。请核对表单后确认。", "code": "confirmation_required", "action": action})
 			return
 		}
 		sanitized := redactAuditPayload(payload)
@@ -355,6 +354,49 @@ func (w *adminStatusWriter) WriteHeader(status int) {
 	w.status = status
 	w.ResponseWriter.WriteHeader(status)
 }
+
+// consoleConfirmation names the operations that move money or change what a
+// customer pays, so only those ask the operator to confirm. Everything else
+// (routing estimates, roles, announcements, copy edits) saves directly.
+func consoleConfirmation(r *http.Request, payload any) (string, bool) {
+	path := r.URL.Path
+	switch {
+	case path == "/api/admin/balance" || strings.HasSuffix(path, "/balance"):
+		return "调整用户钱包余额", true
+	case strings.HasPrefix(path, "/api/admin/billing/plans") || strings.HasPrefix(path, "/api/admin/billing/topup-tiers"):
+		return "修改对客户生效的套餐或充值档位", true
+	case strings.HasPrefix(path, "/api/admin/billing/"):
+		return "修改计费目录、加价或成本口径", true
+	case strings.HasPrefix(path, "/api/admin/customers/"):
+		return "修改该客户的会员、赠送额度或余额", true
+	case strings.HasPrefix(path, "/api/admin/redeem-codes"):
+		if r.Method == http.MethodDelete {
+			return "作废尚未使用的兑换码", true
+		}
+		return "生成可兑换成赠送额度的兑换码", true
+	case strings.HasPrefix(path, "/api/agent/codes"):
+		return "生成代理兑换码", true
+	case strings.HasPrefix(path, "/api/agent/settlements"):
+		return "申请结算代理分成", true
+	case strings.HasPrefix(path, "/api/admin/settlements"):
+		return "审核或登记支付代理结算", true
+	case path == "/api/admin/agents":
+		return "修改代理的分成比例、面值或结算门槛", true
+	case path == "/api/admin/agent-fraud":
+		return "解除分成风控标记或放宽风控规则", true
+	case path == "/api/admin/promotions" && r.Method == http.MethodPost:
+		return "创建带赠送权益的推广活动", true
+	case strings.HasPrefix(path, "/api/admin/tenants/"):
+		return "修改组织的套餐或配额", true
+	case strings.HasPrefix(path, "/api/admin/models") || path == "/api/admin/settings":
+		// Only the price-bearing fields of these mixed forms move money.
+		if moneySettings(payload) {
+			return "修改模型定价、折扣或赠送相关设置", true
+		}
+	}
+	return "", false
+}
+
 func moneySettings(value any) bool {
 	switch object := value.(type) {
 	case map[string]any:
