@@ -11,28 +11,16 @@ import (
 	"github.com/google/uuid"
 )
 
-// Claim flags explain commission eligibility; they never alter the customer's
-// advertised gift, prices, training consent or account access.
-func recordAgentClaimTx(ctx context.Context, tx *sql.Tx, codeID, userID string) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO agent_flags(agent_user_id,code_id,user_id,reason,minimum_seconds)
- SELECT b.agent_user_id,c.id,$2,rule.reason,rule.seconds FROM redeem_codes c JOIN redeem_batches b ON b.id=c.batch_id
- JOIN agent_profiles a ON a.user_id=b.agent_user_id CROSS JOIN agent_fraud_rules f
- JOIN users buyer ON buyer.id=$2 JOIN users agent ON agent.id=a.user_id
- LEFT JOIN signup_risk_profiles br ON br.user_id=buyer.id LEFT JOIN signup_risk_profiles ar ON ar.user_id=agent.id
- CROSS JOIN LATERAL (VALUES
- ('self_email',0,f.check_email AND (buyer.id=agent.id OR lower(buyer.email)=lower(agent.email) OR (br.email_hash IS NOT NULL AND br.email_hash=ar.email_hash))),
- ('shared_device',0,f.check_device AND br.device_hash IS NOT NULL AND br.device_hash=ar.device_hash),
- ('minimum_usage',f.minimum_usage_seconds,f.minimum_usage_seconds>0)
- ) rule(reason,seconds,hit) WHERE c.id=$1 AND rule.hit ON CONFLICT(code_id,reason) DO NOTHING`, codeID, userID)
-	return err
-}
-
+// recordAgentCommissionTx books the agent's share of a real top-up made by
+// an account attributed to the agent's source within twelve months of
+// sign-up. Fraud flags on the attribution decide eligibility later.
 func recordAgentCommissionTx(ctx context.Context, tx *sql.Tx, userID, paymentID string, amount float64) error {
 	var agentID string
 	// Lock the profile before changing commission totals; payout uses the same
 	// lock, so refunds and incoming payments cannot race an approval.
-	err := tx.QueryRowContext(ctx, `SELECT a.user_id FROM redeem_codes c JOIN redeem_batches b ON b.id=c.batch_id JOIN agent_profiles a ON a.user_id=b.agent_user_id JOIN users u ON u.id=c.redeemed_by
- WHERE c.redeemed_by=$1 AND c.redeemed_at<=NOW() AND NOW()<u.created_at+interval '12 months' FOR UPDATE OF a`, userID).Scan(&agentID)
+	err := tx.QueryRowContext(ctx, `SELECT a.user_id FROM promotion_registrations r JOIN promotion_invites i ON i.id=r.invite_id AND i.kind='agent'
+ JOIN agent_profiles a ON a.user_id=i.owner_user_id JOIN users u ON u.id=r.user_id
+ WHERE r.user_id=$1 AND NOW()<u.created_at+interval '12 months' FOR UPDATE OF a`, userID).Scan(&agentID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}

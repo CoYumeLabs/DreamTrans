@@ -12,6 +12,9 @@ func archiveUserTx(ctx context.Context, tx *sql.Tx, userID string) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE billing_accounts SET status='suspended',auto_topup_threshold_usd=NULL,auto_topup_amount_usd=NULL WHERE id=(SELECT billing_account_id FROM users WHERE id=$1)`, userID); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `UPDATE promotion_invites SET enabled=FALSE WHERE owner_user_id=$1`, userID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE agent_profiles SET status='suspended',updated_at=NOW() WHERE user_id=$1`, userID); err != nil {
 		return err
 	}
@@ -25,6 +28,6 @@ func archiveUserTx(ctx context.Context, tx *sql.Tx, userID string) error {
 			return fmt.Errorf("erase account content: %w", err)
 		}
 	}
-	_, err := tx.ExecContext(ctx, `UPDATE users SET deleted_at=NOW(),is_active=false,email='deleted+'||id::text||'@invalid.example',password_hash='!deleted',name='Deleted account',role='user',email_verified=false,last_login_at=NULL,training_opt_in=false,speechmatics_route=NULL,referral_code=NULL,admin_role_id=NULL,updated_at=NOW() WHERE id=$1`, userID)
+	_, err := tx.ExecContext(ctx, `UPDATE users SET deleted_at=NOW(),is_active=false,email='deleted+'||id::text||'@invalid.example',password_hash='!deleted',name='Deleted account',role='user',email_verified=false,last_login_at=NULL,training_opt_in=false,speechmatics_route=NULL,admin_role_id=NULL,updated_at=NOW() WHERE id=$1`, userID)
 	return err
 }

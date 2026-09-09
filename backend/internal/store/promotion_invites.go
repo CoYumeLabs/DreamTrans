@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -15,18 +14,27 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/dreamtrans/backend/internal/auth"
+	"github.com/dreamtrans/backend/internal/acquisition"
 	"github.com/dreamtrans/backend/internal/models"
 	"github.com/lib/pq"
 )
 
-var ErrInvalidPromotion = errors.New("promotion invite is invalid, paused, expired or full")
+var ErrInvalidPromotion = acquisition.ErrInvalidSource
 var ErrPromotionInput = errors.New("invalid promotion configuration")
 var promotionCodePattern = regexp.MustCompile(`^[A-Z0-9][A-Z0-9_-]{5,47}$`)
 
 type PromotionInvite struct {
-	ID               string    `json:"id"`
-	Code             string    `json:"code"`
+	ID   string `json:"id"`
+	Code string `json:"code"`
+	// Kind is campaign (channel link), referral (one per user) or agent
+	// (one per agent, carries the commission relationship).
+	Kind string `json:"kind"`
+	// OwnerUserID is the referrer or agent; empty for campaigns.
+	OwnerUserID string `json:"owner_user_id"`
+	OwnerName   string `json:"owner_name"`
+	// ClaimMode is link (sign-up through the landing page attributes) or code
+	// (only a single-use code from this source attributes).
+	ClaimMode        string    `json:"claim_mode"`
 	Name             string    `json:"name"`
 	Channel          string    `json:"channel"`
 	Tags             []string  `json:"tags"`
@@ -59,6 +67,10 @@ type PromotionInvite struct {
 	Visits              int       `json:"visits"`
 	Paid                int       `json:"paid"`
 	RevenueUSD          float64   `json:"revenue_usd"`
+	// Codes counts single-use codes issued under the source and how many
+	// were claimed.
+	Codes        int `json:"codes"`
+	CodesClaimed int `json:"codes_claimed"`
 }
 
 // HasRewards reports whether the invite promises anything beyond attribution.
@@ -67,7 +79,8 @@ func (p *PromotionInvite) HasRewards() bool {
 		p.MilestoneSessionUSD > 0 || p.MilestoneTopupUSD > 0
 }
 
-const promotionColumns = `i.id, i.code, i.name, i.channel, i.tags, i.enabled, i.expires_at,
+const promotionColumns = `i.id, i.code, i.kind, COALESCE(i.owner_user_id::text,''), COALESCE((SELECT COALESCE(NULLIF(o.name,''),o.email) FROM users o WHERE o.id=i.owner_user_id),''), i.claim_mode,
+    i.name, i.channel, i.tags, i.enabled, i.expires_at,
     i.max_registrations, i.grant_usd, i.grant_days, COALESCE(i.plan_code, ''), i.plan_days,
     i.headline, i.description, i.usage_discount_percent, i.discount_days, i.topup_bonus_percent, i.topup_bonus_days,
     i.milestone_session_usd, i.milestone_topup_usd, i.created_at`
@@ -82,19 +95,21 @@ const promotionFunnelColumns = `
         (SELECT COUNT(*) FROM promotion_registrations r JOIN users u ON u.id=r.user_id JOIN billing_accounts a ON a.id=u.billing_account_id
             WHERE r.invite_id=i.id AND EXISTS (SELECT 1 FROM payments p WHERE p.account_id=a.id AND p.status='succeeded' AND p.stripe_object_id IS NOT NULL AND p.amount_usd>0)),
         COALESCE((SELECT SUM(p.amount_usd) FROM promotion_registrations r JOIN users u ON u.id=r.user_id JOIN billing_accounts a ON a.id=u.billing_account_id
-            JOIN payments p ON p.account_id=a.id WHERE r.invite_id=i.id AND p.status='succeeded' AND p.stripe_object_id IS NOT NULL AND p.amount_usd>0),0)`
+            JOIN payments p ON p.account_id=a.id WHERE r.invite_id=i.id AND p.status='succeeded' AND p.stripe_object_id IS NOT NULL AND p.amount_usd>0),0),
+        (SELECT COUNT(*) FROM redeem_codes c WHERE c.invite_id=i.id),
+        (SELECT COUNT(*) FROM redeem_codes c WHERE c.invite_id=i.id AND c.redeemed_at IS NOT NULL)`
 
 type promotionScanner interface{ Scan(...any) error }
 
 func scanPromotion(row promotionScanner, stats bool) (*PromotionInvite, error) {
 	p := &PromotionInvite{}
 	var tags []byte
-	dest := []any{&p.ID, &p.Code, &p.Name, &p.Channel, &tags, &p.Enabled, &p.ExpiresAt,
+	dest := []any{&p.ID, &p.Code, &p.Kind, &p.OwnerUserID, &p.OwnerName, &p.ClaimMode, &p.Name, &p.Channel, &tags, &p.Enabled, &p.ExpiresAt,
 		&p.MaxRegistrations, &p.GrantUSD, &p.GrantDays, &p.PlanCode, &p.PlanDays,
 		&p.Headline, &p.Description, &p.UsageDiscountPercent, &p.DiscountDays, &p.TopupBonusPercent, &p.TopupBonusDays,
 		&p.MilestoneSessionUSD, &p.MilestoneTopupUSD, &p.CreatedAt}
 	if stats {
-		dest = append(dest, &p.Registrations, &p.Verified, &p.Rewarded, &p.Visits, &p.Paid, &p.RevenueUSD)
+		dest = append(dest, &p.Registrations, &p.Verified, &p.Rewarded, &p.Visits, &p.Paid, &p.RevenueUSD, &p.Codes, &p.CodesClaimed)
 	}
 	if err := row.Scan(dest...); err != nil {
 		return nil, err
@@ -127,6 +142,17 @@ func validatePromotionCopy(headline, description string) (string, string, error)
 	return headline, description, nil
 }
 
+// validateClaimMode defaults to link sign-ups and rejects unknown modes.
+func validateClaimMode(p *PromotionInvite) error {
+	if p.ClaimMode == "" {
+		p.ClaimMode = acquisition.ClaimLink
+	}
+	if p.ClaimMode != acquisition.ClaimLink && p.ClaimMode != acquisition.ClaimCode {
+		return fmt.Errorf("%w: claim mode must be link or code", ErrPromotionInput)
+	}
+	return nil
+}
+
 func validatePromotion(p *PromotionInvite) error {
 	p.Code = strings.ToUpper(strings.TrimSpace(p.Code))
 	p.Name, p.Channel, p.PlanCode = strings.TrimSpace(p.Name), strings.TrimSpace(p.Channel), strings.TrimSpace(p.PlanCode)
@@ -141,6 +167,9 @@ func validatePromotion(p *PromotionInvite) error {
 		return err
 	}
 	p.Headline, p.Description = headline, description
+	if err := validateClaimMode(p); err != nil {
+		return err
+	}
 	// Older clients omit the reward windows; fall back to the schema defaults.
 	if p.DiscountDays == 0 {
 		p.DiscountDays = 30
@@ -197,15 +226,17 @@ func (s *PostgresStore) CreatePromotion(ctx context.Context, p *PromotionInvite,
 	}
 	// Plan definitions can change later just like manually assigned memberships;
 	// the selected plan and duration on an invitation are immutable.
+	p.Kind = acquisition.KindCampaign
+	p.OwnerUserID, p.OwnerName = "", ""
 	err = s.db.QueryRowContext(ctx, `INSERT INTO promotion_invites
         (code,name,channel,tags,expires_at,max_registrations,grant_usd,grant_days,plan_code,plan_days,created_by,
-         headline,description,usage_discount_percent,discount_days,topup_bonus_percent,topup_bonus_days,milestone_session_usd,milestone_topup_usd)
-        SELECT $1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,''),$10,$11,$12,$13,$14,$15,$16,$17,$18,$19
+         headline,description,usage_discount_percent,discount_days,topup_bonus_percent,topup_bonus_days,milestone_session_usd,milestone_topup_usd,kind,claim_mode)
+        SELECT $1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,''),$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,'campaign',$20
         WHERE $9 = '' OR EXISTS (SELECT 1 FROM plans WHERE code=$9 AND active=true AND code<>'free')
         RETURNING id,enabled,created_at`, p.Code, p.Name, p.Channel, tags, p.ExpiresAt, p.MaxRegistrations,
 		p.GrantUSD, p.GrantDays, p.PlanCode, p.PlanDays, actor,
 		p.Headline, p.Description, p.UsageDiscountPercent, p.DiscountDays, p.TopupBonusPercent, p.TopupBonusDays,
-		p.MilestoneSessionUSD, p.MilestoneTopupUSD).Scan(&p.ID, &p.Enabled, &p.CreatedAt)
+		p.MilestoneSessionUSD, p.MilestoneTopupUSD, p.ClaimMode).Scan(&p.ID, &p.Enabled, &p.CreatedAt)
 	var pgErr *pq.Error
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("%w: select an active membership plan", ErrPromotionInput)
@@ -216,17 +247,23 @@ func (s *PostgresStore) CreatePromotion(ctx context.Context, p *PromotionInvite,
 	return err
 }
 
-func (s *PostgresStore) ListPromotions(ctx context.Context, limit, offset int, search string) ([]PromotionInvite, int, error) {
-	filter := ` WHERE ($1='' OR i.name ILIKE $1 OR i.channel ILIKE $1 OR i.code ILIKE $1 OR i.tags::text ILIKE $1) AND (cardinality($2::text[])=0 OR i.channel=ANY($2::text[]))`
+// ListPromotions pages sources of the given kinds (campaign and agent for
+// the console; referral for the referrer leaderboard).
+func (s *PostgresStore) ListPromotions(ctx context.Context, kinds []string, limit, offset int, search string) ([]PromotionInvite, int, error) {
+	filter := ` WHERE i.kind=ANY($5::text[]) AND ($1='' OR i.name ILIKE $1 OR i.channel ILIKE $1 OR i.code ILIKE $1 OR i.tags::text ILIKE $1
+        OR EXISTS (SELECT 1 FROM users o WHERE o.id=i.owner_user_id AND (o.email ILIKE $1 OR o.name ILIKE $1))) AND (cardinality($2::text[])=0 OR i.channel=ANY($2::text[]))`
 	if search != "" {
 		search = "%" + search + "%"
 	}
+	if len(kinds) == 0 {
+		kinds = []string{acquisition.KindCampaign, acquisition.KindAgent}
+	}
 	var total int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM promotion_invites i`+filter, search, pq.Array(adminChannels(ctx))).Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM promotion_invites i`+strings.NewReplacer("$5", "$3").Replace(filter), search, pq.Array(adminChannels(ctx)), pq.Array(kinds)).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT `+promotionColumns+`,`+promotionFunnelColumns+`
-        FROM promotion_invites i`+filter+` ORDER BY i.created_at DESC,i.id LIMIT $3 OFFSET $4`, search, pq.Array(adminChannels(ctx)), limit, offset)
+        FROM promotion_invites i`+filter+` ORDER BY i.created_at DESC,i.id LIMIT $3 OFFSET $4`, search, pq.Array(adminChannels(ctx)), limit, offset, pq.Array(kinds))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -282,33 +319,27 @@ func (s *PostgresStore) SetPromotionCopy(ctx context.Context, id, headline, desc
 	return nil
 }
 
+// reservePromotionTx locks a link-claimable source and returns the full row
+// with the current registration count.
 func reservePromotionTx(ctx context.Context, tx *sql.Tx, code string) (*PromotionInvite, error) {
-	if code == "" {
+	if strings.TrimSpace(code) == "" {
 		return nil, nil
 	}
-	p, err := scanPromotion(tx.QueryRowContext(ctx, `SELECT `+promotionColumns+` FROM promotion_invites i WHERE i.code=$1 FOR UPDATE`, strings.ToUpper(strings.TrimSpace(code))), false)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrInvalidPromotion
-	}
+	source, err := acquisition.ReserveSourceTx(ctx, tx, code, true)
 	if err != nil {
 		return nil, err
 	}
-	var count int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM promotion_registrations WHERE invite_id=$1`, p.ID).Scan(&count); err != nil {
+	p, err := scanPromotion(tx.QueryRowContext(ctx, `SELECT `+promotionColumns+` FROM promotion_invites i WHERE i.id=$1`, source.ID), false)
+	if err != nil {
 		return nil, err
 	}
-	if !p.Enabled || !p.ExpiresAt.After(time.Now()) || count >= p.MaxRegistrations {
-		return nil, ErrInvalidPromotion
-	}
-	p.Registrations = count
+	p.Registrations = source.Registrations
 	return p, nil
 }
 
 func recordPromotionTx(ctx context.Context, tx *sql.Tx, inviteID string, user *models.User) error {
-	hash := sha256.Sum256([]byte(auth.CanonicalEmail(user.Email)))
-	_, err := tx.ExecContext(ctx, `INSERT INTO promotion_registrations(invite_id,user_id,canonical_email_hash) VALUES ($1,$2,$3)`, inviteID, user.ID, hex.EncodeToString(hash[:]))
-	var pgErr *pq.Error
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+	_, err := acquisition.AttributeTx(ctx, tx, inviteID, user.ID, user.Email, "")
+	if errors.Is(err, acquisition.ErrAlreadyAttributed) {
 		return ErrInvalidPromotion
 	}
 	return err
@@ -338,6 +369,8 @@ type PromotionRegistration struct {
 	TopupRewardedAt *time.Time `json:"topup_rewarded_at"`
 	SessionRewarded *time.Time `json:"session_rewarded_at"`
 	PaidUSD         float64    `json:"paid_usd"`
+	// Code is the single-use code that attributed this account, if any.
+	Code string `json:"code"`
 }
 
 func (s *PostgresStore) ListPromotionRegistrations(ctx context.Context, id string, limit, offset int) ([]PromotionRegistration, int, error) {
@@ -350,7 +383,8 @@ func (s *PostgresStore) ListPromotionRegistrations(ctx context.Context, id strin
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT r.id,COALESCE(r.user_id::text,''),COALESCE(u.email,''),COALESCE(u.name,''),COALESCE(u.email_verified,false),r.registered_at,r.rewarded_at,r.plan_until,
         r.discount_until,r.topup_rewarded_at,r.session_rewarded_at,
-        COALESCE((SELECT SUM(p.amount_usd) FROM payments p WHERE p.account_id=u.billing_account_id AND p.status='succeeded' AND p.stripe_object_id IS NOT NULL AND p.amount_usd>0),0)
+        COALESCE((SELECT SUM(p.amount_usd) FROM payments p WHERE p.account_id=u.billing_account_id AND p.status='succeeded' AND p.stripe_object_id IS NOT NULL AND p.amount_usd>0),0),
+        COALESCE((SELECT c.code FROM redeem_codes c WHERE c.id=r.code_id),'')
         FROM promotion_registrations r LEFT JOIN users u ON u.id=r.user_id WHERE r.invite_id=$1 ORDER BY r.registered_at DESC,r.id LIMIT $2 OFFSET $3`, id, limit, offset)
 	if err != nil {
 		return nil, 0, err
@@ -360,7 +394,7 @@ func (s *PostgresStore) ListPromotionRegistrations(ctx context.Context, id strin
 	for rows.Next() {
 		var r PromotionRegistration
 		if err := rows.Scan(&r.ID, &r.UserID, &r.Email, &r.Name, &r.Verified, &r.RegisteredAt, &r.RewardedAt, &r.PlanUntil,
-			&r.DiscountUntil, &r.TopupRewardedAt, &r.SessionRewarded, &r.PaidUSD); err != nil {
+			&r.DiscountUntil, &r.TopupRewardedAt, &r.SessionRewarded, &r.PaidUSD, &r.Code); err != nil {
 			return nil, 0, err
 		}
 		items = append(items, r)

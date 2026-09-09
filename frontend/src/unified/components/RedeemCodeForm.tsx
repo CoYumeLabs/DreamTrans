@@ -13,8 +13,8 @@ export function RedeemCodeForm({ onRefresh }: { onRefresh: () => Promise<void> }
     setBusy(true)
     setMessage('')
     try {
-      await authFetch('/api/user/redeem', { method: 'POST', body: JSON.stringify({ code: code.trim() }) })
-      setMessage(m.success)
+      const result = await authFetch<{ pending?: boolean }>('/api/user/redeem', { method: 'POST', body: JSON.stringify({ code: code.trim() }) })
+      setMessage(result.pending ? m.pending : m.success)
       setCode('')
       await onRefresh()
     } catch (reason) {

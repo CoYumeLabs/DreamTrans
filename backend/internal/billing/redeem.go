@@ -7,11 +7,16 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/dreamtrans/backend/internal/acquisition"
 )
 
-// RedeemGift atomically consumes a code and creates its grant. The account lock
+// RedeemGift attributes the account to the code's source and fulfills that
+// source's rewards through the same path as a link sign-up. The account lock
 // serializes different codes for the same person; the code lock serializes
-// different accounts claiming one code. Repeating the same claim is idempotent.
+// different accounts claiming one code. Repeating the same claim is
+// idempotent. A nil grant with a nil error means the reward is held for
+// signup-risk review.
 func (s *Service) RedeemGift(ctx context.Context, userID, code string) (*GrantItem, error) {
 	code = strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(code), "-", ""))
 	if len(code) < 16 || len(code) > 40 {
@@ -22,61 +27,82 @@ func (s *Service) RedeemGift(ctx context.Context, userID, code string) (*GrantIt
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	acct, err := lockAccountForUserTx(ctx, tx, userID)
-	if err != nil {
+	if _, err := lockAccountForUserTx(ctx, tx, userID); err != nil {
 		return nil, err
 	}
-	var id, redeemedBy, grantID string
-	var amount float64
-	var days int
+	var id, inviteID, redeemedBy string
+	var enabled, voided bool
 	var expires time.Time
-	var voided bool
-	err = tx.QueryRowContext(ctx, `SELECT c.id, COALESCE(c.redeemed_by::text,''),COALESCE(c.grant_id::text,''),b.face_value_usd,b.grant_days,b.expires_at,c.voided_at IS NOT NULL
- FROM redeem_codes c JOIN redeem_batches b ON b.id=c.batch_id WHERE c.code=$1 FOR UPDATE OF c`, code).Scan(&id, &redeemedBy, &grantID, &amount, &days, &expires, &voided)
+	err = tx.QueryRowContext(ctx, `SELECT c.id,c.invite_id,COALESCE(c.redeemed_by::text,''),c.voided_at IS NOT NULL,i.enabled,LEAST(COALESCE(c.expires_at,i.expires_at),i.expires_at)
+ FROM redeem_codes c JOIN promotion_invites i ON i.id=c.invite_id WHERE c.code=$1 FOR UPDATE OF c`, code).Scan(&id, &inviteID, &redeemedBy, &voided, &enabled, &expires)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, invalidBillingInputf("兑换码无效")
 	}
 	if err != nil {
 		return nil, err
 	}
-	if redeemedBy == userID && grantID != "" {
-		var item GrantItem
-		item.ID = grantID
-		var expiresAt sql.NullTime
-		if err := tx.QueryRowContext(ctx, `SELECT kind,funding,amount_usd,remaining_usd,expires_at,note,created_at::text FROM grants WHERE id=$1`, grantID).Scan(&item.Kind, &item.Funding, &item.AmountUSD, &item.RemainingUSD, &expiresAt, &item.Note, &item.CreatedAt); err != nil {
+	if redeemedBy == userID {
+		// A retry after a lost response: the claim is recorded, so only the
+		// (idempotent) fulfillment can still be outstanding.
+		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
-		if expiresAt.Valid {
-			item.ExpiresAt = &expiresAt.Time
+		if err := s.GrantPromotionRewards(ctx, userID); err != nil {
+			return nil, err
 		}
-		return &item, tx.Commit()
+		return s.claimedGrant(ctx, userID)
 	}
-	if redeemedBy != "" || voided || !expires.After(time.Now()) {
+	if redeemedBy != "" || voided || !enabled || !expires.After(time.Now()) {
 		return nil, invalidBillingInputf("兑换码已使用、已过期或已作废")
 	}
-	var claimed, verified bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM redeem_codes WHERE redeemed_by=$1),(SELECT email_verified FROM users WHERE id=$1)`, userID).Scan(&claimed, &verified); err != nil {
+	var email string
+	var verified bool
+	if err := tx.QueryRowContext(ctx, `SELECT email,email_verified FROM users WHERE id=$1 AND deleted_at IS NULL`, userID).Scan(&email, &verified); err != nil {
 		return nil, err
 	}
 	if !verified {
 		return nil, invalidBillingInputf("请先验证邮箱再兑换")
 	}
-	if claimed {
-		return nil, invalidBillingInputf("每个账户仅可兑换一次")
+	if _, err := acquisition.AttributeTx(ctx, tx, inviteID, userID, email, id); errors.Is(err, acquisition.ErrAlreadyAttributed) {
+		return nil, invalidBillingInputf("该账户已通过活动、推荐或其他兑换码获得过赠送，不能再次兑换")
+	} else if err != nil {
+		return nil, err
 	}
-	grantExpires := time.Now().UTC().AddDate(0, 0, days)
-	grant, err := addGrantTx(ctx, tx, acct, &GrantInput{UserID: userID, Kind: GrantPromo, Funding: FundingGift, AmountUSD: amount, ExpiresAt: &grantExpires, Note: "兑换码赠送额度"})
+	if _, err := tx.ExecContext(ctx, `UPDATE redeem_codes SET redeemed_by=$1,redeemed_at=NOW(),training_opt_in_at_claim=(SELECT training_opt_in FROM users WHERE id=$1) WHERE id=$2`, userID, id); err != nil {
+		return nil, err
+	}
+	if err := insertAuditTx(ctx, tx, userID, "redeem.claim", "redeem_code", id, map[string]any{"invite_id": inviteID}); err != nil {
+		return nil, fmt.Errorf("record redemption audit: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	// The reward itself goes through the one fulfillment path, so risk holds,
+	// budgets and idempotency behave exactly as for a link sign-up.
+	if err := s.GrantPromotionRewards(ctx, userID); err != nil {
+		return nil, err
+	}
+	return s.claimedGrant(ctx, userID)
+}
+
+// claimedGrant returns the gift attached to the user's attribution, or nil
+// while the reward is still pending.
+func (s *Service) claimedGrant(ctx context.Context, userID string) (*GrantItem, error) {
+	var item GrantItem
+	var expiresAt sql.NullTime
+	err := s.db.QueryRowContext(ctx, `SELECT g.id,g.kind,g.funding,g.amount_usd,g.remaining_usd,g.expires_at,g.note,g.created_at::text
+ FROM promotion_registrations r JOIN grants g ON g.id=r.grant_id WHERE r.user_id=$1`, userID).Scan(&item.ID, &item.Kind, &item.Funding, &item.AmountUSD, &item.RemainingUSD, &expiresAt, &item.Note, &item.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE redeem_codes SET redeemed_by=$1,redeemed_at=NOW(),grant_id=$2,training_opt_in_at_claim=(SELECT training_opt_in FROM users WHERE id=$1) WHERE id=$3`, userID, grant.ID, id); err != nil {
+	if expiresAt.Valid {
+		item.ExpiresAt = &expiresAt.Time
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE redeem_codes c SET grant_id=$2 FROM promotion_registrations r WHERE r.code_id=c.id AND r.user_id=$1 AND c.grant_id IS NULL`, userID, item.ID); err != nil {
 		return nil, err
 	}
-	if err := insertAuditTx(ctx, tx, userID, "redeem.claim", "redeem_code", id, map[string]any{"grant_id": grant.ID, "amount_usd": amount}); err != nil {
-		return nil, fmt.Errorf("record redemption audit: %w", err)
-	}
-	if err := recordAgentClaimTx(ctx, tx, id, userID); err != nil {
-		return nil, err
-	}
-	return grant, tx.Commit()
+	return &item, nil
 }

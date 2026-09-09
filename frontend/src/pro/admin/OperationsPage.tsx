@@ -3,7 +3,7 @@ import { adminFetch } from '../../admin/api'
 import { downloadConsoleCSV } from './csv'
 import { ErrorBanner, Pagination } from './ui'
 
-interface Code { id: string; code: string; batch_id: string; channel: string; face_value_usd: number; expires_at: string; status: string }
+interface Code { id: string; code: string; batch_id: string; invite_id: string; source: string; kind: string; channel: string; face_value_usd: number; expires_at: string; status: string }
 interface Audit { id: string; created_at: string; actor: string; action: string; target_type: string; target_id: string; details: unknown }
 
 const codeStatus: Record<string, string> = { available: '可兑换', redeemed: '已兑换', voided: '已作废', expired: '已过期' }
@@ -77,7 +77,7 @@ export function OperationsPage({ mode, writable = true, canExport = true }: { mo
     ? [['兑换码', '渠道', '面值 USD', '截止日期', '状态'], ...codes.map(code => [code.code, code.channel, code.face_value_usd, code.expires_at, code.status])]
     : [['时间', '管理员', '操作', '对象', '详情'], ...entries.map(entry => [entry.created_at, entry.actor, entry.action, entry.target_id, entry.details])])
 
-  const columns = mode === 'codes' ? ['兑换码', '渠道', '面值 USD', '截止日期', '状态', '操作'] : ['时间', '管理员', '操作', '对象', '详情']
+  const columns = mode === 'codes' ? ['兑换码', '来源 / 渠道', '面值 USD', '截止日期', '状态', '操作'] : ['时间', '管理员', '操作', '对象', '详情']
   const rowCount = mode === 'codes' ? codes.length : entries.length
 
   return (
@@ -89,7 +89,7 @@ export function OperationsPage({ mode, writable = true, canExport = true }: { mo
           <div className="pa-section__heading">
             <div>
               <h2>批量生成一次性兑换码</h2>
-              <p>每个账户仅可兑换一次，需先验证邮箱。赠送额度按标准价计费，不适用训练计划折扣。</p>
+              <p>每批码就是一个只能凭码领取的来源，出现在「推广邀请」列表里；兑换即归因，一个账户只能领一次赠送。赠送额度按标准价计费，不适用训练计划折扣。</p>
             </div>
           </div>
           <form className="pa-form-grid" onSubmit={event => { event.preventDefault(); void create() }}>
@@ -131,7 +131,7 @@ export function OperationsPage({ mode, writable = true, canExport = true }: { mo
               {mode === 'codes' && codes.map(code => (
                 <tr key={code.id}>
                   <td><code>{code.code}</code></td>
-                  <td>{code.channel}</td>
+                  <td>{code.source}<small className="pa-table-sub">{code.channel}</small></td>
                   <td>${code.face_value_usd.toFixed(2)}</td>
                   <td>{new Date(code.expires_at).toLocaleDateString()}</td>
                   <td>{codeStatus[code.status] ?? code.status}</td>

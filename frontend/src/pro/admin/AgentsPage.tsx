@@ -3,13 +3,13 @@ import { adminFetch } from '../../admin/api'
 import { downloadConsoleCSV } from './csv'
 import { ErrorBanner, Metric } from './ui'
 
-interface Profile { user_id: string; email?: string; commission_percent: number; settle_threshold_usd: number; daily_code_limit: number; code_value_usd: number; grant_days: number; channel: string; status: string }
+interface Profile { user_id: string; email?: string; commission_percent: number; settle_threshold_usd: number; daily_code_limit: number; code_value_usd: number; grant_days: number; channel: string; status: string; source_code?: string; source_id?: string }
 interface Settlement { id: string; agent_user_id?: string; email?: string; amount_usd: number; method: string; status: string; requested_at: string; review_note: string; payment_reference: string }
 interface Flag { id: string; code_id: string; reason: string; blocking?: boolean; dismissed_at: string | null; review_note: string; email?: string; minimum_seconds: number }
 interface Code { id: string; code: string; face_value_usd: number; channel: string; expires_at: string; redeemed_at: string | null; voided_at: string | null }
 interface Balance { earned_usd: number; eligible_usd: number; reserved_usd: number; paid_usd: number; available_usd: number }
 interface Rules { check_email: boolean; check_device: boolean; minimum_usage_seconds: number }
-interface Summary { registered: number; first_topup: number; revenue_12_month_usd: number; hours: number }
+interface Summary { registered: number; via_code?: number; visits?: number; first_topup: number; revenue_12_month_usd: number; hours: number }
 interface AgentPortal { profile?: Profile[]; codes?: Code[]; settlements?: Settlement[]; flags?: Flag[]; balance?: Balance; summary?: Summary[]; retention?: { week: number; eligible: number; retained: number }[] }
 
 const blankProfile: Profile = { user_id: '', commission_percent: 10, settle_threshold_usd: 100, daily_code_limit: 100, code_value_usd: 10, grant_days: 30, channel: '', status: 'active' }
@@ -126,7 +126,7 @@ export function AgentsPage({ mode, writable = false, canReview = false, canPay =
               <div className="pa-metrics">
                 <Metric label="可申请结算" value={money(balance.available_usd)} hint={`审核中 ${money(balance.reserved_usd)}`} />
                 <Metric label="已结算" value={money(balance.paid_usd)} hint={`累计分成（扣退款）${money(balance.earned_usd)}`} />
-                <Metric label="领码注册用户" value={summary?.registered ?? 0} hint={`首充 ${summary?.first_topup ?? 0} 人`} />
+                <Metric label="归因用户" value={summary?.registered ?? 0} hint={`链接访问 ${summary?.visits ?? 0} · 凭码 ${summary?.via_code ?? 0} · 首充 ${summary?.first_topup ?? 0} 人`} />
                 <Metric label="归因 12 个月收入" value={money(summary?.revenue_12_month_usd)} hint={`累计使用 ${(summary?.hours ?? 0).toFixed(2)} 小时`} />
               </div>
               <section className="pa-card pa-section">
@@ -144,7 +144,18 @@ export function AgentsPage({ mode, writable = false, canReview = false, canPay =
                     申请结算全部可结金额
                   </button>
                 </div>
-                <p className="pa-form-note">每笔真实充值冻结当时比例，归因用户注册后的 12 个月内有效。未满足风控条件的分成暂不可结。低于 {money(profile.settle_threshold_usd)} 以一年有效的赠送额度结算，达到门槛以现金结算。</p>
+                <p className="pa-form-note">通过你的链接注册或兑换你发的码的账户都归因给你；每笔真实充值冻结当时比例，归因用户注册后的 12 个月内有效。未满足风控条件的分成暂不可结。低于 {money(profile.settle_threshold_usd)} 以一年有效的赠送额度结算，达到门槛以现金结算。</p>
+                {profile.source_code && (
+                  <div className="pa-subsection">
+                    <h3>我的邀请链接</h3>
+                    <p className="pa-form-note">通过这个链接注册的用户会获得 {money(profile.code_value_usd)} 赠送额度（有效 {profile.grant_days} 天），与兑换码相同，并归因给你。落地页自带二维码和海报。</p>
+                    <div className="pa-toolbar">
+                      <input aria-label="代理邀请链接" readOnly value={`${window.location.origin}/invite?code=${profile.source_code}`} onFocus={e => e.target.select()} />
+                      <button className="pa-button" type="button" onClick={() => { void navigator.clipboard.writeText(`${window.location.origin}/invite?code=${profile.source_code}`); setNotice('链接已复制') }}>复制链接</button>
+                      <a className="pa-button" href={`/invite?code=${profile.source_code}`} rel="noopener" target="_blank">打开落地页 / 海报</a>
+                    </div>
+                  </div>
+                )}
                 {retention.length > 0 && (
                   <div className="pa-footnotes">
                     {retention.map(row => <span key={row.week}>第 {row.week} 周留存 {row.retained} / {row.eligible}</span>)}
@@ -155,7 +166,7 @@ export function AgentsPage({ mode, writable = false, canReview = false, canPay =
                 <div className="pa-section__heading">
                   <div>
                     <h2>生成我的一次性兑换码</h2>
-                    <p>每码 {money(profile.code_value_usd)}，兑换后有效 {profile.grant_days} 天，每日最多 {profile.daily_code_limit} 个。客户价格、赠送额度使用规则及条款与普通客户一致。</p>
+                    <p>给没有通过链接注册的用户线下发码：每码 {money(profile.code_value_usd)}，兑换后有效 {profile.grant_days} 天，每日最多 {profile.daily_code_limit} 个。已经通过活动或推荐归因过的账户不能再兑换。客户价格、赠送额度使用规则及条款与普通客户一致。</p>
                   </div>
                 </div>
                 <form
@@ -210,7 +221,7 @@ export function AgentsPage({ mode, writable = false, canReview = false, canPay =
             <div className="pa-section__heading">
               <div>
                 <h2>代理配置</h2>
-                <p>分成比例的修改只影响之后的充值。配置完成后，在角色权限页为账户分配「代理」角色。</p>
+                <p>保存后会为代理生成自己的邀请来源（链接和兑换码共用同一套赠送条件），可在「推广邀请」列表查看。分成比例的修改只影响之后的充值。配置完成后，在角色权限页为账户分配「代理」角色。</p>
               </div>
               {writable && <button className="pa-button" type="button" onClick={() => setDraft(blankProfile)}>新建配置</button>}
             </div>

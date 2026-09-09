@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
@@ -9,10 +10,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/dreamtrans/backend/internal/acquisition"
 	"github.com/dreamtrans/backend/internal/auth"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -42,6 +45,9 @@ func (h *AdminHandler) HandleRedeemCodes(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+// createRedeemCodes turns the code-batch form into a code-claimed campaign
+// source plus its single-use codes, so the codes share the one attribution
+// and reward path. Retrying a client_request_id returns the same codes.
 func (h *AdminHandler) createRedeemCodes(w http.ResponseWriter, r *http.Request) {
 	var input redeemBatchInput
 	if json.NewDecoder(r.Body).Decode(&input) != nil {
@@ -78,90 +84,116 @@ func (h *AdminHandler) createRedeemCodes(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
+	if codes, err := existingCodesTx(r.Context(), tx, claims.UserID, input.RequestID); err != nil {
+		http.Error(w, "Database unavailable", http.StatusServiceUnavailable)
+		return
+	} else if len(codes) > 0 {
+		var invite string
+		var amount float64
+		var channel string
+		if err := tx.QueryRowContext(r.Context(), `SELECT i.id,i.grant_usd,i.channel FROM redeem_codes c JOIN promotion_invites i ON i.id=c.invite_id WHERE c.created_by=$1 AND c.client_request_id=$2 LIMIT 1`, claims.UserID, input.RequestID).Scan(&invite, &amount, &channel); err != nil || amount != input.Amount || channel != input.Channel || len(codes) != input.Quantity {
+			http.Error(w, `{"error":"重复请求的参数已改变，请使用新的请求标识"}`, http.StatusConflict)
+			return
+		}
+		WriteJSON(w, map[string]any{"batch_id": input.RequestID, "invite_id": invite, "codes": codes})
+		return
+	}
 	tags, _ := json.Marshal(input.Tags)
 	if input.Tags == nil {
 		tags = []byte("[]")
 	}
-	agentID := ""
-	if strings.HasPrefix(r.URL.Path, "/api/agent/") {
-		agentID = claims.UserID
-		var limit, days int
-		var value float64
-		var channel, status string
-		if err := tx.QueryRowContext(r.Context(), `SELECT daily_code_limit,grant_days,code_value_usd,channel,status FROM agent_profiles WHERE user_id=$1 FOR UPDATE`, agentID).Scan(&limit, &days, &value, &channel, &status); err != nil || status != "active" {
-			http.Error(w, "Agent is unavailable or suspended", http.StatusForbidden)
-			return
-		}
-		if input.Days != days || input.Amount != value || input.Channel != channel {
-			http.Error(w, "Agent code configuration changed; reload before retrying", http.StatusConflict)
-			return
-		}
-		var used int
-		var duplicate bool
-		if err := tx.QueryRowContext(r.Context(), `SELECT COALESCE(SUM(quantity) FILTER(WHERE created_at>=date_trunc('day',NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'),0),COALESCE(bool_or(client_request_id=$2),false) FROM redeem_batches WHERE agent_user_id=$1`, agentID, input.RequestID).Scan(&used, &duplicate); err != nil {
-			http.Error(w, "Quota unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		if !duplicate && used+input.Quantity > limit {
-			http.Error(w, `{"error":"超过管理员设置的每日发码限额"}`, http.StatusConflict)
-			return
-		}
-	}
-	var batchID string
-	err = tx.QueryRowContext(r.Context(), `INSERT INTO redeem_batches(client_request_id,created_by,channel,tags,face_value_usd,grant_days,expires_at,quantity,agent_user_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,'')::uuid) ON CONFLICT(created_by,client_request_id) DO NOTHING RETURNING id`, input.RequestID, claims.UserID, input.Channel, tags, input.Amount, input.Days, input.Expires, input.Quantity, agentID).Scan(&batchID)
-	if err == sql.ErrNoRows {
-		err = tx.QueryRowContext(r.Context(), `SELECT id FROM redeem_batches WHERE created_by=$1 AND client_request_id=$2 AND channel=$3 AND tags=$4::jsonb AND face_value_usd=$5 AND grant_days=$6 AND expires_at=$7 AND quantity=$8`, claims.UserID, input.RequestID, input.Channel, tags, input.Amount, input.Days, input.Expires, input.Quantity).Scan(&batchID)
-		if err == sql.ErrNoRows {
-			http.Error(w, `{"error":"重复请求的参数已改变，请使用新的请求标识"}`, http.StatusConflict)
-			return
-		}
-		if err == nil {
-			h.writeBatchCodes(w, r, tx, batchID)
-			return
-		}
-	}
+	var inviteID string
+	name := input.Channel + " 兑换码 " + time.Now().UTC().Format("2006-01-02")
+	err = tx.QueryRowContext(r.Context(), `INSERT INTO promotion_invites(code,name,channel,tags,enabled,expires_at,max_registrations,grant_usd,grant_days,plan_days,created_by,kind,claim_mode)
+ VALUES('RB-'||upper(replace($1,'-','')),LEFT($2,100),$3,$4,TRUE,$5,$6,$7,$8,30,$9,'campaign','code') RETURNING id`,
+		input.RequestID, name, input.Channel, tags, input.Expires, input.Quantity, input.Amount, input.Days, claims.UserID).Scan(&inviteID)
 	if err != nil {
-		http.Error(w, "Failed to create code batch", http.StatusServiceUnavailable)
+		http.Error(w, "Failed to create code source", http.StatusServiceUnavailable)
 		return
 	}
-	for i := 0; i < input.Quantity; i++ {
-		var random [12]byte
-		if _, err := rand.Read(random[:]); err != nil {
-			http.Error(w, "Failed to generate code", http.StatusServiceUnavailable)
-			return
-		}
-		code := strings.ToUpper(hex.EncodeToString(random[:]))
-		if _, err := tx.ExecContext(r.Context(), `INSERT INTO redeem_codes(batch_id,code) VALUES($1,$2)`, batchID, code); err != nil {
-			http.Error(w, "Failed to create codes", http.StatusServiceUnavailable)
-			return
-		}
+	codes, err := issueCodesTx(r.Context(), tx, inviteID, claims.UserID, input.RequestID, input.Quantity, nil)
+	if err != nil || tx.Commit() != nil {
+		http.Error(w, "Failed to create codes", http.StatusServiceUnavailable)
+		return
 	}
-	h.writeBatchCodes(w, r, tx, batchID)
+	WriteJSON(w, map[string]any{"batch_id": input.RequestID, "invite_id": inviteID, "codes": codes})
 }
 
-func (h *AdminHandler) writeBatchCodes(w http.ResponseWriter, r *http.Request, tx *sql.Tx, batchID string) {
-	rows, err := tx.QueryContext(r.Context(), `SELECT code FROM redeem_codes WHERE batch_id=$1 ORDER BY code`, batchID)
-	if err != nil {
-		http.Error(w, "Failed to read codes", http.StatusServiceUnavailable)
+// issueCodes adds single-use codes to an existing source within the caller's
+// channel scope. Codes inherit the source's gift and expiry.
+func (h *AdminHandler) issueCodes(w http.ResponseWriter, r *http.Request, inviteID, requestID string, quantity int) {
+	if _, err := uuid.Parse(requestID); err != nil || quantity < 1 || quantity > 1000 {
+		http.Error(w, `{"error":"client_request_id must be a UUID and quantity 1–1000"}`, http.StatusBadRequest)
 		return
 	}
+	claims := auth.GetUserClaims(r.Context())
+	if claims == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	tx, err := h.store.DB().BeginTx(r.Context(), nil)
+	if err != nil {
+		http.Error(w, "Database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+	var kind string
+	var expires time.Time
+	if err := tx.QueryRowContext(r.Context(), `SELECT kind,expires_at FROM promotion_invites WHERE id=$1 AND (cardinality($2::text[])=0 OR channel=ANY($2::text[])) FOR UPDATE`, inviteID, pq.Array(consoleChannels(r))).Scan(&kind, &expires); err != nil {
+		http.Error(w, `{"error":"promotion not found"}`, http.StatusNotFound)
+		return
+	}
+	if kind == acquisition.KindReferral || !expires.After(time.Now()) {
+		http.Error(w, `{"error":"该来源不能发放兑换码"}`, http.StatusConflict)
+		return
+	}
+	if codes, err := existingCodesTx(r.Context(), tx, claims.UserID, requestID); err != nil {
+		http.Error(w, "Database unavailable", http.StatusServiceUnavailable)
+		return
+	} else if len(codes) > 0 {
+		WriteJSON(w, map[string]any{"batch_id": requestID, "invite_id": inviteID, "codes": codes})
+		return
+	}
+	codes, err := issueCodesTx(r.Context(), tx, inviteID, claims.UserID, requestID, quantity, nil)
+	if err != nil || tx.Commit() != nil {
+		http.Error(w, "Failed to create codes", http.StatusServiceUnavailable)
+		return
+	}
+	WriteJSON(w, map[string]any{"batch_id": requestID, "invite_id": inviteID, "codes": codes})
+}
+
+func existingCodesTx(ctx context.Context, tx *sql.Tx, createdBy, requestID string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT code FROM redeem_codes WHERE created_by=$1 AND client_request_id=$2 ORDER BY code`, createdBy, requestID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
 	codes := make([]string, 0)
 	for rows.Next() {
 		var code string
-		if err = rows.Scan(&code); err != nil {
-			break
+		if err := rows.Scan(&code); err != nil {
+			return nil, err
 		}
 		codes = append(codes, code)
 	}
-	if rowErr := rows.Err(); err == nil {
-		err = rowErr
+	return codes, rows.Err()
+}
+
+func issueCodesTx(ctx context.Context, tx *sql.Tx, inviteID, createdBy, requestID string, quantity int, expires *time.Time) ([]string, error) {
+	codes := make([]string, 0, quantity)
+	for i := 0; i < quantity; i++ {
+		var random [12]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			return nil, err
+		}
+		code := strings.ToUpper(hex.EncodeToString(random[:]))
+		if _, err := tx.ExecContext(ctx, `INSERT INTO redeem_codes(invite_id,code,created_by,client_request_id,expires_at) VALUES($1,$2,$3,$4,$5)`, inviteID, code, createdBy, requestID, expires); err != nil {
+			return nil, err
+		}
+		codes = append(codes, code)
 	}
-	_ = rows.Close()
-	if err != nil || tx.Commit() != nil {
-		http.Error(w, "Failed to save code batch", http.StatusServiceUnavailable)
-		return
-	}
-	WriteJSON(w, map[string]any{"batch_id": batchID, "codes": codes})
+	sort.Strings(codes)
+	return codes, nil
 }
 
 func (h *AdminHandler) listRedeemCodes(w http.ResponseWriter, r *http.Request) {
@@ -178,7 +210,15 @@ func (h *AdminHandler) listRedeemCodes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Search too long", http.StatusBadRequest)
 		return
 	}
-	rows, err := h.store.DB().QueryContext(r.Context(), `SELECT c.id,c.code,b.id,b.channel,b.face_value_usd,b.expires_at,c.redeemed_at,c.voided_at,COUNT(*) OVER() FROM redeem_codes c JOIN redeem_batches b ON b.id=c.batch_id WHERE ($1='' OR c.code ILIKE '%' || $1 || '%' OR b.channel ILIKE '%' || $1 || '%') AND (cardinality($3::text[])=0 OR b.channel=ANY($3::text[])) ORDER BY b.created_at DESC,c.id LIMIT 50 OFFSET $2`, search, (page-1)*50, pq.Array(consoleChannels(r)))
+	// /api/admin/promotions/{id}/codes lists one source; the codes page lists all.
+	inviteID := ""
+	if rest := strings.TrimPrefix(r.URL.Path, "/api/admin/promotions/"); rest != r.URL.Path {
+		inviteID, _, _ = strings.Cut(rest, "/")
+	}
+	rows, err := h.store.DB().QueryContext(r.Context(), `SELECT c.id,c.code,c.invite_id,i.name,i.kind,i.channel,i.grant_usd,LEAST(COALESCE(c.expires_at,i.expires_at),i.expires_at),c.redeemed_at,c.voided_at,COALESCE(c.client_request_id::text,''),COUNT(*) OVER()
+ FROM redeem_codes c JOIN promotion_invites i ON i.id=c.invite_id
+ WHERE ($1='' OR c.code ILIKE '%' || $1 || '%' OR i.channel ILIKE '%' || $1 || '%' OR i.name ILIKE '%' || $1 || '%') AND ($4='' OR c.invite_id=$4::uuid)
+ AND (cardinality($3::text[])=0 OR i.channel=ANY($3::text[])) ORDER BY c.created_at DESC,c.id LIMIT 50 OFFSET $2`, search, (page-1)*50, pq.Array(consoleChannels(r)), inviteID)
 	if err != nil {
 		http.Error(w, "Failed to read codes", http.StatusServiceUnavailable)
 		return
@@ -187,11 +227,11 @@ func (h *AdminHandler) listRedeemCodes(w http.ResponseWriter, r *http.Request) {
 	items := make([]map[string]any, 0)
 	total := 0
 	for rows.Next() {
-		var id, code, batch, channel string
+		var id, code, invite, name, kind, channel, request string
 		var amount float64
 		var expires time.Time
 		var redeemed, voided sql.NullTime
-		if rows.Scan(&id, &code, &batch, &channel, &amount, &expires, &redeemed, &voided, &total) != nil {
+		if rows.Scan(&id, &code, &invite, &name, &kind, &channel, &amount, &expires, &redeemed, &voided, &request, &total) != nil {
 			http.Error(w, "Failed to read code", http.StatusServiceUnavailable)
 			return
 		}
@@ -203,7 +243,7 @@ func (h *AdminHandler) listRedeemCodes(w http.ResponseWriter, r *http.Request) {
 		} else if !expires.After(time.Now()) {
 			status = "expired"
 		}
-		items = append(items, map[string]any{"id": id, "code": code, "batch_id": batch, "channel": channel, "face_value_usd": amount, "expires_at": expires, "status": status})
+		items = append(items, map[string]any{"id": id, "code": code, "invite_id": invite, "batch_id": request, "source": name, "kind": kind, "channel": channel, "face_value_usd": amount, "expires_at": expires, "status": status})
 	}
 	if rows.Err() != nil {
 		http.Error(w, "Failed to read codes", http.StatusServiceUnavailable)
@@ -218,7 +258,7 @@ func (h *AdminHandler) voidRedeemCode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid code id", http.StatusBadRequest)
 		return
 	}
-	result, err := h.store.DB().ExecContext(r.Context(), `UPDATE redeem_codes SET voided_at=COALESCE(voided_at,NOW()),voided_by=$2 WHERE id=$1 AND redeemed_at IS NULL AND batch_id IN (SELECT id FROM redeem_batches WHERE cardinality($3::text[])=0 OR channel=ANY($3::text[]))`, id, auth.GetUserID(r.Context()), pq.Array(consoleChannels(r)))
+	result, err := h.store.DB().ExecContext(r.Context(), `UPDATE redeem_codes SET voided_at=COALESCE(voided_at,NOW()),voided_by=$2 WHERE id=$1 AND redeemed_at IS NULL AND invite_id IN (SELECT id FROM promotion_invites WHERE cardinality($3::text[])=0 OR channel=ANY($3::text[]))`, id, auth.GetUserID(r.Context()), pq.Array(consoleChannels(r)))
 	if err != nil {
 		http.Error(w, "Failed to revoke code", http.StatusServiceUnavailable)
 		return
@@ -249,7 +289,9 @@ func (h *BillingHandler) HandleRedeem(w http.ResponseWriter, r *http.Request) {
 		writeBillingAdminError(w, "redeem gift", err)
 		return
 	}
-	WriteJSON(w, map[string]any{"grant": result})
+	// A nil grant means the claim is recorded but the gift is held for
+	// signup-risk review; it arrives once the review clears.
+	WriteJSON(w, map[string]any{"grant": result, "pending": result == nil})
 }
 
 // HandleAudit lists administrator audit records using a stable page boundary.

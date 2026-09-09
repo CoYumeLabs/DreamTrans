@@ -680,8 +680,7 @@ func (s *Service) ListCustomers(ctx context.Context, search string, limit, offse
 		FROM users u
 		LEFT JOIN promotion_registrations pr ON pr.user_id=u.id
 		LEFT JOIN promotion_invites pi ON pi.id=pr.invite_id
-		LEFT JOIN referrals rf ON rf.referred_user_id=u.id
-		LEFT JOIN users ru ON ru.id=rf.referrer_user_id
+		LEFT JOIN users ru ON ru.id=pi.owner_user_id AND pi.kind='referral'
 		LEFT JOIN billing_accounts a ON a.id = u.billing_account_id
 		WHERE $1 = '' OR LOWER(u.email) LIKE $2 OR LOWER(COALESCE(u.name, '')) LIKE $2 OR LOWER(pi.name) LIKE $2 OR LOWER(pi.channel) LIKE $2 OR LOWER(pi.tags::text) LIKE $2
 		ORDER BY u.created_at DESC

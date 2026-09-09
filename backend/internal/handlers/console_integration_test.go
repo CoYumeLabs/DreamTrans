@@ -29,8 +29,9 @@ func consoleTestAdmin(t *testing.T) (*AdminHandler, *auth.UserClaims) {
 	}
 	t.Cleanup(func() {
 		ctx := context.Background()
-		_, _ = db.ExecContext(ctx, `DELETE FROM redeem_codes WHERE batch_id IN(SELECT id FROM redeem_batches WHERE created_by=$1)`, claims.UserID)
-		_, _ = db.ExecContext(ctx, `DELETE FROM redeem_batches WHERE created_by=$1`, claims.UserID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM promotion_registrations WHERE code_id IN(SELECT id FROM redeem_codes WHERE created_by=$1)`, claims.UserID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM redeem_codes WHERE created_by=$1`, claims.UserID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM promotion_invites WHERE created_by=$1 OR owner_user_id=$1`, claims.UserID)
 		_, _ = db.ExecContext(ctx, `DELETE FROM users WHERE id=$1`, claims.UserID)
 	})
 	return NewAdminHandler(authHandler.store, billing.NewService(db)), claims
@@ -58,7 +59,7 @@ func TestConsoleConfirmationAndBatchRetry(t *testing.T) {
 		t.Fatalf("confirmation=%d %s", response.Code, response.Body)
 	}
 	var count int
-	if err := h.store.DB().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM redeem_batches WHERE created_by=$1`, claims.UserID).Scan(&count); err != nil || count != 0 {
+	if err := h.store.DB().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM promotion_invites WHERE created_by=$1 AND claim_mode='code'`, claims.UserID).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("side effects before confirmation: %d %v", count, err)
 	}
 	response = consoleTestRequest(t, h, claims, "POST", "/api/admin/redeem-codes", input, true, h.HandleRedeemCodes)
@@ -106,7 +107,7 @@ func TestConsoleChannelScopeAndImmediateRevocation(t *testing.T) {
 		t.Fatalf("scope=%d %s", response.Code, response.Body)
 	}
 	var hiddenID string
-	if err := h.store.DB().QueryRowContext(ctx, `SELECT c.id FROM redeem_codes c JOIN redeem_batches b ON b.id=c.batch_id WHERE b.created_by=$1 AND b.channel='hidden'`, claims.UserID).Scan(&hiddenID); err != nil {
+	if err := h.store.DB().QueryRowContext(ctx, `SELECT c.id FROM redeem_codes c JOIN promotion_invites i ON i.id=c.invite_id WHERE c.created_by=$1 AND i.channel='hidden'`, claims.UserID).Scan(&hiddenID); err != nil {
 		t.Fatal(err)
 	}
 	response = consoleTestRequest(t, h, claims, "DELETE", "/api/admin/redeem-codes/"+hiddenID, nil, true, h.HandleRedeemCodes)
@@ -161,8 +162,8 @@ func TestAgentCodeTermsAndDailyQuotaAreServerControlled(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		c := context.Background()
-		_, _ = h.store.DB().ExecContext(c, `DELETE FROM redeem_codes WHERE batch_id IN(SELECT id FROM redeem_batches WHERE created_by=$1)`, claims.UserID)
-		_, _ = h.store.DB().ExecContext(c, `DELETE FROM redeem_batches WHERE created_by=$1`, claims.UserID)
+		_, _ = h.store.DB().ExecContext(c, `DELETE FROM redeem_codes WHERE created_by=$1`, claims.UserID)
+		_, _ = h.store.DB().ExecContext(c, `DELETE FROM promotion_invites WHERE owner_user_id=$1`, claims.UserID)
 		_, _ = h.store.DB().ExecContext(c, `DELETE FROM agent_profiles WHERE user_id=$1`, claims.UserID)
 	})
 	if _, err := h.store.DB().ExecContext(ctx, `UPDATE users SET role='user',admin_role_id=(SELECT id FROM admin_roles WHERE key='agent') WHERE id=$1`, claims.UserID); err != nil {
@@ -176,7 +177,7 @@ func TestAgentCodeTermsAndDailyQuotaAreServerControlled(t *testing.T) {
 	var value float64
 	var days int
 	var channel string
-	if err := h.store.DB().QueryRowContext(ctx, `SELECT face_value_usd,grant_days,channel FROM redeem_batches WHERE created_by=$1`, claims.UserID).Scan(&value, &days, &channel); err != nil || value != 5 || days != 14 || channel != "own-agent" {
+	if err := h.store.DB().QueryRowContext(ctx, `SELECT i.grant_usd,i.grant_days,i.channel FROM redeem_codes c JOIN promotion_invites i ON i.id=c.invite_id WHERE c.created_by=$1 LIMIT 1`, claims.UserID).Scan(&value, &days, &channel); err != nil || value != 5 || days != 14 || channel != "own-agent" {
 		t.Fatalf("client changed terms: %f %d %s %v", value, days, channel, err)
 	}
 	response = consoleTestRequest(t, h, claims, "POST", "/api/agent/codes", input, true, h.HandleAgentCodes)

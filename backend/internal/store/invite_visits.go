@@ -37,24 +37,23 @@ func VisitorHash(clientIP, userAgent string, now time.Time) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// RecordInviteVisit attributes a landing-page open to a live channel invite
-// or a referral code. Unknown or paused links are ignored, not errors.
+// RecordInviteVisit attributes a landing-page open to a live source: a
+// channel campaign, an agent link or a referral code. Unknown or paused
+// links are ignored, not errors.
 func (s *PostgresStore) RecordInviteVisit(ctx context.Context, v *InviteVisit) error {
 	hash := VisitorHash(v.ClientIP, v.UserAgent, time.Now())
 	source, medium, campaign, content := utmValue(v.UTMSource), utmValue(v.UTMMedium), utmValue(v.UTMCampaign), utmValue(v.UTMContent)
-	if code := strings.ToUpper(strings.TrimSpace(v.Code)); code != "" {
-		_, err := s.db.ExecContext(ctx, `INSERT INTO invite_visits(invite_id,visitor_hash,utm_source,utm_medium,utm_campaign,utm_content)
-            SELECT i.id,$2,$3,$4,$5,$6 FROM promotion_invites i WHERE i.code=$1 AND i.enabled AND i.expires_at>NOW()
-            ON CONFLICT DO NOTHING`, code, hash, source, medium, campaign, content)
-		return err
+	code := strings.ToUpper(strings.TrimSpace(v.Code))
+	if code == "" {
+		code = strings.ToUpper(strings.TrimSpace(v.ReferralCode))
 	}
-	if ref := normalizeReferralCode(v.ReferralCode); ref != "" {
-		_, err := s.db.ExecContext(ctx, `INSERT INTO invite_visits(referrer_user_id,visitor_hash,utm_source,utm_medium,utm_campaign,utm_content)
-            SELECT u.id,$2,$3,$4,$5,$6 FROM users u WHERE u.referral_code=$1 AND u.is_active
-            ON CONFLICT DO NOTHING`, ref, hash, source, medium, campaign, content)
-		return err
+	if code == "" {
+		return nil
 	}
-	return nil
+	_, err := s.db.ExecContext(ctx, `INSERT INTO invite_visits(invite_id,visitor_hash,utm_source,utm_medium,utm_campaign,utm_content)
+        SELECT i.id,$2,$3,$4,$5,$6 FROM promotion_invites i WHERE i.code=$1 AND i.enabled AND i.expires_at>NOW() AND i.claim_mode='link'
+        ON CONFLICT DO NOTHING`, code, hash, source, medium, campaign, content)
+	return err
 }
 
 // PromotionFunnel is the per-invite conversion report.

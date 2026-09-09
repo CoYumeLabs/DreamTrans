@@ -1,14 +1,14 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/dreamtrans/backend/internal/acquisition"
 	"github.com/dreamtrans/backend/internal/auth"
 	"github.com/google/uuid"
 )
@@ -60,12 +60,23 @@ func (h *AdminHandler) HandleConsoleAgents(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "Invalid agent settings", http.StatusBadRequest)
 		return
 	}
-	_, err := h.store.DB().ExecContext(r.Context(), `INSERT INTO agent_profiles(user_id,commission_percent,settle_threshold_usd,status,daily_code_limit,code_value_usd,grant_days,channel) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(user_id) DO UPDATE SET commission_percent=EXCLUDED.commission_percent,settle_threshold_usd=EXCLUDED.settle_threshold_usd,status=EXCLUDED.status,daily_code_limit=EXCLUDED.daily_code_limit,code_value_usd=EXCLUDED.code_value_usd,grant_days=EXCLUDED.grant_days,channel=EXCLUDED.channel,updated_at=NOW()`, input.UserID, input.Commission, input.Threshold, input.Status, input.Limit, input.Value, input.Days, input.Channel)
+	tx, err := h.store.DB().BeginTx(r.Context(), nil)
+	if err != nil {
+		http.Error(w, "Database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.ExecContext(r.Context(), `INSERT INTO agent_profiles(user_id,commission_percent,settle_threshold_usd,status,daily_code_limit,code_value_usd,grant_days,channel) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(user_id) DO UPDATE SET commission_percent=EXCLUDED.commission_percent,settle_threshold_usd=EXCLUDED.settle_threshold_usd,status=EXCLUDED.status,daily_code_limit=EXCLUDED.daily_code_limit,code_value_usd=EXCLUDED.code_value_usd,grant_days=EXCLUDED.grant_days,channel=EXCLUDED.channel,updated_at=NOW()`, input.UserID, input.Commission, input.Threshold, input.Status, input.Limit, input.Value, input.Days, input.Channel)
 	if err != nil {
 		http.Error(w, "Unable to save agent; verify account ID", http.StatusConflict)
 		return
 	}
-	WriteJSON(w, map[string]bool{"success": true})
+	// The agent's link and codes share one source carrying these terms.
+	if err := acquisition.EnsureAgentSourceTx(r.Context(), tx, input.UserID); err != nil || tx.Commit() != nil {
+		http.Error(w, "Unable to save agent source", http.StatusServiceUnavailable)
+		return
+	}
+	WriteJSON(w, map[string]any{"success": true, "source_code": acquisition.AgentSourceCode(input.UserID)})
 }
 func (h *AdminHandler) HandleAgentPortal(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -81,17 +92,20 @@ func (h *AdminHandler) HandleAgentPortal(w http.ResponseWriter, r *http.Request)
 	}
 	result := map[string]any{"balance": balance}
 	queries := map[string]string{
-		"profile":     `SELECT * FROM agent_profiles WHERE user_id=$1`,
-		"codes":       `SELECT c.id,c.code,b.channel,b.face_value_usd,b.expires_at,c.redeemed_at,c.voided_at FROM redeem_codes c JOIN redeem_batches b ON b.id=c.batch_id WHERE b.agent_user_id=$1 ORDER BY b.created_at DESC,c.id LIMIT 1000`,
+		"profile":     `SELECT a.*,i.code AS source_code,i.id AS source_id FROM agent_profiles a LEFT JOIN promotion_invites i ON i.owner_user_id=a.user_id AND i.kind='agent' WHERE a.user_id=$1`,
+		"codes":       `SELECT c.id,c.code,i.channel,i.grant_usd AS face_value_usd,LEAST(COALESCE(c.expires_at,i.expires_at),i.expires_at) AS expires_at,c.redeemed_at,c.voided_at FROM redeem_codes c JOIN promotion_invites i ON i.id=c.invite_id WHERE i.owner_user_id=$1 AND i.kind='agent' ORDER BY c.created_at DESC,c.id LIMIT 1000`,
 		"settlements": `SELECT id,amount_usd,method,status,requested_at,reviewed_at,paid_at,review_note,payment_reference FROM agent_settlements WHERE agent_user_id=$1 ORDER BY requested_at DESC LIMIT 200`,
-		"flags": `SELECT f.id,f.code_id,f.reason,f.minimum_seconds,f.dismissed_at,f.review_note,
+		"flags": `SELECT f.id,f.registration_id,f.reason,f.minimum_seconds,f.dismissed_at,f.review_note,
  (f.dismissed_at IS NULL AND (f.reason<>'minimum_usage' OR (SELECT COALESCE(SUM(l.quantity),0)*60 FROM usage_logs l WHERE l.user_id=f.user_id AND l.action='transcription' AND l.refunded_at IS NULL)<f.minimum_seconds)) AS blocking
  FROM agent_flags f WHERE f.agent_user_id=$1 ORDER BY f.created_at DESC LIMIT 1000`,
-		"summary": `SELECT COUNT(*) AS registered,COUNT(*) FILTER(WHERE EXISTS(SELECT 1 FROM agent_commissions ac WHERE ac.buyer_user_id=c.redeemed_by AND ac.agent_user_id=$1)) AS first_topup,
+		"summary": `SELECT COUNT(*) AS registered,COUNT(*) FILTER(WHERE r.code_id IS NOT NULL) AS via_code,
+ (SELECT COUNT(*) FROM invite_visits v JOIN promotion_invites i ON i.id=v.invite_id WHERE i.owner_user_id=$1 AND i.kind='agent') AS visits,
+ COUNT(*) FILTER(WHERE EXISTS(SELECT 1 FROM agent_commissions ac WHERE ac.buyer_user_id=r.user_id AND ac.agent_user_id=$1)) AS first_topup,
  (SELECT COALESCE(SUM(paid_usd-refunded_usd),0) FROM agent_commissions WHERE agent_user_id=$1) AS revenue_12_month_usd,
- COALESCE(SUM((SELECT COALESCE(SUM(l.quantity),0)/60 FROM usage_logs l WHERE l.user_id=c.redeemed_by AND l.action='transcription' AND l.refunded_at IS NULL)),0) AS hours
- FROM redeem_codes c JOIN redeem_batches b ON b.id=c.batch_id WHERE b.agent_user_id=$1 AND c.redeemed_by IS NOT NULL`,
-		"retention": `SELECT w.week,COUNT(*) AS eligible,COUNT(*) FILTER(WHERE EXISTS(SELECT 1 FROM usage_logs l WHERE l.user_id=c.redeemed_by AND l.action='transcription' AND l.quantity>0 AND l.refunded_at IS NULL AND l.created_at>=c.redeemed_at+w.week*interval '7 days' AND l.created_at<c.redeemed_at+(w.week+1)*interval '7 days')) AS retained FROM redeem_codes c JOIN redeem_batches b ON b.id=c.batch_id CROSS JOIN (VALUES(1),(2),(4)) w(week) WHERE b.agent_user_id=$1 AND c.redeemed_at+(w.week+1)*interval '7 days'<=NOW() GROUP BY w.week ORDER BY w.week`,
+ COALESCE(SUM((SELECT COALESCE(SUM(l.quantity),0)/60 FROM usage_logs l WHERE l.user_id=r.user_id AND l.action='transcription' AND l.refunded_at IS NULL)),0) AS hours
+ FROM promotion_registrations r JOIN promotion_invites i ON i.id=r.invite_id WHERE i.owner_user_id=$1 AND i.kind='agent'`,
+		"retention": `SELECT w.week,COUNT(*) AS eligible,COUNT(*) FILTER(WHERE EXISTS(SELECT 1 FROM usage_logs l WHERE l.user_id=r.user_id AND l.action='transcription' AND l.quantity>0 AND l.refunded_at IS NULL AND l.created_at>=r.registered_at+w.week*interval '7 days' AND l.created_at<r.registered_at+(w.week+1)*interval '7 days')) AS retained
+ FROM promotion_registrations r JOIN promotion_invites i ON i.id=r.invite_id CROSS JOIN (VALUES(1),(2),(4)) w(week) WHERE i.owner_user_id=$1 AND i.kind='agent' AND r.registered_at+(w.week+1)*interval '7 days'<=NOW() GROUP BY w.week ORDER BY w.week`,
 	}
 	for name, query := range queries {
 		data, e := h.consoleJSONRows(ctx, query, userID)
@@ -226,23 +240,62 @@ func (h *AdminHandler) HandleAgentCodes(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var input redeemBatchInput
+	var input struct {
+		RequestID string    `json:"client_request_id"`
+		Quantity  int       `json:"quantity"`
+		Expires   time.Time `json:"expires_at"`
+	}
 	if json.NewDecoder(r.Body).Decode(&input) != nil {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
-	// Customer terms come from administrator configuration. Agent-provided
-	// amounts, tags and channel names are never trusted.
-	if err := h.store.DB().QueryRowContext(r.Context(), `SELECT code_value_usd,grant_days,channel FROM agent_profiles WHERE user_id=$1 AND status='active'`, auth.GetUserID(r.Context())).Scan(&input.Amount, &input.Days, &input.Channel); err != nil {
+	if _, err := uuid.Parse(input.RequestID); err != nil || input.Quantity < 1 || input.Quantity > 1000 || !input.Expires.After(time.Now()) || input.Expires.After(time.Now().AddDate(10, 0, 0)) {
+		http.Error(w, "client_request_id must be a UUID, quantity 1–1000 and expires_at a future date", http.StatusBadRequest)
+		return
+	}
+	agentID := auth.GetUserID(r.Context())
+	tx, err := h.store.DB().BeginTx(r.Context(), nil)
+	if err != nil {
+		http.Error(w, "Database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Customer terms come from administrator configuration; the agent only
+	// chooses how many codes to print.
+	var limit int
+	if err := tx.QueryRowContext(r.Context(), `SELECT daily_code_limit FROM agent_profiles WHERE user_id=$1 AND status='active' FOR UPDATE`, agentID).Scan(&limit); err != nil {
 		http.Error(w, "Agent is unavailable or suspended", http.StatusForbidden)
 		return
 	}
-	input.Tags = []string{"agent"}
-	body, err := json.Marshal(input)
-	if err != nil {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
+	if err := acquisition.EnsureAgentSourceTx(r.Context(), tx, agentID); err != nil {
+		http.Error(w, "Agent source unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	h.createRedeemCodes(w, r)
+	var inviteID string
+	if err := tx.QueryRowContext(r.Context(), `SELECT id FROM promotion_invites WHERE owner_user_id=$1 AND kind='agent'`, agentID).Scan(&inviteID); err != nil {
+		http.Error(w, "Agent source unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if codes, err := existingCodesTx(r.Context(), tx, agentID, input.RequestID); err != nil {
+		http.Error(w, "Database unavailable", http.StatusServiceUnavailable)
+		return
+	} else if len(codes) > 0 {
+		WriteJSON(w, map[string]any{"batch_id": input.RequestID, "invite_id": inviteID, "codes": codes})
+		return
+	}
+	var used int
+	if err := tx.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM redeem_codes WHERE created_by=$1 AND created_at>=date_trunc('day',NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`, agentID).Scan(&used); err != nil {
+		http.Error(w, "Quota unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if used+input.Quantity > limit {
+		http.Error(w, `{"error":"超过管理员设置的每日发码限额"}`, http.StatusConflict)
+		return
+	}
+	codes, err := issueCodesTx(r.Context(), tx, inviteID, agentID, input.RequestID, input.Quantity, &input.Expires)
+	if err != nil || tx.Commit() != nil {
+		http.Error(w, "Failed to create codes", http.StatusServiceUnavailable)
+		return
+	}
+	WriteJSON(w, map[string]any{"batch_id": input.RequestID, "invite_id": inviteID, "codes": codes})
 }

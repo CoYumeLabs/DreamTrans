@@ -1,7 +1,7 @@
 // Source-of-truth dictionary. `en.ts` must mirror this shape exactly.
 
 export const zhCN = {
-  redeem: {"title": "兑换赠送额度", "description": "每个账户仅可兑换一次，需验证邮箱。赠送额度按标准价计费，不适用训练计划折扣。", "code": "兑换码", "success": "兑换成功，赠送额度已到账。", "failed": "兑换失败，请稍后重试。", "submit": "兑换", "busy": "正在兑换…"},
+  redeem: {"title": "兑换赠送额度", "description": "每个账户只能通过一种来源（活动链接、推荐或兑换码）领取一次赠送，需先验证邮箱。赠送额度按标准价计费，不适用训练计划折扣。", "code": "兑换码", "success": "兑换成功，赠送额度已到账。", "failed": "兑换失败，请稍后重试。", "submit": "兑换", "busy": "正在兑换…", "pending": "兑换已记录，赠送额度待风控审核通过后到账。"},
   batch: {
     drop: '点击选择，或把文件拖到这里',
     queue: '队列',

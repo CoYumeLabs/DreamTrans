@@ -1,12 +1,19 @@
 import { authFetch } from '../api/auth'
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { adminFetch, formatUSD, type Plan } from '../../admin/api'
+import { downloadConsoleCSV } from './csv'
 import { formatDate, type Runner } from './shared'
 import { Modal, Pagination } from './ui'
 
 interface Promotion {
   id: string
   code: string
+  kind: 'campaign' | 'referral' | 'agent' | string
+  owner_user_id: string
+  owner_name: string
+  claim_mode: 'link' | 'code' | string
+  codes: number
+  codes_claimed: number
   name: string
   channel: string
   tags: string[]
@@ -45,7 +52,9 @@ interface Registration {
   topup_rewarded_at: string | null
   session_rewarded_at: string | null
   paid_usd: number
+  code: string
 }
+interface SourceCode { id: string; code: string; status: 'available' | 'redeemed' | 'voided' | 'expired' | string; expires_at: string; batch_id: string }
 interface Funnel {
   invite: Promotion
   sources: Array<{ source: string; medium: string; campaign: string; content: string; visits: number }>
@@ -67,7 +76,7 @@ interface ReferrersResult { referrers: Referrer[]; total: number }
 
 function newDraft() {
   return {
-    name: '', channel: '', tags: '', code: '', expires_at: '', max_registrations: '100',
+    name: '', channel: '', tags: '', code: '', claim_mode: 'link', expires_at: '', max_registrations: '100',
     grant_usd: '0', grant_days: '30', plan_code: '', plan_days: '30',
     headline: '', description: '',
     usage_discount_percent: '0', discount_days: '30', topup_bonus_percent: '0', topup_bonus_days: '30',
@@ -103,6 +112,8 @@ function rewardLines(p: Promotion): string[] {
   if (p.milestone_session_usd > 0) lines.push(`首次转录送 ${formatUSD(p.milestone_session_usd)}`)
   return lines
 }
+const kindLabel: Record<string, string> = { campaign: '渠道活动', agent: '代理', referral: '用户推荐' }
+const codeStatusLabel: Record<string, string> = { available: '可兑换', redeemed: '已兑换', voided: '已作废', expired: '已过期' }
 function rate(numerator: number, denominator: number) {
   if (denominator <= 0) return '—'
   return `${Math.round((numerator / denominator) * 1000) / 10}%`
@@ -130,6 +141,12 @@ export function PromotionsPage({ run, scoped = false }: { run: Runner; scoped?: 
   // not a newly created one.
   const [createdIsNew, setCreatedIsNew] = useState(false)
   const [utm, setUtm] = useState<UTM>(emptyUTM)
+  const [codesFor, setCodesFor] = useState<Promotion | null>(null)
+  const [codes, setCodes] = useState<{ codes: SourceCode[]; total: number }>({ codes: [], total: 0 })
+  const [codePage, setCodePage] = useState(1)
+  const [codeQuantity, setCodeQuantity] = useState('10')
+  const [codeRequest, setCodeRequest] = useState(() => crypto.randomUUID())
+  const [issued, setIssued] = useState<string[]>([])
   const [referrers, setReferrers] = useState<ReferrersResult>({ referrers: [], total: 0 })
   const [referrerPage, setReferrerPage] = useState(1)
   const reload = useCallback(() => setGeneration((n) => n + 1), [])
@@ -158,6 +175,12 @@ export function PromotionsPage({ run, scoped = false }: { run: Runner; scoped?: 
     return () => { current = false }
   }, [funnelFor, run])
   useEffect(() => {
+    if (!codesFor) return
+    let current = true
+    void run(() => adminFetch<{ codes: SourceCode[]; total: number }>(`/api/admin/promotions/${codesFor.id}/codes?page=${codePage}`)).then((data) => { if (current && data) setCodes(data) })
+    return () => { current = false }
+  }, [codesFor, codePage, generation, run])
+  useEffect(() => {
     let current = true
     if (scoped) return
     const params = new URLSearchParams({ page: String(referrerPage), search: query })
@@ -172,7 +195,7 @@ export function PromotionsPage({ run, scoped = false }: { run: Runner; scoped?: 
     const saved = await run(() => adminFetch<Promotion>('/api/admin/promotions', {
       method: 'POST', body: JSON.stringify({ ...draft,
         tags: draft.tags.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean),
-        expires_at: new Date(draft.expires_at).toISOString(),
+        expires_at: new Date(draft.expires_at).toISOString(), claim_mode: draft.claim_mode,
         max_registrations: Number(draft.max_registrations), grant_usd: Number(draft.grant_usd),
         grant_days: Number(draft.grant_days), plan_days: Number(draft.plan_days),
         usage_discount_percent: Number(draft.usage_discount_percent), discount_days: Number(draft.discount_days),
@@ -182,6 +205,17 @@ export function PromotionsPage({ run, scoped = false }: { run: Runner; scoped?: 
     }), '推广邀请已创建')
     setBusy(false)
     if (saved) { setCreating(false); setCreated(saved); setCreatedIsNew(true); setUtm(emptyUTM); reload() }
+  }
+
+  async function issueCodes(event: FormEvent) {
+    event.preventDefault()
+    if (!codesFor || busy) return
+    setBusy(true)
+    const result = await run(() => adminFetch<{ codes: string[] }>(`/api/admin/promotions/${codesFor.id}/codes`, {
+      method: 'POST', body: JSON.stringify({ client_request_id: codeRequest, quantity: Number(codeQuantity) }),
+    }), '兑换码已生成')
+    setBusy(false)
+    if (result) { setIssued(result.codes); setCodeRequest(crypto.randomUUID()); reload() }
   }
 
   async function saveCopy(event: FormEvent) {
@@ -199,8 +233,8 @@ export function PromotionsPage({ run, scoped = false }: { run: Runner; scoped?: 
 
   return <div className="pa-stack">
     <section className="pa-card pa-promotion-intro">
-      <div className="pa-list-heading"><div><h2>渠道活动</h2><p>用独立邀请链接追踪来源，为新用户提供活动权益。链接指向带二维码和倒计时的落地页。</p></div><span className="pa-count">{result.total} 个匹配活动</span></div>
-      <p className="pa-form-note pa-promotion-help">成功注册即占用名额，赠送需通过邮箱验证与风控审核。暂停或到期不影响已接受的邀请。折扣与首充/首次转录奖励在领取注册权益后按各自窗口生效。</p>
+      <div className="pa-list-heading"><div><h2>拉新来源</h2><p>渠道活动、代理和用户推荐共用同一套归因：一个账户只归因一次，只领一次赠送。链接指向带二维码和倒计时的落地页；任何来源都可以再发一次性兑换码。</p></div><span className="pa-count">{result.total} 个匹配来源</span></div>
+      <p className="pa-form-note pa-promotion-help">通过链接注册或兑换该来源的码即占用名额，赠送需通过邮箱验证与风控审核。暂停或到期不影响已归因的账户。折扣与首充/首次转录奖励在领取注册权益后按各自窗口生效。代理来源在「代理与结算」页配置，这里只查看。</p>
       <div className="pa-promotion-actions">
         <form onSubmit={(event) => { event.preventDefault(); setQuery(search.trim()); setPage(1); setReferrerPage(1) }}>
           <input aria-label="搜索活动、渠道、标签或邀请码" onChange={(event) => setSearch(event.target.value)} placeholder="活动、渠道、标签或邀请码" value={search} />
@@ -228,15 +262,16 @@ export function PromotionsPage({ run, scoped = false }: { run: Runner; scoped?: 
     </section>}
     <section className="pa-card">
       <div className="pa-table-wrap"><table className="pa-table"><thead><tr>
-        <th>活动 / 渠道 / 标签</th><th>赠送权益</th><th>访问 → 注册 → 验证 → 领取 → 付费</th><th>状态 / 截止时间</th><th>操作</th>
+        <th>来源 / 渠道 / 标签</th><th>赠送权益</th><th>访问 → 注册 → 验证 → 领取 → 付费</th><th>状态 / 截止时间</th><th>操作</th>
       </tr></thead><tbody>
         {result.invites.map((p) => <tr key={p.id}>
-          <td><strong>{p.name}</strong><div>{p.channel}</div><div className="pa-tag-list">{p.tags.map((tag) => <span className="pa-tag" key={tag}>{tag}</span>)}</div><small><code>{p.code}</code></small></td>
+          <td><strong>{p.name}</strong><div>{p.channel}<span className="pa-pill pa-pill--accent">{kindLabel[p.kind ?? 'campaign'] ?? p.kind}</span>{p.claim_mode === 'code' && <span className="pa-pill">仅凭码</span>}</div>{p.owner_name && <div>归属：{p.owner_name}</div>}<div className="pa-tag-list">{p.tags.map((tag) => <span className="pa-tag" key={tag}>{tag}</span>)}</div><small><code>{p.code}</code>{p.codes > 0 && ` · 兑换码 ${p.codes_claimed}/${p.codes}`}</small></td>
           <td>{rewardLines(p).map((line) => <div key={line}>{line}</div>)}{rewardLines(p).length === 0 && '仅渠道归因'}</td>
           <td><strong className="pa-tabular">{p.visits} → {p.registrations} → {p.verified} → {p.rewarded} → {p.paid}</strong><small>注册上限 {p.max_registrations} 人 · 访问转化 {rate(p.registrations, p.visits)} · 付费转化 {rate(p.paid, p.verified)} · 收入 {formatUSD(p.revenue_usd)}</small><progress className="pa-progress" aria-label={`${p.name} 注册名额使用情况`} value={p.registrations} max={p.max_registrations} /></td>
           <td><span className={`pa-status ${stateLabel(p) === '启用中' ? 'pa-status--good' : ''}`}>{stateLabel(p)}</span><small>{formatDate(p.expires_at)}</small></td>
           <td><div className="pa-promotion-actions">
-            <button className="pa-button" type="button" onClick={() => { setCreated(p); setCreatedIsNew(false); setUtm(emptyUTM); void run(() => navigator.clipboard.writeText(inviteLink(p.code)), '链接已复制') }}>复制链接</button>
+            {p.claim_mode !== 'code' && <button className="pa-button" type="button" onClick={() => { setCreated(p); setCreatedIsNew(false); setUtm(emptyUTM); void run(() => navigator.clipboard.writeText(inviteLink(p.code)), '链接已复制') }}>复制链接</button>}
+            <button className="pa-button" type="button" onClick={() => { setCodePage(1); setIssued([]); setCodes({ codes: [], total: 0 }); setCodesFor(p) }}>兑换码</button>
             <button className="pa-button" type="button" onClick={() => setFunnelFor(p)}>漏斗</button>
             <button className="pa-button" type="button" onClick={() => { setRecipientPage(1); setRecipients({ registrations: [], total: 0 }); setSelected(p) }}>注册记录</button>
             <button className="pa-button" type="button" onClick={() => { setCopyDraft({ headline: p.headline, description: p.description }); setEditing(p) }}>文案</button>
@@ -246,12 +281,12 @@ export function PromotionsPage({ run, scoped = false }: { run: Runner; scoped?: 
             }}>{p.enabled ? '暂停' : '启用'}</button>
           </div></td>
         </tr>)}
-        {result.invites.length === 0 && <tr><td colSpan={5} className="pa-table-empty">暂无匹配的推广邀请</td></tr>}
+        {result.invites.length === 0 && <tr><td colSpan={5} className="pa-table-empty">暂无匹配的来源</td></tr>}
       </tbody></table></div>
       <Pagination page={page} pageSize={20} total={result.total} onChange={setPage} />
     </section>
     {!scoped && <section className="pa-card">
-      <div className="pa-list-heading"><div><h2>用户推荐</h2><p>每个账户都有自己的邀请链接（/invite?ref=CODE）。这里只记录来源，不发放奖励。</p></div><span className="pa-count">{referrers.total} 位推荐人</span></div>
+      <div className="pa-list-heading"><div><h2>用户推荐</h2><p>每个账户都有自己的推荐来源（/invite?ref=CODE），只记录来源，不发放奖励。被推荐的账户同样只归因一次。</p></div><span className="pa-count">{referrers.total} 位推荐人</span></div>
       <div className="pa-table-wrap"><table className="pa-table"><thead><tr><th>推荐人</th><th>推荐码</th><th>访问 / 注册 / 已验证</th><th>最近一次注册</th></tr></thead><tbody>
         {referrers.referrers.map((r) => <tr key={r.user_id}><td><strong>{r.name || r.email}</strong><small>{r.email}</small></td><td><code>{r.code}</code></td><td className="pa-tabular">{r.visits} / {r.registered} / {r.verified}</td><td>{formatDate(r.last_registered_at)}</td></tr>)}
         {referrers.referrers.length === 0 && <tr><td colSpan={4} className="pa-table-empty">还没有用户通过推荐链接带来注册</td></tr>}
@@ -264,6 +299,7 @@ export function PromotionsPage({ run, scoped = false }: { run: Runner; scoped?: 
         <label><span>渠道</span><input required maxLength={100} value={draft.channel} onChange={(event) => setDraft({ ...draft, channel: event.target.value })} placeholder="小红书 / 博主 A" /></label>
         <label><span>用户来源标签</span><input value={draft.tags} onChange={(event) => setDraft({ ...draft, tags: event.target.value })} placeholder="开学季, 小红书, 博主A" /><small>逗号分隔，最多 20 个；注册来源固定保留。</small></label>
         <label><span>邀请码（留空自动生成）</span><input maxLength={48} minLength={6} pattern="[A-Za-z0-9][A-Za-z0-9_-]{5,47}" value={draft.code} onChange={(event) => setDraft({ ...draft, code: event.target.value })} placeholder="XHS2026A" /></label>
+        <label><span>领取方式</span><select aria-label="领取方式" value={draft.claim_mode} onChange={(event) => setDraft({ ...draft, claim_mode: event.target.value })}><option value="link">链接注册即归因</option><option value="code">仅凭一次性兑换码</option></select><small>凭码来源没有可分享的链接；创建后在「兑换码」里生成并发放。</small></label>
         <label><span>注册截止时间</span><input required type="datetime-local" value={draft.expires_at} onChange={(event) => setDraft({ ...draft, expires_at: event.target.value })} /></label>
         <label><span>最多注册人数</span><input required type="number" min={1} max={1000000} value={draft.max_registrations} onChange={(event) => setDraft({ ...draft, max_registrations: event.target.value })} /></label>
         <label><span>落地页标题</span><input maxLength={120} value={draft.headline} onChange={(event) => setDraft({ ...draft, headline: event.target.value })} placeholder="开学季专属：注册即享 Pro 30 天" /><small>留空时使用活动名称；创建后可修改。</small></label>
@@ -309,10 +345,24 @@ export function PromotionsPage({ run, scoped = false }: { run: Runner; scoped?: 
         </tbody></table></div>
       </>}
     </Modal>}
+    {codesFor && <Modal wide footer={null} title={`${codesFor.name} · 一次性兑换码`} onClose={() => setCodesFor(null)}>
+      <p className="pa-form-note">兑换码继承该来源的赠送和截止时间；兑换即归因到此来源，占用一个名额。</p>
+      {codesFor.kind !== 'referral' && <form className="pa-toolbar" onSubmit={(event) => { void issueCodes(event) }}>
+        <input aria-label="生成数量" type="number" min={1} max={1000} value={codeQuantity} onChange={(event) => setCodeQuantity(event.target.value)} />
+        <button className="pa-button pa-button--primary" disabled={busy} type="submit">生成兑换码</button>
+        {issued.length > 0 && <button className="pa-button" type="button" onClick={() => downloadConsoleCSV(`${codesFor.code}-codes.csv`, [['兑换码', '来源', '面值 USD'], ...issued.map((code) => [code, codesFor.name, codesFor.grant_usd])])}>下载本批 CSV</button>}
+      </form>}
+      {issued.length > 0 && <textarea aria-label="本批生成的兑换码" readOnly rows={Math.min(8, issued.length)} value={issued.join('\n')} />}
+      <div className="pa-table-wrap"><table className="pa-table"><thead><tr><th>兑换码</th><th>状态</th><th>截止</th><th>操作</th></tr></thead><tbody>
+        {codes.codes.map((c) => <tr key={c.id}><td><code>{c.code}</code></td><td>{codeStatusLabel[c.status] ?? c.status}</td><td>{formatDate(c.expires_at)}</td><td>{c.status === 'available' && <button className="pa-button pa-button--quiet" disabled={busy} type="button" onClick={() => { setBusy(true); void run(() => adminFetch(`/api/admin/redeem-codes/${c.id}`, { method: 'DELETE' }), '兑换码已作废').then(() => { setBusy(false); reload() }) }}>作废</button>}</td></tr>)}
+        {codes.codes.length === 0 && <tr><td colSpan={4} className="pa-table-empty">还没有生成兑换码</td></tr>}
+      </tbody></table></div>
+      <Pagination page={codePage} pageSize={50} total={codes.total} onChange={setCodePage} />
+    </Modal>}
     {selected && <Modal wide footer={null} title={`${selected.name} · ${selected.channel} · 注册记录`} onClose={() => setSelected(null)}>
       <p>{selected.tags.join(' · ')}</p>
       <div className="pa-table-wrap"><table className="pa-table"><thead><tr><th>昵称 / 邮箱</th><th>注册时间</th><th>验证 / 权益</th><th>阶段奖励 / 付费</th></tr></thead><tbody>
-        {recipients.registrations.map((r) => <tr key={r.id}><td>{r.user_id ? <>{r.name}<div>{r.email}</div></> : '账号已删除'}</td><td>{formatDate(r.registered_at)}</td><td>{r.verified ? '已验证' : '待验证'}<div>{r.rewarded_at ? `已领取 ${formatDate(r.rewarded_at)}` : '待领取'}</div>{r.plan_until && <small>套餐至 {formatDate(r.plan_until)}</small>}{r.discount_until && <small>折扣至 {formatDate(r.discount_until)}</small>}</td><td>{r.session_rewarded_at ? <div>首次转录已发</div> : null}{r.topup_rewarded_at ? <div>首充已发</div> : null}<small>累计付费 {formatUSD(r.paid_usd)}</small></td></tr>)}
+        {recipients.registrations.map((r) => <tr key={r.id}><td>{r.user_id ? <>{r.name}<div>{r.email}</div></> : '账号已删除'}{r.code && <small>凭码 <code>{r.code}</code></small>}</td><td>{formatDate(r.registered_at)}</td><td>{r.verified ? '已验证' : '待验证'}<div>{r.rewarded_at ? `已领取 ${formatDate(r.rewarded_at)}` : '待领取'}</div>{r.plan_until && <small>套餐至 {formatDate(r.plan_until)}</small>}{r.discount_until && <small>折扣至 {formatDate(r.discount_until)}</small>}</td><td>{r.session_rewarded_at ? <div>首次转录已发</div> : null}{r.topup_rewarded_at ? <div>首充已发</div> : null}<small>累计付费 {formatUSD(r.paid_usd)}</small></td></tr>)}
         {!recipients.registrations.length && <tr><td colSpan={4}>暂无注册记录</td></tr>}
       </tbody></table></div>
       <Pagination page={recipientPage} pageSize={20} total={recipients.total} onChange={setRecipientPage} />

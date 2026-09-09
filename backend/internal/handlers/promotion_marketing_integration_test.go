@@ -249,7 +249,11 @@ func TestReferralAttributionOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_, _ = db.ExecContext(context.Background(), `DELETE FROM users WHERE id IN (SELECT referred_user_id FROM referrals WHERE referrer_user_id=$1)`, referrer.ID)
+		// Attribution rows outlive deleted accounts by design, so clear the
+		// referrer's source explicitly or the next run's mailbox is "already attributed".
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM users WHERE id IN (SELECT r.user_id FROM promotion_registrations r JOIN promotion_invites i ON i.id=r.invite_id WHERE i.owner_user_id=$1)`, referrer.ID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM promotion_registrations WHERE invite_id IN (SELECT id FROM promotion_invites WHERE owner_user_id=$1)`, referrer.ID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM promotion_invites WHERE owner_user_id=$1`, referrer.ID)
 		_, _ = db.ExecContext(context.Background(), `DELETE FROM signup_risk_profiles WHERE user_id NOT IN (SELECT id FROM users)`)
 	})
 
@@ -288,6 +292,7 @@ func TestReferralAttributionOnly(t *testing.T) {
 
 	// A referred sign-up is attributed; an unknown code is ignored, not fatal.
 	friend := uniqueEmail(t, "friend")
+	cleanupUser(t, db, friend)
 	if res := postJSON(t, h.HandleRegister, "/api/auth/register", map[string]any{"email": friend, "password": "correct horse battery", "name": "朋友", "referral_code": code}); res.Code != http.StatusAccepted {
 		t.Fatalf("register friend: %d %s", res.Code, res.Body.String())
 	}

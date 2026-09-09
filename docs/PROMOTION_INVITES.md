@@ -38,13 +38,28 @@
 阶段奖励与注册奖励一样走注册风控与每日预算（`promotion_topup`、`promotion_session`），
 有效期沿用「余额有效天数」，账本备注带活动名。用户账户页在小时单价旁显示活动折扣及到期日。
 
+## 统一的来源模型（2026-09-09 起）
+
+渠道活动、用户推荐和代理共用一张来源表（`promotion_invites`，字段 `kind` 为 `campaign` /
+`referral` / `agent`，`owner_user_id` 为推荐人或代理）和一张归因表（`promotion_registrations`）。
+规则：
+
+- **一个账户只归因一次，只领一次赠送。** 通过活动链接注册、通过推荐链接注册、兑换一次性码，
+  三者互斥，先到先得；已归因的账户再兑码会被拒绝。同一邮箱也只归因一次。
+- **一次性兑换码是来源的一种领取方式**（`redeem_codes.invite_id`），面值、有效期来自来源；
+  `claim_mode='code'` 的来源没有可分享的链接，只能凭码归因。任何非推荐来源都可以再发码。
+- **奖励只有一条发放路径**（`GrantPromotionRewards`），兑码与链接注册走同样的验证与风控。
+- **代理**在「代理与结算」保存资料时自动获得一个 `kind='agent'` 的来源，链接
+  `/invite?code=AG-…` 与代理发的码共用同一赠送条件；分成、风控标记和留存按归因表计算。
+- 设计与迁移说明见 `docs/plans/acquisition-unification.md`。
+
 ## 用户推荐（只归因）
 
 每个账户在「账户 → 邀请好友」可获得专属链接 `/invite?ref=CODE`（`GET /api/user/referral`
-首次调用时生成 8 位码），并看到访问 / 注册 / 已验证人数。落地页显示推荐人昵称；注册请求携带
-`referral_code`，无效或已删除的推荐码被忽略而不阻止注册。推荐**不发放任何奖励**，
-只写入 `referrals` 表；管理页「用户推荐」列表与用户列表的「推荐人」字段用于查看。
-同一邮箱只保留第一次推荐关系。
+首次调用时创建该用户的推荐来源并生成 8 位码），并看到访问 / 注册 / 已验证人数。落地页显示推荐人
+昵称；注册请求携带 `referral_code`，无效或已删除的推荐码被忽略而不阻止注册。推荐**不发放任何奖励**，
+只写入归因表；管理页「用户推荐」列表与用户列表的「推荐人」字段用于查看。同一账户或邮箱已通过
+活动链接归因时，推荐不再生效。
 
 ## 发放与归因
 
@@ -77,7 +92,8 @@
 运行新后端前执行 `036_promotion_invites.sql` 与 `043_promotion_marketing.sql`。迁移运行器和启动检查均已更新；
 Compose 与安装器沿用原有迁移流程。
 
-- `GET /api/auth/invite?code=...`：公开预览活动名、文案、权益、截止时间与剩余名额，隐藏渠道、标签及用户数据；`?ref=...` 返回推荐人昵称。
+- `GET /api/auth/invite?code=...`：公开预览活动名、文案、权益、截止时间与剩余名额，隐藏渠道、标签及用户数据；推荐来源的码（也接受 `?ref=...`）返回推荐人昵称。
+- `GET /api/admin/promotions/{id}/codes`、`POST .../codes`（`client_request_id`、`quantity`）：查看和生成该来源的一次性兑换码；作废仍用 `DELETE /api/admin/redeem-codes/{id}`。
 - `POST /api/auth/invite/visit`：记录落地页访问（含 UTM），始终返回 204。
 - `GET /api/admin/promotions?page=1&search=...`：分页搜索活动、渠道、码或标签。
 - `POST /api/admin/promotions`：创建邀请。

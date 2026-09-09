@@ -213,6 +213,7 @@ func (h *AuthHandler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 			writePromotionError(w, err)
 			return
 		}
+		log.Printf("create user with attribution: %v", err)
 		http.Error(w, `{"error":"failed to create user"}`, http.StatusInternalServerError)
 		return
 	}

@@ -2,34 +2,47 @@ package billing
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 
+	"github.com/dreamtrans/backend/internal/acquisition"
 	"github.com/google/uuid"
 )
 
+// testGiftCode issues one single-use code. Without an agent it belongs to a
+// fresh code-claimed campaign source owned by the caller; with an agent it
+// hangs off the agent's own source.
 func testGiftCode(t *testing.T, s *Service, owner integrationUser, agentID string) string {
 	t.Helper()
 	code := uuid.NewString()
-	var batchID string
-	err := s.db.QueryRowContext(t.Context(), `INSERT INTO redeem_batches(client_request_id,created_by,channel,face_value_usd,grant_days,expires_at,quantity,agent_user_id) VALUES(gen_random_uuid(),$1,'test',10,30,NOW()+interval '1 day',1,NULLIF($2,'')::uuid) RETURNING id`, owner.userID, agentID).Scan(&batchID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	normalized := ""
-	for _, r := range code {
-		if r != '-' {
-			normalized += string(r)
+	var inviteID string
+	if agentID != "" {
+		if err := acquisition.EnsureAgentSourceTx(t.Context(), s.db, agentID); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.db.QueryRowContext(t.Context(), `SELECT id FROM promotion_invites WHERE owner_user_id=$1 AND kind='agent'`, agentID).Scan(&inviteID); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		err := s.db.QueryRowContext(t.Context(), `INSERT INTO promotion_invites(code,name,channel,tags,enabled,expires_at,max_registrations,grant_usd,grant_days,plan_days,created_by,kind,claim_mode)
+ VALUES('RB-'||upper(replace(gen_random_uuid()::text,'-','')),'test codes','test','[]'::jsonb,TRUE,NOW()+interval '1 day',1,10,30,30,$1,'campaign','code') RETURNING id`, owner.userID).Scan(&inviteID)
+		if err != nil {
+			t.Fatal(err)
 		}
 	}
-	if _, err = s.db.ExecContext(t.Context(), `INSERT INTO redeem_codes(batch_id,code) VALUES($1,upper($2))`, batchID, normalized); err != nil {
+	normalized := strings.ToUpper(strings.ReplaceAll(code, "-", ""))
+	var codeID string
+	if err := s.db.QueryRowContext(t.Context(), `INSERT INTO redeem_codes(invite_id,code,created_by) VALUES($1,$2,$3) RETURNING id`, inviteID, normalized, owner.userID).Scan(&codeID); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		ctx := context.Background()
-		_, _ = s.db.ExecContext(ctx, `DELETE FROM agent_flags WHERE code_id IN (SELECT id FROM redeem_codes WHERE batch_id=$1)`, batchID)
-		_, _ = s.db.ExecContext(ctx, `DELETE FROM redeem_codes WHERE batch_id=$1`, batchID)
-		_, _ = s.db.ExecContext(ctx, `DELETE FROM redeem_batches WHERE id=$1`, batchID)
+		_, _ = s.db.ExecContext(ctx, `DELETE FROM promotion_registrations WHERE code_id=$1`, codeID)
+		_, _ = s.db.ExecContext(ctx, `DELETE FROM redeem_codes WHERE id=$1`, codeID)
+		if agentID == "" {
+			_, _ = s.db.ExecContext(ctx, `DELETE FROM promotion_invites WHERE id=$1`, inviteID)
+		}
 	})
 	return code
 }
@@ -98,10 +111,10 @@ func TestRedeemGiftRejectsUnverifiedExpiredAndVoided(t *testing.T) {
 	for _, state := range []string{"expired", "voided"} {
 		t.Run(state, func(t *testing.T) {
 			if state == "expired" {
-				_, _ = s.db.ExecContext(t.Context(), `UPDATE redeem_batches SET expires_at=NOW()-interval '1 day' WHERE created_by=$1`, user.userID)
+				_, _ = s.db.ExecContext(t.Context(), `UPDATE promotion_invites SET expires_at=NOW()-interval '1 day' WHERE created_by=$1 AND claim_mode='code'`, user.userID)
 			} else {
-				_, _ = s.db.ExecContext(t.Context(), `UPDATE redeem_batches SET expires_at=NOW()+interval '1 day' WHERE created_by=$1`, user.userID)
-				_, _ = s.db.ExecContext(t.Context(), `UPDATE redeem_codes SET voided_at=NOW() WHERE batch_id IN(SELECT id FROM redeem_batches WHERE created_by=$1)`, user.userID)
+				_, _ = s.db.ExecContext(t.Context(), `UPDATE promotion_invites SET expires_at=NOW()+interval '1 day' WHERE created_by=$1 AND claim_mode='code'`, user.userID)
+				_, _ = s.db.ExecContext(t.Context(), `UPDATE redeem_codes SET voided_at=NOW() WHERE created_by=$1`, user.userID)
 			}
 			if _, err := s.RedeemGift(t.Context(), user.userID, code); err == nil {
 				t.Fatal("invalid code claimed")
@@ -129,6 +142,8 @@ func TestAgentCommissionRefundAndSettlementSafety(t *testing.T) {
 		ctx := context.Background()
 		_, _ = s.db.ExecContext(ctx, `DELETE FROM agent_settlements WHERE agent_user_id=$1`, agent.userID)
 		_, _ = s.db.ExecContext(ctx, `DELETE FROM agent_commissions WHERE agent_user_id=$1`, agent.userID)
+		_, _ = s.db.ExecContext(ctx, `DELETE FROM agent_flags WHERE agent_user_id=$1`, agent.userID)
+		_, _ = s.db.ExecContext(ctx, `DELETE FROM promotion_invites WHERE owner_user_id=$1`, agent.userID)
 		_, _ = s.db.ExecContext(ctx, `DELETE FROM agent_profiles WHERE user_id=$1`, agent.userID)
 	})
 	code := testGiftCode(t, s, agent, agent.userID)
@@ -249,4 +264,61 @@ func TestCumulativeChargeRefundsDebitOnlyNewAmounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	approx(t, "total reversed", total, 20)
+}
+
+// An agent's link and codes share one source: a link sign-up earns the agent
+// commission exactly like a code claim, and an attributed account cannot
+// stack a second gift from another source.
+func TestAgentLinkSignupAttributesAndGiftsNeverStack(t *testing.T) {
+	s := newIntegrationService(t, integrationDB(t))
+	agent := createIntegrationUser(t, s.db, "agent-link-owner")
+	buyer := createIntegrationUser(t, s.db, "agent-link-buyer")
+	other := createIntegrationUser(t, s.db, "campaign-owner")
+	verifyGiftUser(t, s, buyer)
+	if _, err := s.db.ExecContext(t.Context(), `INSERT INTO agent_profiles(user_id,commission_percent,settle_threshold_usd,channel,code_value_usd,grant_days) VALUES($1,25,100,'agent-link',3,10)`, agent.userID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx := context.Background()
+		_, _ = s.db.ExecContext(ctx, `DELETE FROM agent_commissions WHERE agent_user_id=$1`, agent.userID)
+		_, _ = s.db.ExecContext(ctx, `DELETE FROM agent_flags WHERE agent_user_id=$1`, agent.userID)
+		_, _ = s.db.ExecContext(ctx, `DELETE FROM promotion_registrations WHERE user_id=$1`, buyer.userID)
+		_, _ = s.db.ExecContext(ctx, `DELETE FROM promotion_invites WHERE owner_user_id=$1`, agent.userID)
+		_, _ = s.db.ExecContext(ctx, `DELETE FROM agent_profiles WHERE user_id=$1`, agent.userID)
+	})
+	if err := acquisition.EnsureAgentSourceTx(t.Context(), s.db, agent.userID); err != nil {
+		t.Fatal(err)
+	}
+	source, err := acquisition.ReserveSourceTx(t.Context(), s.db, acquisition.AgentSourceCode(agent.userID), true)
+	if err != nil || source.Kind != acquisition.KindAgent || source.OwnerUserID != agent.userID {
+		t.Fatalf("agent source: %+v %v", source, err)
+	}
+	// The link sign-up: attribution happens inside registration, rewards on verification.
+	var buyerEmail string
+	if err := s.db.QueryRowContext(t.Context(), `SELECT email FROM users WHERE id=$1`, buyer.userID).Scan(&buyerEmail); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := acquisition.AttributeTx(t.Context(), s.db, source.ID, buyer.userID, buyerEmail, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.GrantPromotionRewards(t.Context(), buyer.userID); err != nil {
+		t.Fatal(err)
+	}
+	balance, err := s.GetUserBalance(t.Context(), buyer.userID)
+	if err != nil || balance.GrantUSD < 2.99 || balance.GrantUSD > 3.01 {
+		t.Fatalf("link sign-up gift=%+v err=%v", balance, err)
+	}
+	if _, err := s.RecordTopup(t.Context(), &TopupInput{UserID: buyer.userID, AmountUSD: 40, StripeObjectID: "pi_link_" + uuid.NewString()}); err != nil {
+		t.Fatal(err)
+	}
+	agentBalance, err := s.AgentBalance(t.Context(), agent.userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approx(t, "commission on a link sign-up", agentBalance.Earned, 10)
+	// A campaign code afterwards must not add a second gift.
+	code := testGiftCode(t, s, other, "")
+	if _, err := s.RedeemGift(t.Context(), buyer.userID, code); err == nil || !strings.Contains(err.Error(), "不能再次兑换") {
+		t.Fatalf("second gift accepted: %v", err)
+	}
 }

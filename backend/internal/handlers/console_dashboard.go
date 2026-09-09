@@ -10,13 +10,11 @@ import (
 	"github.com/lib/pq"
 )
 
-// Attribution is exclusive: a redeemed batch takes precedence over the
-// registration promotion, otherwise the user belongs to the organic channel.
+// Attribution is exclusive: every account has at most one source
+// (campaign, referral or agent), otherwise it belongs to the organic channel.
 const dashboardScope = `WITH attributed AS (
- SELECT u.*,COALESCE(b.channel,i.channel,'organic') AS channel,c.batch_id,c.redeemed_at
- FROM users u LEFT JOIN redeem_codes c ON c.redeemed_by=u.id
- LEFT JOIN redeem_batches b ON b.id=c.batch_id
- LEFT JOIN promotion_registrations pr ON pr.user_id=u.id
+ SELECT u.*,COALESCE(i.channel,'organic') AS channel,pr.invite_id AS source_id,i.name AS source_name,pr.registered_at AS attributed_at
+ FROM users u LEFT JOIN promotion_registrations pr ON pr.user_id=u.id
  LEFT JOIN promotion_invites i ON i.id=pr.invite_id
 ), scoped AS (
  SELECT * FROM attributed WHERE ($3='' OR channel=$3) AND (cardinality($4::text[])=0 OR channel=ANY($4::text[]))
@@ -83,15 +81,15 @@ func (h *AdminHandler) HandleConsoleDashboard(w http.ResponseWriter, r *http.Req
 	result := map[string]any{"from": from, "to_exclusive": to, "granularity": grain, "attribution": "redeemed_batch_then_registration_promotion", "financial": consolePermission(r, "finance.read"), "metrics_available": consolePermission(r, "metrics.read"), "export_allowed": consolePermission(r, "export")}
 	sections := map[string]string{
 		"activity": `SELECT date_trunc($5,created_at AT TIME ZONE 'UTC') AS period,COUNT(DISTINCT user_id) AS active_users,COALESCE(SUM(quantity) FILTER(WHERE action='transcription'),0)/60 AS hours FROM usage GROUP BY 1 ORDER BY 1`,
-		"funnel": `SELECT s.channel,COUNT(*) AS registered,COUNT(*) FILTER(WHERE redeemed_at IS NOT NULL AND redeemed_at<$2) AS redeemed,
+		"funnel": `SELECT s.channel,COUNT(*) AS registered,COUNT(*) FILTER(WHERE attributed_at IS NOT NULL AND attributed_at<$2) AS attributed,
  COUNT(*) FILTER(WHERE EXISTS(SELECT 1 FROM sessions x WHERE x.user_id=s.id AND x.created_at<$2)) AS first_session,
  COUNT(*) FILTER(WHERE (SELECT COALESCE(SUM(quantity),0) FROM usage_logs x WHERE x.user_id=s.id AND x.action='transcription' AND x.refunded_at IS NULL AND x.created_at<$2)>=60) AS one_hour,
  COUNT(*) FILTER(WHERE (SELECT COUNT(*) FROM payments p WHERE p.account_id=s.billing_account_id AND p.kind='topup' AND p.stripe_object_id IS NOT NULL AND p.status='succeeded' AND p.created_at<$2)>=1) AS first_topup,
  COUNT(*) FILTER(WHERE (SELECT COUNT(*) FROM payments p WHERE p.account_id=s.billing_account_id AND p.kind='topup' AND p.stripe_object_id IS NOT NULL AND p.status='succeeded' AND p.created_at<$2)>=2) AS second_topup
  FROM scoped s WHERE s.created_at >= $1 AND s.created_at < $2 GROUP BY s.channel ORDER BY s.channel`,
-		"retention": `SELECT s.batch_id,s.channel,w.week,COUNT(*) AS eligible,
- COUNT(*) FILTER(WHERE EXISTS(SELECT 1 FROM usage_logs l WHERE l.user_id=s.id AND l.action='transcription' AND l.refunded_at IS NULL AND l.quantity>0 AND l.created_at>=s.redeemed_at+w.week*interval '7 days' AND l.created_at<s.redeemed_at+(w.week+1)*interval '7 days')) AS retained
- FROM scoped s CROSS JOIN (VALUES(1),(2),(4)) w(week) WHERE s.redeemed_at >= $1 AND s.redeemed_at<$2 AND s.redeemed_at+(w.week+1)*interval '7 days'<=LEAST($2,NOW()) GROUP BY s.batch_id,s.channel,w.week ORDER BY s.batch_id,w.week`,
+		"retention": `SELECT s.source_name AS source,s.channel,w.week,COUNT(*) AS eligible,
+ COUNT(*) FILTER(WHERE EXISTS(SELECT 1 FROM usage_logs l WHERE l.user_id=s.id AND l.action='transcription' AND l.refunded_at IS NULL AND l.quantity>0 AND l.created_at>=s.attributed_at+w.week*interval '7 days' AND l.created_at<s.attributed_at+(w.week+1)*interval '7 days')) AS retained
+ FROM scoped s CROSS JOIN (VALUES(1),(2),(4)) w(week) WHERE s.attributed_at >= $1 AND s.attributed_at<$2 AND s.attributed_at+(w.week+1)*interval '7 days'<=LEAST($2,NOW()) GROUP BY s.source_id,s.source_name,s.channel,w.week ORDER BY s.source_name,w.week`,
 		"hours_histogram": `SELECT CASE WHEN hours=0 THEN '0' WHEN hours<1 THEN '0–1' WHEN hours<5 THEN '1–5' WHEN hours<10 THEN '5–10' ELSE '10+' END AS bucket,COUNT(*) AS user_weeks FROM (
  SELECT s.id,w.week,COALESCE(SUM(l.quantity) FILTER(WHERE l.action='transcription'),0)/60 AS hours FROM scoped s
  CROSS JOIN generate_series(date_trunc('week',$1::timestamptz),$2::timestamptz-interval '1 microsecond',interval '1 week') w(week)

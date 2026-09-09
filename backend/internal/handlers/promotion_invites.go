@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/dreamtrans/backend/internal/acquisition"
 	"github.com/dreamtrans/backend/internal/auth"
 	"github.com/dreamtrans/backend/internal/risk"
 	"github.com/dreamtrans/backend/internal/store"
@@ -62,7 +63,11 @@ func (h *AdminHandler) HandlePromotions(w http.ResponseWriter, r *http.Request) 
 	switch r.Method {
 	case http.MethodGet:
 		page, size := promotionPagination(r)
-		items, total, err := h.store.ListPromotions(r.Context(), size, (page-1)*size, strings.TrimSpace(r.URL.Query().Get("search")))
+		kinds := []string{acquisition.KindCampaign, acquisition.KindAgent}
+		if kind := strings.TrimSpace(r.URL.Query().Get("kind")); kind != "" {
+			kinds = []string{kind}
+		}
+		items, total, err := h.store.ListPromotions(r.Context(), kinds, size, (page-1)*size, strings.TrimSpace(r.URL.Query().Get("search")))
 		if err != nil {
 			writePromotionError(w, err)
 			return
@@ -106,6 +111,20 @@ func (h *AdminHandler) handlePromotionItem(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		WriteJSON(w, report)
+	case section == "codes" && r.Method == http.MethodGet:
+		h.listRedeemCodes(w, r)
+	case section == "codes" && r.Method == http.MethodPost:
+		// Issue single-use codes under an existing source: same terms, one
+		// more way to claim them.
+		var input struct {
+			RequestID string `json:"client_request_id"`
+			Quantity  int    `json:"quantity"`
+		}
+		if json.NewDecoder(r.Body).Decode(&input) != nil {
+			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		h.issueCodes(w, r, id, input.RequestID, input.Quantity)
 	case section != "":
 		http.Error(w, `{"error":"promotion not found"}`, http.StatusNotFound)
 	case r.Method == http.MethodGet:
@@ -174,19 +193,12 @@ func (h *AuthHandler) HandlePromotionPreview(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	code := strings.TrimSpace(r.URL.Query().Get("code"))
-	if ref := strings.TrimSpace(r.URL.Query().Get("ref")); code == "" && ref != "" {
-		// Referral links show only the referrer's chosen display name.
-		if len(ref) > 32 {
-			writePromotionError(w, sql.ErrNoRows)
-			return
-		}
-		preview, err := h.store.PreviewReferral(r.Context(), ref)
-		if err != nil {
-			writePromotionError(w, err)
-			return
-		}
-		WriteJSON(w, map[string]any{"kind": "referral", "referrer_name": preview.Name})
-		return
+	viaRef := false
+	if code == "" {
+		// Referral posters link with ?ref=; it is the same source code, and an
+		// unknown referral stays a 404 as before.
+		code = strings.TrimSpace(r.URL.Query().Get("ref"))
+		viaRef = code != ""
 	}
 	if code == "" || len(code) > 128 {
 		writePromotionError(w, store.ErrInvalidPromotion)
@@ -197,8 +209,21 @@ func (h *AuthHandler) HandlePromotionPreview(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	offer, err := h.store.PreviewPromotion(r.Context(), code)
+	if viaRef && errors.Is(err, store.ErrInvalidPromotion) {
+		err = sql.ErrNoRows
+	}
 	if err != nil {
 		writePromotionError(w, err)
+		return
+	}
+	if offer.Kind == acquisition.KindReferral {
+		// Referral links show only the referrer's chosen display name.
+		preview, err := h.store.PreviewReferral(r.Context(), code)
+		if err != nil {
+			writePromotionError(w, err)
+			return
+		}
+		WriteJSON(w, map[string]any{"kind": "referral", "referrer_name": preview.Name})
 		return
 	}
 	if !h.EmailVerificationRequired() {
@@ -216,7 +241,7 @@ func publicPromotionOffer(offer *store.PromotionInvite) map[string]any {
 		remaining = 0
 	}
 	return map[string]any{
-		"kind": "promotion", "name": offer.Name, "headline": offer.Headline, "description": offer.Description,
+		"kind": "promotion", "source_kind": offer.Kind, "name": offer.Name, "headline": offer.Headline, "description": offer.Description,
 		"grant_usd": offer.GrantUSD, "grant_days": offer.GrantDays, "plan_code": offer.PlanCode, "plan_days": offer.PlanDays,
 		"usage_discount_percent": offer.UsageDiscountPercent, "discount_days": offer.DiscountDays,
 		"topup_bonus_percent": offer.TopupBonusPercent, "topup_bonus_days": offer.TopupBonusDays,

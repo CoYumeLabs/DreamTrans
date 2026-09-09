@@ -8,12 +8,12 @@ import { formatCompact, formatPercent, formatUsd, number, ordinalColor, periodLa
 interface Credit { configured: boolean; starting_usd: number; remaining_usd?: number; days_remaining: number | null; route: string; started_at: string; daily_usd?: number }
 interface Dashboard { financial: boolean; metrics_available: boolean; export_allowed: boolean; credit?: Credit; [key: string]: unknown }
 
-const labels: Record<string, string> = { period: '时间', channel: '渠道', registered: '注册', redeemed: '领码', first_session: '首场会话', one_hour: '用满一小时', first_topup: '首充', second_topup: '二充', hours: '小时', users: '用户', active_users: '活跃用户', route: '路由', funding: '资金', tenant_kind: '组织类型', bucket: '小时区间', user_weeks: '用户周', week: '周', eligible: '可观察人数', retained: '留存人数', batch_id: '批次', plan: '会员', samples: '样本数', sessions: '会话数', final_segments: '定稿段数', edited_segments: '修改段数', edits: '修改次数', language: '目标语言', source_language: '源语言', model: '模型', kind: '类型', payments: '笔数', input_tokens: '输入 token', output_tokens: '输出 token', pending_fees: '待补手续费', topup_usd: '充值 USD', membership_usd: '会员 USD', refund_usd: '退款 USD', known_fee_usd: '已知手续费 USD', consumed_usd: '消耗 USD', gift_usd: '赠送消耗 USD', paid_consumed_usd: '付费消耗 USD', upstream_usd: '上游成本 USD', paid_usage_margin_usd: '用量毛利 USD', margin_per_hour_usd: '每小时毛利 USD', revenue_usd: '收入 USD', tier_usd: '档位 USD', wallet_usd: '钱包 USD', grants_usd: '未用额度 USD', median_session_p50_ms: '会话 p50 中位数 ms', p90_session_p90_ms: '会话 p90 的 p90 ms' }
+const labels: Record<string, string> = { period: '时间', channel: '渠道', registered: '注册', attributed: '来源归因', source: '来源', first_session: '首场会话', one_hour: '用满一小时', first_topup: '首充', second_topup: '二充', hours: '小时', users: '用户', active_users: '活跃用户', route: '路由', funding: '资金', tenant_kind: '组织类型', bucket: '小时区间', user_weeks: '用户周', week: '周', eligible: '可观察人数', retained: '留存人数', batch_id: '批次', plan: '会员', samples: '样本数', sessions: '会话数', final_segments: '定稿段数', edited_segments: '修改段数', edits: '修改次数', language: '目标语言', source_language: '源语言', model: '模型', kind: '类型', payments: '笔数', input_tokens: '输入 token', output_tokens: '输出 token', pending_fees: '待补手续费', topup_usd: '充值 USD', membership_usd: '会员 USD', refund_usd: '退款 USD', known_fee_usd: '已知手续费 USD', consumed_usd: '消耗 USD', gift_usd: '赠送消耗 USD', paid_consumed_usd: '付费消耗 USD', upstream_usd: '上游成本 USD', paid_usage_margin_usd: '用量毛利 USD', margin_per_hour_usd: '每小时毛利 USD', revenue_usd: '收入 USD', tier_usd: '档位 USD', wallet_usd: '钱包 USD', grants_usd: '未用额度 USD', median_session_p50_ms: '会话 p50 中位数 ms', p90_session_p90_ms: '会话 p90 的 p90 ms' }
 const routeLabel: Record<string, string> = { training: '训练', standard: '不训练', unknown: '未知' }
 const fundingLabel: Record<string, string> = { gift: '赠送', paid: '付费', unknown: '未知' }
 const planLabel: Record<string, string> = { free: 'Free', pro: 'Pro', unknown: '未知' }
 const kindLabel: Record<string, string> = { topup: '充值', membership: '会员' }
-const funnelStages = ['registered', 'redeemed', 'first_session', 'one_hour', 'first_topup', 'second_topup']
+const funnelStages = ['registered', 'attributed', 'first_session', 'one_hour', 'first_topup', 'second_topup']
 const financeSeries: Series[] = [
   { key: 'topup_usd', label: '充值', slot: 1 },
   { key: 'membership_usd', label: '会员', slot: 2 },
@@ -124,7 +124,7 @@ export function DashboardPage() {
   const languages = rowsFor('languages')
 
   const funnelChannels = [...funnel].sort((a, b) => number(b.registered) - number(a.registered)).slice(0, 6)
-  const retentionBatches = [...new Set(retention.map(row => text(row.batch_id)))]
+  const retentionBatches = [...new Set(retention.map(row => text(row.source)))]
   const retentionWeeks = [...new Set(retention.map(row => number(row.week)))].sort((a, b) => a - b)
   const latencyRoutes = [...new Set(latency.map(row => text(row.route)))]
   const tierItems = Object.values(tiers.reduce<Record<string, { kind: string; tier: number; revenue: number; payments: number }>>((acc, row) => {
@@ -227,13 +227,13 @@ export function DashboardPage() {
           )}
 
           {has('retention') && (
-            <Section title="兑换批次留存" description="兑换后第 1 / 2 / 4 周仍有转录用量的账户占比；只计入已完整经过该周的用户。" rows={retention} exportName={`retention-${from}-${to}.csv`} exportAllowed={exportAllowed}>
+            <Section title="来源留存" description="按来源统计归因后第 1 / 2 / 4 周仍有转录用量的账户占比；只计入已完整经过该周的用户。" rows={retention} exportName={`retention-${from}-${to}.csv`} exportAllowed={exportAllowed}>
               <Heatmap
                 caption="兑换批次留存率"
-                rowLabels={retentionBatches.map(batch => `${batch.slice(0, 8)} · ${text(retention.find(row => text(row.batch_id) === batch)?.channel)}`)}
+                rowLabels={retentionBatches.map(batch => `${batch || '—'} · ${text(retention.find(row => text(row.source) === batch)?.channel)}`)}
                 colLabels={retentionWeeks.map(week => `第 ${week} 周`)}
                 values={retentionBatches.map(batch => retentionWeeks.map(week => {
-                  const row = retention.find(item => text(item.batch_id) === batch && number(item.week) === week)
+                  const row = retention.find(item => text(item.source) === batch && number(item.week) === week)
                   return row && number(row.eligible) > 0 ? number(row.retained) / number(row.eligible) : null
                 }))}
                 format={formatPercent}

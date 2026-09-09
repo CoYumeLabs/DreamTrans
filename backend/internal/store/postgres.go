@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dreamtrans/backend/internal/acquisition"
 	"github.com/dreamtrans/backend/internal/auth"
 	"github.com/dreamtrans/backend/internal/models"
 	"github.com/dreamtrans/backend/internal/risk"
@@ -161,9 +162,13 @@ func (s *PostgresStore) CreateUserWithAttribution(ctx context.Context, user *mod
 	if err != nil {
 		return err
 	}
-	referrerID, err := referrerIDTx(ctx, tx, referralCode)
-	if err != nil {
-		return err
+	// A campaign link wins over a referral code; either way the account is
+	// attributed to exactly one source.
+	var referral *acquisition.Source
+	if invite == nil {
+		if referral, err = referralSourceTx(ctx, tx, referralCode, user.Email); err != nil {
+			return err
+		}
 	}
 
 	query := `
@@ -193,9 +198,12 @@ func (s *PostgresStore) CreateUserWithAttribution(ctx context.Context, user *mod
 		if err := recordPromotionTx(ctx, tx, invite.ID, user); err != nil {
 			return err
 		}
-	}
-	if err := recordReferralTx(ctx, tx, referrerID, user); err != nil {
-		return err
+	} else if referral != nil {
+		// A mailbox already attributed keeps its first source; referrals
+		// never block a sign-up.
+		if _, err := acquisition.AttributeTx(ctx, tx, referral.ID, user.ID, user.Email, ""); err != nil && !errors.Is(err, acquisition.ErrAlreadyAttributed) {
+			return err
+		}
 	}
 	if err := risk.RecordTx(ctx, tx, user.ID, signals, assessment); err != nil {
 		return err
