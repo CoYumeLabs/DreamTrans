@@ -1094,6 +1094,45 @@ async function openAssistantSettings(page: Page): Promise<void> {
   }
 }
 
+test('Qwen chat recovers from gateway errors and explains exhausted output without retrying it', async ({ page }) => {
+  const backend = new MockAIBackend([])
+  await backend.install(page)
+  const requests: Array<Record<string, unknown>> = []
+  await page.route('**/api/rag/ask', async route => {
+    const body = jsonBody(route) ?? {}
+    requests.push(body)
+    if (body.question === 'Exhausted') {
+      await json(route, { code: 'ai_output_limit', error: 'Output limit reached' }, 422)
+    } else if (requests.length === 1 || body.question === 'Unavailable') {
+      await route.fulfill({ status: 502, contentType: 'text/html', body: '<!DOCTYPE html><html><body>Cloudflare Host Error</body></html>' })
+    } else if (requests.length === 2) {
+      await route.fulfill({ status: 409, headers: { 'Retry-After': '0' }, body: 'AI generation request is already in progress' })
+    } else {
+      await json(route, { answer: 'Recovered Qwen answer', usage: { model: 'cerebras::qwen-3.8-27b', total_tokens: 3010 } })
+    }
+  })
+  await login(page)
+  await page.getByRole('button', { name: '跳过引导', exact: true }).click()
+  await openAssistant(page)
+  const send = async (question: string) => {
+    await page.locator('.dt-chat__composer textarea').fill(question)
+    await page.locator('.dt-chat__composer button[type="submit"]').click()
+  }
+  await send('Hello')
+  await expect(page.locator('.dt-chat__message--assistant')).toContainText('Recovered Qwen answer')
+  expect(requests).toHaveLength(3)
+  expect(requests[1]).toEqual(requests[0])
+  expect(requests[2]).toEqual(requests[0])
+  await send('Exhausted')
+  await expect(page.locator('.dt-chat__message--assistant').last()).toContainText('耗尽了输出额度')
+  expect(requests).toHaveLength(4)
+  await send('Unavailable')
+  await expect(page.locator('.dt-chat__message--assistant').last()).toContainText('AI 服务暂时不可用（HTTP 502）')
+  expect(requests).toHaveLength(7)
+  await expect(page.locator('.dt-chat')).not.toContainText('<!DOCTYPE')
+  await expect(page.locator('.dt-chat')).not.toContainText('Cloudflare Host Error')
+})
+
 for (const model of ['gpt-5-mini', 'cerebras::qwen-3.8-27b']) {
   test(`chat without a transcript session works with ${model}`, async ({ page }) => {
     const backend = new MockAIBackend([])

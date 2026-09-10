@@ -249,6 +249,13 @@ type providerOutputError struct {
 	Reason string
 }
 
+// IsOutputLimitError identifies completed generations that exhausted their
+// output budget. Repeating the same paid request cannot fix this condition.
+func IsOutputLimitError(err error) bool {
+	var outputErr *providerOutputError
+	return errors.As(err, &outputErr) && outputErr.Reason == "max output tokens exhausted"
+}
+
 func (e *providerOutputError) Error() string {
 	if strings.TrimSpace(e.Reason) == "" {
 		return e.API + " returned no output text"

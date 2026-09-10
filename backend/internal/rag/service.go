@@ -1139,7 +1139,15 @@ func (s *Service) buildAnswerFromContextWithConfigUsage(
 		return "", nil, 0, fmt.Errorf("unsupported reasoning effort")
 	}
 	baseCfg.MaxOutputTokens = maxOutputTokens
-	if strings.HasPrefix(strings.ToLower(baseCfg.Model), "gpt-5.6") {
+	// Cerebras Qwen 3.8 defaults to high reasoning, which can consume the
+	// entire legacy 2K answer budget before producing any visible text.
+	// Its OpenAI-compatible effort levels must share the same reservation
+	// and output budget as the existing reasoning control.
+	isQwen38 := strings.EqualFold(baseCfg.Model, "qwen-3.8-27b")
+	if isQwen38 && effectiveReasoning == "" {
+		effectiveReasoning = "medium"
+	}
+	if strings.HasPrefix(strings.ToLower(baseCfg.Model), "gpt-5.6") || isQwen38 {
 		baseCfg.ReasoningEffort = effectiveReasoning
 		baseCfg.MaxOutputTokens = outputBudgetForReasoning(
 			maxOutputTokens,

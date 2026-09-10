@@ -22,6 +22,7 @@ const requests: CapturedRequest[] = []
 const originalFetch = globalThis.fetch
 let artifactAttempts = 0
 let anonymousArtifactAttempts = 0
+let chatAttempts = 0
 const readyJob: AIIndexJob = {
   id: 'index-job',
   target_type: 'session',
@@ -102,6 +103,17 @@ globalThis.fetch = async (input, init) => {
       },
     }
   } else if (url.endsWith('/api/rag/ask')) {
+    chatAttempts += 1
+    if (chatAttempts === 1) {
+      return new Response('<!DOCTYPE html><html><body>Bad gateway</body></html>', {
+        status: 502, headers: { 'Content-Type': 'text/html' },
+      })
+    }
+    if (chatAttempts === 2) {
+      return new Response('AI generation request is already in progress', {
+        status: 409, headers: { 'Retry-After': '0' },
+      })
+    }
     body = {
       answer: 'Answer',
       context: {
@@ -224,6 +236,12 @@ try {
     'authenticated artifact generation retries a gateway response and polls in-progress work',
   )
   const chatBody = requestBody('/api/rag/ask')
+  const chatRequests = requests.filter(({ url }) => url.endsWith('/api/rag/ask'))
+  assert(
+    chatAttempts === 3
+      && chatRequests.every(request => request.init?.body === chatRequests[0]?.init?.body),
+    'chat recovers from a gateway failure and in-progress response using the identical request',
+  )
   assert(
     chatBody.retrieval_preference === 'lexical_only'
       && chatBody.client_request_id === 'chat-request-1'
@@ -251,6 +269,22 @@ try {
     anonymousArtifactAttempts === 1
       && anonymousArtifactError instanceof Error,
     'anonymous artifact writes never retry without durable server idempotency',
+  )
+  let anonymousChatAttempts = 0
+  globalThis.fetch = async () => {
+    anonymousChatAttempts += 1
+    return new Response('<html>Cloudflare gateway failure</html>', { status: 502 })
+  }
+  let anonymousChatError: unknown
+  try {
+    await askRag('', 'Question', 5, undefined, 1_000, { clientRequestId: 'anonymous-chat' })
+  } catch (reason) {
+    anonymousChatError = reason
+  }
+  assert(
+    anonymousChatAttempts === 1 && anonymousChatError instanceof Error
+      && anonymousChatError.message.includes('502') && !anonymousChatError.message.includes('<html>'),
+    'anonymous chat is not retried and gateway HTML is replaced with readable status',
   )
 } finally {
   clearTokens()

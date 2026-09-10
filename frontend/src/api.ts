@@ -184,41 +184,24 @@ export async function askRag(
   timeoutMs?: number,
   options?: RagAskOptions,
 ): Promise<RagAskResponse> {
-  const base = isProduction ? '' : BACKEND_URL
-  const controller = new AbortController()
-  const timeout = timeoutMs && timeoutMs > 0
-    ? globalThis.setTimeout(() => controller.abort(), timeoutMs)
-    : undefined
-  try {
-    const authHeaders = await getOptionalAuthHeaders()
-    const res = await fetch(`${base}/api/rag/ask`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders },
-      body: JSON.stringify({
-        session_id: sessionId,
-        question: query,
-        top_k: topK,
-        config,
-        history: options?.history,
-        client_transcript: options?.clientTranscript,
-        context_policy: options?.contextPolicy,
-        project_id: options?.projectId,
-        retrieval_preference: options?.retrievalPreference ?? 'auto',
-        client_request_id: options?.clientRequestId,
-        reasoning_effort: options?.reasoningEffort,
-      }),
-      signal: controller.signal,
-    })
-    if (!res.ok) throw new Error(await res.text())
-    return await res.json()
-  } catch (reason) {
-    if (reason instanceof DOMException && reason.name === 'AbortError') {
-      throw new Error(messages().common.errors.aiTimeout, { cause: reason })
-    }
-    throw reason
-  } finally {
-    if (timeout) globalThis.clearTimeout(timeout)
-  }
+  return aiFetchJSON<RagAskResponse>('/api/rag/ask', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      session_id: sessionId,
+      question: query,
+      top_k: topK,
+      config,
+      history: options?.history,
+      client_transcript: options?.clientTranscript,
+      context_policy: options?.contextPolicy,
+      project_id: options?.projectId,
+      retrieval_preference: options?.retrievalPreference ?? 'auto',
+      client_request_id: options?.clientRequestId,
+      reasoning_effort: options?.reasoningEffort,
+    }),
+  }, timeoutMs && timeoutMs > 0 ? timeoutMs : 100_000,
+  Boolean(options?.clientRequestId && getAccessToken()))
 }
 
 /**
@@ -459,8 +442,8 @@ async function aiFetchJSON<T = unknown>(
   const base = isProduction ? '' : BACKEND_URL
   const controller = new AbortController()
   const timeout = globalThis.setTimeout(() => controller.abort(), timeoutMs)
-  const authHeaders = await getOptionalAuthHeaders()
   try {
+    const authHeaders = await getOptionalAuthHeaders()
     const method = (init?.method ?? 'GET').toUpperCase()
     const retryable = method === 'GET' || method === 'HEAD' || retryTransientWrite
     let response: Response
@@ -515,10 +498,18 @@ async function aiFetchJSON<T = unknown>(
       const responseText = await response.text()
       let message = responseText
       try {
-        const parsed = JSON.parse(responseText) as { error?: string; message?: string }
-        message = parsed.error ?? parsed.message ?? responseText
+        const parsed = JSON.parse(responseText) as { code?: string; error?: string; message?: string }
+        message = parsed.code === 'ai_output_limit'
+          ? messages().common.errors.aiOutputLimit
+          : parsed.error ?? parsed.message ?? responseText
       } catch {
         // Plain-text API errors remain useful to the user.
+      }
+      if (
+        response.headers.get('Content-Type')?.toLowerCase().includes('text/html')
+        || /<\s*(?:!doctype|html|head|body)\b/i.test(message)
+      ) {
+        message = messages().common.errors.aiGateway(response.status)
       }
       throw new AIRequestError(
         response.status,

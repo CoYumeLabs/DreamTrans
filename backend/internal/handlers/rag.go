@@ -190,10 +190,26 @@ type contextIndexTarget struct {
 }
 
 func ragServiceErrorStatus(err error) int {
+	if openaiprovider.IsOutputLimitError(err) {
+		return http.StatusUnprocessableEntity
+	}
 	if errors.Is(err, rag.ErrProviderRequest) {
 		return http.StatusBadGateway
 	}
 	return http.StatusInternalServerError
+}
+
+func writeAIOutputLimitError(w http.ResponseWriter, err error) bool {
+	if !openaiprovider.IsOutputLimitError(err) {
+		return false
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnprocessableEntity)
+	WriteJSON(w, map[string]string{
+		"code":  "ai_output_limit",
+		"error": "The AI exhausted its answer budget. Try a shorter question or another model.",
+	})
+	return true
 }
 
 type askConfig struct {
@@ -471,6 +487,9 @@ func (h *RAGHandler) HandleAsk(w http.ResponseWriter, r *http.Request) {
 		log.Printf("rag ask error: %v", err)
 		if h.isRAGAccountingError(err) {
 			h.writeRAGAccountingError(w, err)
+			return
+		}
+		if writeAIOutputLimitError(w, err) {
 			return
 		}
 		status := ragServiceErrorStatus(err)
@@ -1723,6 +1742,9 @@ func (h *RAGHandler) HandleArtifacts(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Printf("generate AI artifact: %v", err)
+		if writeAIOutputLimitError(w, err) {
+			return
+		}
 		http.Error(w, "artifact generation failed", ragServiceErrorStatus(err))
 		return
 	}

@@ -58,7 +58,7 @@ export const zhCN = {
     guest: '访客',
     guestInitial: '访',
     untitledSession: '未命名会话',
-    errors: { aiTimeout: 'AI 回答超时，请重试。', requestTimeout: '请求超时，请稍后重试。', authTimeout: (action: string) => `${action}请求超时，请检查网络后重试。`, authNetwork: (action: string) => `${action}失败：无法连接服务器，请检查网络后重试。`, audioShare: '未获取到系统音频轨道。请在分享对话框中选择标签页/窗口，并勾选「分享音频 / Share audio」（桌面端 Chrome/Edge 支持最好）。' },
+    errors: { aiOutputLimit: 'AI 推理或回答耗尽了输出额度，请缩短问题或换一个模型再试。', aiGateway: (status: number) => `AI 服务暂时不可用（HTTP ${status}），请稍后重试。`, aiTimeout: 'AI 回答超时，请重试。', requestTimeout: '请求超时，请稍后重试。', authTimeout: (action: string) => `${action}请求超时，请检查网络后重试。`, authNetwork: (action: string) => `${action}失败：无法连接服务器，请检查网络后重试。`, audioShare: '未获取到系统音频轨道。请在分享对话框中选择标签页/窗口，并勾选「分享音频 / Share audio」（桌面端 Chrome/Edge 支持最好）。' },
     authActions: { login: '登录', register: '注册', verify: '验证', send: '发送' },
   },
   legal: {

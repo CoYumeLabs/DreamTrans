@@ -58,7 +58,7 @@ export const en: typeof zhCN = {
     guest: 'Guest',
     guestInitial: 'G',
     untitledSession: 'Untitled session',
-    errors: { aiTimeout: 'The AI answer timed out. Try again.', requestTimeout: 'The request timed out. Try again later.', authTimeout: (action: string) => `${action} timed out. Check your connection and try again.`, authNetwork: (action: string) => `${action} failed because the server could not be reached. Check your connection and try again.`, audioShare: 'No system-audio track was received. Choose a tab or window in the share dialog and turn on “Share audio” (desktop Chrome and Edge work best).' },
+    errors: { aiOutputLimit: 'The AI exhausted its answer budget. Try a shorter question or another model.', aiGateway: (status: number) => `The AI service is temporarily unavailable (HTTP ${status}). Please try again later.`, aiTimeout: 'The AI answer timed out. Try again.', requestTimeout: 'The request timed out. Try again later.', authTimeout: (action: string) => `${action} timed out. Check your connection and try again.`, authNetwork: (action: string) => `${action} failed because the server could not be reached. Check your connection and try again.`, audioShare: 'No system-audio track was received. Choose a tab or window in the share dialog and turn on “Share audio” (desktop Chrome and Edge work best).' },
     authActions: { login: 'Login', register: 'Sign-up', verify: 'Verification', send: 'Sending' },
   },
   legal: {
