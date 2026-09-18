@@ -1,0 +1,51 @@
+name: Verify YuAction
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: yuaction
+          POSTGRES_PASSWORD: yuaction-test
+          POSTGRES_DB: yuaction_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U yuaction -d yuaction_test"
+          --health-interval 5s --health-timeout 3s --health-retries 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Go tests and vet
+        working-directory: backend
+        env:
+          TEST_DATABASE_URL: postgres://yuaction:yuaction-test@localhost:5432/yuaction_test?sslmode=disable
+        run: |
+          go test -race ./...
+          go vet ./...
+      - name: Frontend build and browser tests
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+          npx playwright install --with-deps chromium
+          npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-test-results
+          path: frontend/test-results/

@@ -1,0 +1,10 @@
+.env
+!.env.example
+node_modules/
+dist/
+test-results/
+playwright-report/
+.cache/
+*.log
+backend/server
+.DS_Store
