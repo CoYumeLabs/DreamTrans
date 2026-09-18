@@ -51,6 +51,8 @@ import { useStudySound } from './useStudySound'
 import { layoutSkillGraph } from './skillGraph'
 import { WeekCalendar } from './WeekCalendar'
 import { browserTimezone, hueOf } from './timetable'
+import { downloadStudyTranscripts } from './transcriptDownload'
+import type { TextDownloadMode } from '../unified/workspace/downloads'
 
 /** Mirrors the server's skill_key normalization (lowercase, collapsed spaces). */
 function skillKeyOf(label: string): string {
@@ -186,6 +188,9 @@ export function StudyView({ onOpenSession }: StudyViewProps) {
   const [sessions, setSessions] = useState<ProjectSession[] | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [downloadMode, setDownloadMode] = useState<TextDownloadMode>('bilingual')
+  const [downloadProgress, setDownloadProgress] = useState<string | null>(null)
+  const downloadController = useRef<AbortController | null>(null)
   const [creating, setCreating] = useState(false)
   const [draftName, setDraftName] = useState('')
   const [candidates, setCandidates] = useState<Session[] | null>(null)
@@ -216,6 +221,44 @@ export function StudyView({ onOpenSession }: StudyViewProps) {
   const [classifyPreview, setClassifyPreview] = useState<TimetableClassifyResult | null>(null)
   const [classifying, setClassifying] = useState(false)
   const [classifyNotice, setClassifyNotice] = useState('')
+
+  const cancelDownload = () => {
+    downloadController.current?.abort()
+    downloadController.current = null
+    setDownloadProgress(null)
+  }
+
+  useEffect(() => () => downloadController.current?.abort(), [])
+
+  const downloadTranscripts = async (week?: StudyWeek) => {
+    if (!course || downloadController.current) return
+    const controller = new AbortController()
+    downloadController.current = controller
+    setDownloadProgress(v.download.preparing)
+    setError(null)
+    try {
+      const downloadSessions = week
+        ? (await getStudyWeeks(course.id)).weeks.find((item) => item.week === week.week)?.sessions ?? []
+        : await listProjectSessions(course.id)
+      controller.signal.throwIfAborted()
+      await downloadStudyTranscripts({
+        title: week ? `${course.name}-${week.label}` : course.name,
+        sessions: downloadSessions,
+        mode: downloadMode,
+        signal: controller.signal,
+        onProgress: (completed, total) => setDownloadProgress(v.download.progress(completed, total)),
+      })
+    } catch (reason) {
+      if (!controller.signal.aborted) {
+        setError(`${v.download.failed} ${errorMessage(reason, v.download.retry)}`)
+      }
+    } finally {
+      if (downloadController.current === controller) {
+        downloadController.current = null
+        setDownloadProgress(null)
+      }
+    }
+  }
 
   const refreshCourses = useCallback(async () => {
     setCoursesLoading(true)
@@ -344,6 +387,7 @@ export function StudyView({ onOpenSession }: StudyViewProps) {
   }, [])
 
   const openCourse = (next: AIProject) => {
+    cancelDownload()
     activeCourseId.current = next.id
     setMapStale(false)
     setServerMaterialsPending(false)
@@ -371,6 +415,7 @@ export function StudyView({ onOpenSession }: StudyViewProps) {
   }
 
   const closeCourse = () => {
+    cancelDownload()
     activeCourseId.current = null
     setCourse(null)
     setSessions(null)
@@ -828,6 +873,16 @@ export function StudyView({ onOpenSession }: StudyViewProps) {
                 {selected.start ? `${selected.start} → ${selected.end}` : ''}
                 {selected.sessions.length + selected.sources.length + selected.skills.length === 0 && v.noWeekMaterials}
               </span>
+              <button
+                className="st-btn"
+                disabled={downloadProgress !== null || selected.sessions.length === 0}
+                onClick={() => { void downloadTranscripts(selected) }}
+                title={v.download.hint}
+                type="button"
+              >
+                <Icon name="download" size={14} />
+                {v.download.week}
+              </button>
             </div>
             {selected.skills.length > 0 && (
               <div className="dt-weeks__skills">
@@ -1626,6 +1681,40 @@ export function StudyView({ onOpenSession }: StudyViewProps) {
               </button>
             </nav>
           </header>
+
+          <div className="dt-study__downloads">
+            <label>
+              <span>{v.download.format}</span>
+              <select
+                disabled={downloadProgress !== null}
+                onChange={(event) => setDownloadMode(event.target.value as TextDownloadMode)}
+                value={downloadMode}
+              >
+                <option value="original">{v.download.original}</option>
+                <option value="translation">{v.download.translation}</option>
+                <option value="bilingual">{v.download.bilingual}</option>
+              </select>
+            </label>
+            <button
+              className="st-btn"
+              disabled={downloadProgress !== null || !sessions?.length}
+              onClick={() => { void downloadTranscripts() }}
+              title={v.download.hint}
+              type="button"
+            >
+              <Icon name="download" size={14} />
+              {v.download.course}
+            </button>
+            <small>{v.download.hint}</small>
+            {downloadProgress !== null && (
+              <>
+                <span role="status">{downloadProgress}</span>
+                <button className="st-btn st-btn--quiet" onClick={cancelDownload} type="button">
+                  {v.cancel}
+                </button>
+              </>
+            )}
+          </div>
 
           {(mapStale || materialsPending || serverMaterialsPending) && (
             <p role="status">{materialsPending || serverMaterialsPending ? v.materialsProcessing : v.materialsChanged}</p>

@@ -339,6 +339,7 @@ export interface TranscriptPageResponse {
 export interface TranscriptPageOptions {
   limit?: number
   after?: TranscriptPageCursor | null
+  signal?: AbortSignal
 }
 
 export interface ApiError {
@@ -1013,6 +1014,7 @@ export async function getSessionTranscriptsPage(
   const query = params.toString()
   return authFetch(
     `/api/sessions/${encodeURIComponent(id)}/transcripts${query ? `?${query}` : ''}`,
+    { signal: options.signal },
   )
 }
 

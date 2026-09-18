@@ -37,7 +37,7 @@ interface SaveFilePickerWindow extends Window {
   }) => Promise<SaveFileHandle>
 }
 
-function safeFilename(value: string): string {
+export function safeFilename(value: string): string {
   return (
     value
       .trim()
@@ -56,7 +56,7 @@ function audioExtension(mimeType: string | undefined): string {
   return 'webm'
 }
 
-function triggerBlobDownload(blob: Blob, filename: string): void {
+export function triggerBlobDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url
@@ -202,12 +202,27 @@ export async function downloadSessionText(
     }
   }
 
+  const blob = createSessionTextBlob(segments, [...translations, ...orphanTranslations], mode)
+  if (!blob) return false
+  const suffixes = messages().workspace.runtime.downloads.suffixes
+  const suffix = mode === 'bilingual'
+    ? suffixes.bilingual
+    : mode === 'translation' ? suffixes.translation : suffixes.original
+  triggerBlobDownload(blob, `${safeFilename(title)}-${suffix}.txt`)
+  return true
+}
+
+export function createSessionTextBlob(
+  segments: TranscriptSegment[],
+  translations: TranslationSegment[],
+  mode: TextDownloadMode,
+): Blob | null {
   const model = new TranscriptFeedModel({
     sourceLanguage: '',
     targetLanguage: '',
     translationEnabled: mode !== 'original',
   })
-  model.hydrate(segments, translations)
+  model.hydrate(segments, translations.filter((translation) => translation.segmentId))
 
   const entries: ExportEntry[] = []
   for (const item of model.getSnapshot().items) {
@@ -220,7 +235,7 @@ export async function downloadSessionText(
   }
   // Translations that never linked to a transcript still belong in the
   // translation-bearing exports, ordered into the same timeline.
-  for (const orphan of orphanTranslations) {
+  for (const orphan of translations.filter((translation) => !translation.segmentId)) {
     entries.push({
       startTime: orphan.startTime,
       speaker: orphan.speaker,
@@ -239,14 +254,5 @@ export async function downloadSessionText(
     parts.push('\n')
   }
 
-  if (parts.length === 0) return false
-  const suffixes = messages().workspace.runtime.downloads.suffixes
-  const suffix = mode === 'bilingual'
-    ? suffixes.bilingual
-    : mode === 'translation' ? suffixes.translation : suffixes.original
-  triggerBlobDownload(
-    new Blob(parts, { type: 'text/plain;charset=utf-8' }),
-    `${safeFilename(title)}-${suffix}.txt`,
-  )
-  return true
+  return parts.length ? new Blob(parts, { type: 'text/plain;charset=utf-8' }) : null
 }

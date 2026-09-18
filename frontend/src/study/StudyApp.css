@@ -620,6 +620,34 @@ h3 {
   font-size: var(--yf-text-4xl);
 }
 
+.dt-study__downloads {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  margin-bottom: 18px;
+}
+
+.dt-study__downloads label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.dt-study__downloads select {
+  padding: 7px 10px;
+  border: 1px solid var(--st-line);
+  border-radius: 6px;
+  color: var(--st-ink);
+  background: var(--st-bg);
+  font: inherit;
+}
+
+.dt-study__downloads small {
+  color: var(--st-muted);
+}
+
 .dt-study__back {
   display: inline-flex;
   gap: 6px;
@@ -3032,6 +3060,11 @@ h3 {
 }
 
 @media (max-width: 560px) {
+  .dt-study-topbar__nav {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+
   .dt-study-page__body {
     padding: 16px 14px 48px;
   }

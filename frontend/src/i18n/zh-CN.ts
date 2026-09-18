@@ -728,6 +728,18 @@ export const zhCN = {
       optionsAria: '选项', tfAria: '判断', true: '成立', false: '不成立', answer: '答案', modelAnswer: '参考回答', explanation: '解析', gapToC: '要到 C 至少要', reportAria: '收工', reportTitle: '收工 // AFTER ACTION', free: '随便练练', cleared: '今天搞清楚了', clearedFallback: '看了解析，下一次动手就是了。', nextStart: '下次从这里开始', nextFallback: '接着这条路线，等级会随表现点亮。', thisRun: '本次', runStats: (total: number, passed: number) => `${total} 题，${passed} 题过关`, fixedStats: (count: number) => `，其中 ${count} 题是改对的`, charged: (cost: string) => ` · 扣费 ${cost}`, more: '再来几道', finish: '收工', practiceAria: (skill: string) => `练习 ${skill}`, freeSuffix: ' // 随便练练', streakTitle: (target: number, current: number) => `无提示过关 ${target} 次即可升级，当前 ${current}/${target}。做到 C 就算过。`, passLabel: '过关', paused: ' · 暂停', costTitle: '本次练习到目前为止的扣费', lessonButton: '讲解', finishTitle: '结束这次练习', writingLesson: 'WRITING // 导师正在写这项能力的讲解卡，第一次会花几秒', lessonDone: '看完了，做题', direct: '直接做题', skipLesson: '跳过，直接做题', retrySuffix: ' // 再试一次', fillAria: '填空', fillPlaceholder: '填入 ____ 处的术语', starterTitle: '用这个句式开头', hint: (value: string) => `提示：${value}`, openPlaceholder: '写下你的判断和理由。中文可以，术语用英文。Ctrl+Enter 提交', reasonPlaceholder: '为什么？写一句理由。没理由最多到 C，过关线就是 C。Ctrl+Enter 提交', submit: '提交', revealTitle: '不批改、不算错，直接看答案和解析', reveal: '不会，直接看解析', showChinese: '看中文', hintTitle: '提示随便用，过关不看这个，只是拿不到 NO HINT 奖励', askHint: '要提示', priorReveal: '上一次的解析', seen: '看过了', difficulty: (value: number) => ` · 难度 ×${value}`, seenNote: '不算错，稍后换个情境再来一道', targets: '这题在测', levelUp: (level: string) => `LEVEL UP · 这项能力升到「${level}」`, retry: '再试一次', another: '换一题', correctionBonus: '改对了 XP 全额 + SELF-CORRECTION', nextIn: (seconds: number) => `${seconds} 秒后下一题`, next: '下一题', pause: '停一下', loading: 'LOADING // 导师正在出题', grading: 'GRADING // 导师正在批改', gotIt: '知道了', action: '本次行动', progress: (total: number, passed: number, fixed: number) => `${total} 题 · ${passed} 过关${fixed > 0 ? ` · ${fixed} 改对` : ''}`, promise: '这里的进度只会往前走：等级不降、XP 不减。过关线是 C，D 和 HD 是加分。', closeLesson: '关闭讲解',
     },
     view: {
+      download: {
+        format: '转录下载内容', original: '仅原文', translation: '仅译文', bilingual: '原文与译文',
+        course: '下载课程全部转录', week: '下载本周转录',
+        hint: '按所选内容打包为 ZIP，每场会话一个 TXT；包含已同步到云端的转录。',
+        preparing: '正在准备转录下载…',
+        progress: (completed: number, total: number) => `正在打包转录：${completed} / ${total}`,
+        failed: '转录下载失败，未生成压缩包。', retry: '请重试。',
+        noSessions: '所选范围没有可下载的会话。',
+        noTranslation: '这场会话暂无已同步到云端的译文。',
+        noTranscript: '这场会话暂无已同步到云端的转录原文。',
+        accountChanged: '账号已变更，请重新登录后下载。',
+      },
       materialsChanged: '课程资料已变化，当前路线需要更新。请在课程管理中重新生成；旧学习记录会保留，新讲解和题目按用量计费。',
       studyUsageNotice: '上传和原文检索不会自动调用付费 AI。点击生成路线、开始练习或查看新版讲解时，需要生成的内容按模型用量计费。',
       materialsProcessing: '课程资料仍在提取，请完成后再生成路线或开始新练习。',
