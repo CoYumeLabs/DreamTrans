@@ -34,6 +34,45 @@ less /tmp/yuaction-install.sh
 bash /tmp/yuaction-install.sh
 ```
 
+## 安装到 DreamTrans 子目录
+
+已有通过 Docker Compose 部署并正在运行的 DreamTrans 时：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/CoYumeLabs/YuAction/main/scripts/install.sh | bash -s -- --dreamtrans-dir /dreamtrans
+```
+
+把 `/dreamtrans` 换成实际部署目录，例如 `/root/dreamtrans`。该目录需要有 `.env`、`docker-compose.yml`，且数据库服务名为 `db`（一键安装）或 `postgres`（仓库 Compose）。脚本根据容器的 Compose 工作目录标签识别数据库及其网络；目前要求数据库只连接一个 Docker 网络。
+
+```text
+/dreamtrans/
+├── .env                  # 原数据库用户名、密码、库名；只读使用
+├── docker-compose.yml    # 原 DreamTrans 部署；保持不变
+└── yuaction/
+    ├── .env              # YuAction 端口、密钥、镜像版本和网络定位
+    ├── compose.ghcr.yml   # 关联模式的部署文件
+    ├── .dreamtrans-dir   # 记录父目录，更新时自动沿用
+    └── install.sh
+```
+
+这个模式复用**同一个 PostgreSQL 容器、数据库和数据库账号**。首次安装只新增 `yuaction` schema，应用连接的 `search_path` 限定为 `yuaction`，所以 `rooms` 等表不会建到 DreamTrans 的 `public` schema。schema 只是表的命名和迁移边界；因为共用账号，它不是数据库权限隔离。
+
+父 `.env` 由 Docker Compose 解析，不作为 Shell 执行。只把 `POSTGRES_USER`、`POSTGRES_DB`、`POSTGRES_PASSWORD` 用于数据库连接，不把 JWT、模型服务或支付密钥传给 YuAction 容器。数据库密码不复制到子目录；每次执行安装 / 更新会读取父配置。两个产品自己的 `IMAGE_TAG` 独立，YuAction 的值覆盖父配置中的同名值。该行为基于 [Compose 多 env 文件规则](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/#additional-information-1)。
+
+更新、查看状态和活动创建密钥：
+
+```bash
+bash /dreamtrans/yuaction/install.sh --dir /dreamtrans/yuaction --update
+bash /dreamtrans/yuaction/install.sh --dir /dreamtrans/yuaction --status
+bash /dreamtrans/yuaction/install.sh --dir /dreamtrans/yuaction --show-key
+```
+
+此模式不启动第二个数据库，不更改父配置，也不重启 DreamTrans 服务。数据库配置修改后，执行 YuAction 更新让容器重新读取配置；修改父 `.env` 密码仍需先完成数据库内部的密码变更。
+
+更新备份只包含 `yuaction` schema 和 YuAction 配置，不包含 DreamTrans 业务表或父 `.env`。DreamTrans 原有备份需要继续保留；若整库恢复 DreamTrans，也会影响同库的 YuAction 数据。两个应用共享数据库可用性，DreamTrans 数据库停止时 YuAction 也无法读写。
+
+已有独立安装不能直接加此选项切换数据库。请保留原安装和备份，另做数据迁移；本脚本不会自动搬运旧房间。已有 `yuaction` schema 却缺少原安装配置时也会停止，避免用新密钥接管旧数据。账号登录、转录启动与字幕联动不会因为共用 `.env` 自动接通，仍按 [Yufolo 联动合同](YUFOLO_INTEGRATION.md)推进。
+
 ## 更新
 
 ```bash
@@ -79,7 +118,7 @@ bash /tmp/yuaction-install.sh --no-docker-install
 
 ## 备份与恢复
 
-安装目录保存 `.env`、`compose.ghcr.yml`、`install.sh`、`.project` 和 `backups/`；数据库实际数据保存在 Docker 的 `<项目名>_yuaction_postgres` 卷。仅复制安装目录不等于备份当前数据库，更新前生成的 `database.dump` 才是对应时刻的完整逻辑备份。
+独立模式下，安装目录保存 `.env`、`compose.ghcr.yml`、`install.sh`、`.project` 和 `backups/`；数据库实际数据保存在 Docker 的 `<项目名>_yuaction_postgres` 卷。仅复制安装目录不等于备份当前数据库，更新前生成的 `database.dump` 才是对应时刻的完整逻辑备份。关联 DreamTrans 模式则使用父数据库的数据卷，`database.dump` 只备份 `yuaction` schema。
 
 `database.dump` 是 PostgreSQL custom 格式，可用 PostgreSQL 16 的 `pg_restore --list` 检查，用 `pg_restore` 恢复到单独的空数据库验证。恢复生产数据前先停止写入并核对备份时间。回退应用版本时参考 [Docker 发布与回退说明](DOCKER_RELEASE.md)，不要用 `docker compose down -v`，该选项会删除数据库卷。
 

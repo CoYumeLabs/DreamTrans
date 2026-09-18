@@ -36,6 +36,8 @@ YuAction 是教师 / 演讲者的现场工作空间。Yufolo 是转录与个人�
 
 Compose 保留数据卷；`docker compose down` 不会删除数据。备份、保留周期、账号停用和访问撤销需在公开试用前完成。
 
+可选的 DreamTrans 关联部署使用 `compose.dreamtrans.yml`：复用父部署的 PostgreSQL 数据库账号和数据库，YuAction 表位于独立的 `yuaction` schema。安装脚本通过两个 env 文件加载配置，父配置只读，子配置保存 YuAction 自己的镜像标签和设置。共享数据库配置不等于共享登录授权，当前代码不读写 DreamTrans 的用户、余额或转录表。
+
 ## 下一阶段接口演进
 
 将 `Room` 聚合逐步拆出 Activity、Membership、Question、TranscriptSession、TranscriptSegment 和 ShareGrant。通过版本化迁移保留旧预览数据。保持业务权限在 YuAction，Yufolo 侧执行其自身的转录、计费与私有数据权限；两者不能仅凭相同 sessionId 互相信任。

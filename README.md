@@ -37,6 +37,14 @@ curl -fsSL https://raw.githubusercontent.com/CoYumeLabs/YuAction/main/scripts/in
 
 更新保留配置和数据，先备份数据库，再替换服务。通过 `bash ~/yuaction/install.sh --show-key` 查看创建活动所需的密钥。直接通过服务器 IP 访问时，安装命令末尾改为 `bash -s -- --bind 0.0.0.0`；公网使用请配置 HTTPS。自定义目录、端口和备份恢复见 [安装说明](docs/INSTALL.md)。
 
+如果 DreamTrans 已安装在 `/dreamtrans`，可直接安装到它的子目录，读取现有 `.env` 并复用同一个 PostgreSQL 容器和数据库：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/CoYumeLabs/YuAction/main/scripts/install.sh | bash -s -- --dreamtrans-dir /dreamtrans
+```
+
+YuAction 使用独立的 `yuaction` schema，自己的端口、密钥和镜像版本保存在 `/dreamtrans/yuaction/.env`。该模式复用数据库配置；账号授权与实时转录联动仍待实现。
+
 ## 本地启动
 
 需要 Go 1.22+、Node.js 22.12+（推荐 Node 24）。前后端分别开一个终端。

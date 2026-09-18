@@ -6,6 +6,8 @@ umask 077
 
 repository="CoYumeLabs/YuAction"
 install_dir="${YUACTION_INSTALL_DIR:-${HOME}/yuaction}"
+dir_given=false
+dreamtrans_dir=""
 project="yuaction"
 project_given=false
 action="install"
@@ -31,6 +33,7 @@ YuAction 一键安装 / 更新
 
 选项：
   --dir PATH        安装目录，默认 $HOME/yuaction
+  --dreamtrans-dir PATH  安装到 PATH/yuaction，读取 PATH/.env 并复用现有数据库
   --port PORT       首次安装端口，默认 11452；更新默认保留
   --bind ADDRESS    首次安装绑定地址，默认 127.0.0.1；对外访问可用 0.0.0.0
   --project NAME    Docker Compose 项目名，默认 yuaction；安装后不可变更
@@ -52,10 +55,11 @@ parse_args() {
       --logs) action="logs"; shift ;;
       --show-key) action="key"; shift ;;
       --no-docker-install) allow_docker_install=false; shift ;;
-      --dir|--port|--bind|--project|--version)
+      --dir|--dreamtrans-dir|--port|--bind|--project|--version)
         (($# >= 2)) && [[ -n "$2" && "$2" != --* ]] || die "$1 缺少参数"
         case "$1" in
-          --dir) install_dir="$2" ;;
+          --dir) install_dir="$2"; dir_given=true ;;
+          --dreamtrans-dir) dreamtrans_dir="$2" ;;
           --port) requested_port="$2" ;;
           --bind) requested_bind="$2" ;;
           --project) project="$2"; project_given=true ;;
@@ -66,6 +70,11 @@ parse_args() {
       *) die "未知参数：$1（使用 --help 查看帮助）" ;;
     esac
   done
+  if [[ -n "$dreamtrans_dir" ]]; then
+    [[ -d "$dreamtrans_dir" ]] || die "DreamTrans 目录不存在"
+    dreamtrans_dir=$(cd -- "$dreamtrans_dir" && pwd -P)
+    $dir_given || install_dir="$dreamtrans_dir/yuaction"
+  fi
   [[ "$project" =~ ^[a-z0-9][a-z0-9_-]{0,49}$ ]] || die "项目名只能包含小写字母、数字、横线与下划线"
   [[ "$requested_tag" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$ ]] || die "镜像标签格式不正确"
   [[ -n "$install_dir" && "$install_dir" != / ]] || die "请指定独立安装目录"
@@ -142,12 +151,42 @@ APT
 
 compose_at() {
   local config_dir="$1"; shift
+  local env_files=()
+  [[ -z "$dreamtrans_dir" ]] || env_files+=(--env-file "$dreamtrans_dir/.env")
   # A caller's exported variables must not override saved database credentials.
   env -u POSTGRES_PASSWORD -u YUACTION_CREATOR_KEY -u YUFOLO_INGEST_KEY \
+    -u POSTGRES_USER -u POSTGRES_DB -u DREAMTRANS_NETWORK -u DREAMTRANS_DB_HOST \
     -u YUACTION_DEMO -u APP_BIND -u APP_PORT -u IMAGE_TAG -u IMAGE_PREFIX \
-    -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME -u COMPOSE_ENV_FILES \
+    -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME -u COMPOSE_ENV_FILES COMPOSE_PROFILES= \
     docker compose --project-name "$project" --project-directory "$install_dir" \
-      --env-file "$config_dir/.env" -f "$config_dir/compose.ghcr.yml" "$@"
+      "${env_files[@]}" --env-file "$config_dir/.env" -f "$config_dir/compose.ghcr.yml" "$@"
+}
+
+discover_dreamtrans() {
+  local id owner service candidate="" network networks host
+  [[ -f "$dreamtrans_dir/.env" && -f "$dreamtrans_dir/docker-compose.yml" ]] || die "DreamTrans 目录缺少 .env 或 docker-compose.yml"
+  # Inspect labels only, never print the existing containers' secret environment.
+  while IFS= read -r id; do
+    [[ -n "$id" ]] || continue
+    owner=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$id")
+    [[ "$owner" == "$dreamtrans_dir" ]] || continue
+    service=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$id")
+    [[ "$service" == db || "$service" == postgres ]] || continue
+    [[ -z "$candidate" ]] || die "DreamTrans 目录对应多个数据库容器，无法确定目标"
+    candidate="$id"
+  done < <(docker ps -q --filter label=com.docker.compose.project.working_dir)
+  [[ -n "$candidate" ]] || die "未找到此目录下运行中的 DreamTrans 数据库（db / postgres 服务）；请先启动 DreamTrans"
+  networks=$(docker inspect --format '{{range $name, $network := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$candidate")
+  network=""
+  while IFS= read -r id; do
+    [[ -n "$id" ]] || continue
+    [[ -z "$network" ]] || die "DreamTrans 数据库连接了多个网络，暂不支持自动选择"
+    network="$id"
+  done <<< "$networks"
+  host=$(docker inspect --format '{{.Name}}' "$candidate"); host="${host#/}"
+  [[ "$network" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ && "$host" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || die "无法解析 DreamTrans 数据库网络"
+  set_env_value DREAMTRANS_NETWORK "$network" "$work_dir/.env"
+  set_env_value DREAMTRANS_DB_HOST "$host" "$work_dir/.env"
 }
 
 check_project_owner() {
@@ -167,7 +206,12 @@ validate_config() {
   local file="$1" port bind password creator prefix
   password=$(env_value POSTGRES_PASSWORD "$file")
   creator=$(env_value YUACTION_CREATOR_KEY "$file")
-  [[ -n "$password" && ${#creator} -ge 32 ]] || die "现有 .env 缺少数据库密码或有效的活动创建密钥；请恢复配置"
+  [[ ${#creator} -ge 32 ]] || die "现有 .env 缺少有效的活动创建密钥；请恢复配置"
+  if [[ -z "$dreamtrans_dir" ]]; then
+    [[ -n "$password" ]] || die "现有 .env 缺少数据库密码；请恢复配置"
+  elif grep -Eq '^[[:space:]]*POSTGRES_(PASSWORD|USER|DB)[[:space:]]*=' "$file"; then
+    die "关联模式的数据库配置来自 DreamTrans，请勿在 YuAction .env 中覆盖 POSTGRES_*"
+  fi
   port=$(env_value APP_PORT "$file"); port="${port:-11452}"
   [[ "$port" =~ ^[0-9]{1,5}$ ]] && ((10#$port >= 1 && 10#$port <= 65535)) || die "端口应为 1–65535"
   bind=$(env_value APP_BIND "$file"); bind="${bind:-127.0.0.1}"
@@ -204,7 +248,6 @@ install_or_update() {
     [[ "$action" != update ]] || die "指定目录尚未安装 YuAction，请先运行安装命令"
     log "首次安装：$install_dir"
     cat > "$work_dir/.env" <<ENV
-POSTGRES_PASSWORD=$(random_key)
 YUACTION_CREATOR_KEY=$(random_key)
 YUFOLO_INGEST_KEY=
 YUACTION_DEMO=false
@@ -212,10 +255,20 @@ APP_BIND=127.0.0.1
 APP_PORT=11452
 IMAGE_TAG=latest
 ENV
+    if [[ -z "$dreamtrans_dir" ]]; then
+      printf 'POSTGRES_PASSWORD=%s\n' "$(random_key)" >> "$work_dir/.env"
+    else
+      # Override similarly named settings in the parent .env explicitly.
+      printf 'IMAGE_PREFIX=ghcr.io/coyumelabs/yuaction\n' >> "$work_dir/.env"
+    fi
   fi
   [[ -z "$requested_port" ]] || set_env_value APP_PORT "$requested_port" "$work_dir/.env"
   [[ -z "$requested_bind" ]] || set_env_value APP_BIND "$requested_bind" "$work_dir/.env"
   validate_config "$work_dir/.env"
+  if [[ -n "$dreamtrans_dir" ]]; then
+    log "读取 DreamTrans 配置：$dreamtrans_dir/.env（共用数据库，使用 yuaction schema）"
+    discover_dreamtrans
+  fi
   prefix=$(env_value IMAGE_PREFIX "$work_dir/.env"); prefix="${prefix:-ghcr.io/coyumelabs/yuaction}"
 
   # Resolve ONE published revision, then pull both components by that SHA. The
@@ -226,11 +279,14 @@ ENV
   [[ "$revision" =~ ^[a-f0-9]{40}$ ]] || die "镜像缺少有效提交信息，停止更新"
   set_env_value IMAGE_TAG "sha-$revision" "$work_dir/.env"
   log "下载与镜像版本匹配的部署文件：${revision:0:7}"
-  fetch "https://raw.githubusercontent.com/$repository/$revision/compose.ghcr.yml" "$work_dir/compose.ghcr.yml"
+  local compose_source=compose.ghcr.yml
+  [[ -z "$dreamtrans_dir" ]] || compose_source=compose.dreamtrans.yml
+  fetch "https://raw.githubusercontent.com/$repository/$revision/$compose_source" "$work_dir/compose.ghcr.yml"
   fetch "https://raw.githubusercontent.com/$repository/main/scripts/install.sh" "$work_dir/install.sh"
   bash -n "$work_dir/install.sh"
   compose_at "$work_dir" config --quiet
   compose_at "$work_dir" pull || die "新版镜像未全部拉取成功，当前服务保持不变"
+  if [[ -n "$dreamtrans_dir" ]]; then compose_at "$work_dir" --profile tools pull database-tools; fi
   backend_revision=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${prefix}-backend:sha-$revision")
   frontend_revision=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${prefix}-frontend:sha-$revision")
   [[ "$backend_revision" == "$revision" && "$frontend_revision" == "$revision" ]] || die "前后端镜像版本不一致，停止更新"
@@ -243,11 +299,26 @@ ENV
     cp -- "$install_dir/compose.ghcr.yml" "$backup_dir/compose.ghcr.yml"
     [[ ! -f "$install_dir/install.sh" ]] || cp -- "$install_dir/install.sh" "$backup_dir/install.sh"
     log "备份数据库与配置：$backup_dir"
-    compose_at "$install_dir" up -d --no-recreate --wait --wait-timeout 120 db
-    compose_at "$install_dir" exec -T db pg_dump -U yuaction -d yuaction -Fc > "$backup_dir/database.dump" || die "数据库备份失败，停止更新"
+    if [[ -n "$dreamtrans_dir" ]]; then
+      cp -- "$install_dir/.dreamtrans-dir" "$backup_dir/.dreamtrans-dir"
+      compose_at "$work_dir" run --rm -T --no-deps database-tools pg_dump --schema=yuaction -Fc > "$backup_dir/database.dump" || die "数据库备份失败，停止更新"
+    else
+      compose_at "$install_dir" up -d --no-recreate --wait --wait-timeout 120 db
+      compose_at "$install_dir" exec -T db pg_dump -U yuaction -d yuaction -Fc > "$backup_dir/database.dump" || die "数据库备份失败，停止更新"
+    fi
     [[ -s "$backup_dir/database.dump" ]] || die "数据库备份为空，停止更新"
     previous_tag=$(env_value IMAGE_TAG "$install_dir/.env")
     printf '%s\n' "$previous_tag" > "$backup_dir/image-tag.txt"
+  fi
+
+  if [[ -n "$dreamtrans_dir" ]]; then
+    if ! $existing; then
+      local schema_exists
+      schema_exists=$(compose_at "$work_dir" run --rm -T --no-deps database-tools psql -X -At -v ON_ERROR_STOP=1 -c "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'yuaction')")
+      [[ "$schema_exists" == f ]] || die "DreamTrans 数据库已有 yuaction schema；请恢复原 YuAction 配置后更新"
+      compose_at "$work_dir" run --rm -T --no-deps database-tools psql -X -v ON_ERROR_STOP=1 -c 'CREATE SCHEMA yuaction'
+    fi
+    printf '%s\n' "$dreamtrans_dir" > "$install_dir/.dreamtrans-dir"
   fi
 
   install -m 0600 "$work_dir/.env" "$install_dir/.env"
@@ -288,13 +359,23 @@ main() {
   mkdir -p -- "$install_dir"
   install_dir=$(cd -- "$install_dir" && pwd -P)
   [[ "$install_dir" != / ]] || die "不能使用系统根目录安装"
+  [[ -z "$dreamtrans_dir" || "$install_dir" != "$dreamtrans_dir" ]] || die "YuAction 必须使用自己的子目录，不能覆盖 DreamTrans 安装目录"
   chmod 0700 "$install_dir"
   exec 9> "$install_dir/.install.lock"
   flock -n 9 || die "另一个安装 / 更新进程正在操作此目录"
   local managed_file
-  for managed_file in .env compose.ghcr.yml install.sh .project backups; do
+  for managed_file in .env compose.ghcr.yml install.sh .project .dreamtrans-dir backups; do
     [[ ! -L "$install_dir/$managed_file" ]] || die "安装文件不能是符号链接：$managed_file"
   done
+  if [[ -f "$install_dir/.dreamtrans-dir" ]]; then
+    local saved_parent
+    saved_parent=$(cat "$install_dir/.dreamtrans-dir")
+    [[ -z "$dreamtrans_dir" || "$dreamtrans_dir" == "$saved_parent" ]] || die "不能更换已关联的 DreamTrans 目录"
+    dreamtrans_dir="$saved_parent"
+    [[ -f "$dreamtrans_dir/.env" ]] || die "关联的 DreamTrans .env 不存在"
+  elif [[ -n "$dreamtrans_dir" && -f "$install_dir/.env" ]]; then
+    die "已有独立安装不能直接切换数据库；请使用新目录，旧数据需单独迁移"
+  fi
   if [[ -f "$install_dir/.project" ]]; then
     local saved_project
     saved_project=$(cat "$install_dir/.project")
