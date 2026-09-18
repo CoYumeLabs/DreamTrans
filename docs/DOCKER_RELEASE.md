@@ -29,6 +29,8 @@ ghcr.io/coyumelabs/yuaction-frontend:latest
 
 ## 拉取与运行
 
+推荐直接使用 [一键安装 / 更新脚本](INSTALL.md)，它会生成配置、固定匹配的前后端版本，并在更新前备份数据库。下方命令用于手动管理 Compose 部署。
+
 服务器需要 Docker 和 Docker Compose，只需 `compose.ghcr.yml` 与 `.env`，不需要 Go / Node 或本地编译。
 
 ```bash

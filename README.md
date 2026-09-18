@@ -19,6 +19,24 @@ YuAction 面向教师与演讲者，把活动、现场提问、大屏与共享�
 - 主持人密钥校验、活动创建密钥、服务端字幕接入凭证、请求大小与基本速率限制。
 - 已确认字幕的幂等接收和一对多分发；同一字幕 ID 的重复提交不会产生第二条字幕。
 
+## 一键安装 / 更新
+
+在 Linux 服务器执行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/CoYumeLabs/YuAction/main/scripts/install.sh | bash
+```
+
+默认安装到 `~/yuaction`，访问 `http://127.0.0.1:11452`。脚本生成独立随机密钥、拉取已发布镜像并检查服务健康；Debian / Ubuntu 缺少 Docker 时，以 root 运行可自动安装。
+
+更新时再次执行同一命令，或明确使用：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/CoYumeLabs/YuAction/main/scripts/install.sh | bash -s -- --update
+```
+
+更新保留配置和数据，先备份数据库，再替换服务。通过 `bash ~/yuaction/install.sh --show-key` 查看创建活动所需的密钥。直接通过服务器 IP 访问时，安装命令末尾改为 `bash -s -- --bind 0.0.0.0`；公网使用请配置 HTTPS。自定义目录、端口和备份恢复见 [安装说明](docs/INSTALL.md)。
+
 ## 本地启动
 
 需要 Go 1.22+、Node.js 22.12+（推荐 Node 24）。前后端分别开一个终端。
@@ -70,7 +88,7 @@ docker compose -f compose.ghcr.yml pull
 docker compose -f compose.ghcr.yml up -d --no-build
 ```
 
-将 `.env` 的 `IMAGE_TAG` 设为同一个 `sha-<完整commit SHA>` 可固定前后端版本。首次发布的 GHCR 包可能需要设为 Public 或先登录才能拉取；详见 [发布、更新和回退说明](docs/DOCKER_RELEASE.md)。自动化范围为镜像发布，服务器更新使用上述命令。
+将 `.env` 的 `IMAGE_TAG` 设为同一个 `sha-<完整commit SHA>` 可固定前后端版本；一键安装脚本会自动固定匹配版本。详见 [发布、更新和回退说明](docs/DOCKER_RELEASE.md)。自动化范围为镜像发布，服务器更新使用一键更新命令。
 
 ## 配置
 

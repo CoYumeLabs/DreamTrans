@@ -8,3 +8,5 @@ playwright-report/
 *.log
 backend/server
 .DS_Store
+__pycache__/
+*.pyc
