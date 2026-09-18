@@ -15,6 +15,7 @@ services:
       LISTEN_ADDR: 0.0.0.0:18083
       YUACTION_CREATOR_KEY: ${YUACTION_CREATOR_KEY:?Set YUACTION_CREATOR_KEY}
       YUFOLO_INGEST_KEY: ${YUFOLO_INGEST_KEY:-}
+      YUFOLO_URL: ${YUFOLO_URL:-}
       YUACTION_DEMO: ${YUACTION_DEMO:-false}
       TRUST_PROXY: "true"
     networks: [default, dreamtrans]

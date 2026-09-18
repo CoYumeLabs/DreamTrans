@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,6 +15,14 @@ import (
 )
 
 func main() {
+	yufoloURL := os.Getenv("YUFOLO_URL")
+	if yufoloURL != "" {
+		u, err := url.Parse(yufoloURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			slog.Error("YUFOLO_URL must be an HTTP(S) backend URL without credentials or query")
+			os.Exit(1)
+		}
+	}
 	demo := os.Getenv("YUACTION_DEMO") == "true"
 	creatorKey := os.Getenv("YUACTION_CREATOR_KEY")
 	if !demo && len(creatorKey) < 32 {
@@ -49,7 +58,7 @@ func main() {
 	}
 	root, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	srv := &http.Server{Addr: addr, Handler: app.New(store, app.Config{Demo: demo, CreatorKey: creatorKey, IngestKey: ingestKey, TrustProxy: os.Getenv("TRUST_PROXY") == "true"}).Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: app.New(store, app.Config{Demo: demo, CreatorKey: creatorKey, IngestKey: ingestKey, TrustProxy: os.Getenv("TRUST_PROXY") == "true", YufoloURL: yufoloURL}).Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	go func() {
 		<-root.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

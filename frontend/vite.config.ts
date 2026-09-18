@@ -8,7 +8,8 @@ export default defineConfig({
     proxy: {
       "/api": {
         target: process.env.API_TARGET || "http://127.0.0.1:18083",
-        changeOrigin: true,
+        changeOrigin: false,
+        ws: true,
       },
     },
   },

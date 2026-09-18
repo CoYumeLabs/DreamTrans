@@ -19,17 +19,22 @@ type Segment struct {
 	Translation string    `json:"translation,omitempty"`
 	Source      string    `json:"source"`
 	CreatedAt   time.Time `json:"createdAt"`
+	StartTime   float64   `json:"startTime,omitempty"`
+	EndTime     float64   `json:"endTime,omitempty"`
+	Speaker     string    `json:"speaker,omitempty"`
+	Archived    bool      `json:"archived,omitempty"`
 }
 
 type Room struct {
-	Code      string     `json:"code"`
-	Title     string     `json:"title"`
-	Kind      string     `json:"kind"`
-	Status    string     `json:"status"`
-	Revision  int64      `json:"revision"`
-	CreatedAt time.Time  `json:"createdAt"`
-	Questions []Question `json:"questions"`
-	Segments  []Segment  `json:"segments"`
+	Code          string     `json:"code"`
+	Title         string     `json:"title"`
+	Kind          string     `json:"kind"`
+	Status        string     `json:"status"`
+	Revision      int64      `json:"revision"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	Questions     []Question `json:"questions"`
+	Segments      []Segment  `json:"segments"`
+	Transcription string     `json:"transcription,omitempty"`
 }
 
 // Public snapshots include a bounded caption window. Older finalized captions

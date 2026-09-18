@@ -26,13 +26,16 @@ import {
 import Captions from "../components/Captions";
 import Share from "../components/Share";
 import QuestionCard from "../components/QuestionCard";
+import TranscriptionPanel from "../components/TranscriptionPanel";
 
 export default function RoomPage({
   code,
   hostKey = "",
+  isHost = false,
 }: {
   code: string;
   hostKey?: string;
+  isHost?: boolean;
 }) {
   const { room, connection, error: loadError, accept } = useRoom(code);
   const { config } = useConfig();
@@ -49,7 +52,7 @@ export default function RoomPage({
     "Welcome to today’s class. Feel free to ask a question at any time.",
   );
   const questionInput = useRef<HTMLTextAreaElement>(null);
-  const host = !!hostKey;
+  const host = isHost || !!hostKey;
   async function mutate(path: string, body: unknown, method = "POST") {
     setBusy(true);
     setError("");
@@ -59,6 +62,7 @@ export default function RoomPage({
         method,
         body,
         key: hostKey,
+        signal: AbortSignal.timeout(45000),
       });
       accept(next);
       return true;
@@ -341,17 +345,36 @@ export default function RoomPage({
           </div>
           <aside className="room-aside">
             <Share room={room} />
-            <section className="panel integration-panel">
-              <span className="integration-label">
-                <AudioLines size={18} />
-                YUFOLO CONNECTION
-              </span>
-              <h3>让所有人，跟上同一段讲述。</h3>
-              <p>
-                共享转录接入准备中。连接后，主持人开启一次转录，参与者即可同步阅读。
-              </p>
-              <Pill tone="neutral">真实转录尚未连接</Pill>
-            </section>
+            {host && config?.yufoloConnected ? (
+              <TranscriptionPanel room={room} hostKey={hostKey} />
+            ) : (
+              <section className="panel integration-panel">
+                <span className="integration-label">
+                  <AudioLines size={18} />
+                  YUFOLO CONNECTION
+                </span>
+                <h3>让所有人，跟上同一段讲述。</h3>
+                <p>
+                  {config?.yufoloConnected
+                    ? "主持人开启一次转录，大家同步阅读同一份字幕。"
+                    : "共享转录尚未配置，连接 Yufolo 后即可开始。"}
+                </p>
+                <Pill
+                  tone={
+                    room.transcription === "recording" ? "green" : "neutral"
+                  }
+                >
+                  {room.transcription === "recording"
+                    ? "正在转录"
+                    : room.transcription === "error" ||
+                        room.transcription === "interrupted"
+                      ? "转录已中断，等待主持人恢复"
+                      : config?.yufoloConnected
+                        ? "等待主持人开启转录"
+                        : "真实转录尚未连接"}
+                </Pill>
+              </section>
+            )}
             {host && config?.demo && (
               <section className="panel demo-panel">
                 <div className="panel-heading">
@@ -392,7 +415,7 @@ export default function RoomPage({
                 </form>
               </section>
             )}
-            {host && (
+            {host && !config?.yufoloConnected && (
               <details className="panel key-panel">
                 <summary>
                   <Settings2 size={16} />

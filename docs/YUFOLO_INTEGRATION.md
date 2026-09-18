@@ -1,52 +1,52 @@
-# Yufolo 联动合同 · 草案
+# Yufolo 账号与实时转录
 
-目标：YuAction 创建活动后，主持人可以创建 / 关联 Yufolo 转录房间；主持端只建立一路音频采集与上游识别，所有参与者订阅共享内容。
+YuAction 直接复用 DreamTrans 已有的登录、会话、转录代理与归档接口，无须修改 DreamTrans，也不读取或复制其 JWT 签名密钥。共享部署仍然使用同一 PostgreSQL 实例中的 `yuaction` schema，账号、余额和转录档案由 Yufolo 管理。
 
-**当前状态**：YuAction 的接收和广播接口已实现。以下创建 / 控制 / 绑定 Yufolo 会话的流程尚未实现，也没有修改 DreamTrans 仓库。不能将它当成已存在的 Yufolo API。
+## 使用流程
 
-## 已实现：最终字幕接收
+1. 安装到 DreamTrans 目录下时，安装器发现运行中的 `app` / `dreamtrans` 容器后自动设置 `YUFOLO_URL`；其他部署在 YuAction `.env` 中手动填写后端可访问的 Yufolo 地址。
+2. 使用 HTTPS（本机测试可用 localhost）打开 YuAction，以已有 Yufolo 邮箱和密码登录。
+3. 创建活动，选择原文语言及一个可选的共享翻译语言，点击「开始转录」并授权麦克风。首次启动自动创建关联的 Yufolo 会话。
+4. 听众扫码加入，无须登录或开启麦克风，即可同步收到最终原文和译文。
+5. 「暂停转录」发送结束音频信号并等待最后的识别结果；再次开始沿用同一会话。「结束活动」同时结束 Yufolo 会话。
 
-```http
-POST /api/internal/rooms/{code}/segments
-Authorization: Bearer <YUFOLO_INGEST_KEY>
-Content-Type: application/json
+转录和原生翻译沿用 Yufolo 的余额、权限、并发限制及计费逻辑。翻译默认关闭。每个活动同一时间只允许一个主持端采集音频；听众不会建立额外识别连接。
 
-{
-  "id": "stable-provider-segment-id",
-  "text": "我们从观察真实需求开始。",
-  "translation": "We start by observing real needs."
-}
-```
+## 登录与权限
 
-- 凭证仅在服务端保存，不能交给观众浏览器。当前是一把部署级集成密钥，持有者能够写入全部活动；正式对接时应替换为绑定房间、绑定 Yufolo 会话的凭证。
-- `id` 在同一 YuAction 房间内唯一，同 ID、相同原文和译文可安全重试；冲突内容返回 409。
-- `text` 必填、1–2,000 字符；`translation` 可选、最多 2,000 字符；仅接受最终文本，不接受中间识别结果。
-- 服务端附加接收时间和 `source=yufolo`。这只是来源标记，不代表浏览器与 Yufolo 已经建立连接。
-- 成功响应 200 返回最新公开房间快照。成功后，同房间 SSE 客户端收到更新。
-- 401 表示集成凭证无效，404 表示房间不存在，409 表示活动结束 / ID 冲突 / 达到容量上限。
-- 不记录音频，不调用模型，不进行计费。
+- 浏览器只持有随机的 HttpOnly、SameSite=Lax 会话 Cookie；通过受信任 HTTPS 代理访问时带 Secure。Yufolo access/refresh token 保存在 YuAction 后端内存中，按需刷新，不返回浏览器，不写入活动公开数据。
+- 本地登录最长七天。后端重启后需要重新登录；活动归属和关联会话持久保存在数据库，登录同一账号即可恢复活动列表与主持权限。
+- 主持操作验证 Yufolo 用户状态，录音期间每 20 秒复查。其他账号不能使用主持密钥绕过已绑定活动的所有权检查。
+- 退出登录关闭该登录会话的录音连接，并撤销本地登录与上游刷新凭证。变更请求和音频 WebSocket 校验同源。
+- 当前支持邮箱密码登录，不包含 OAuth 或跨域免登录。旧活动仍保留主持密钥校验；登录并关联转录后归属当前账号。
 
-演示接口 `POST /api/rooms/{code}/demo-segments` 仅在 `YUACTION_DEMO=true` 时开放，要求主持人密钥，统一标记 `source=demo`。
+## 复用的 DreamTrans 接口
 
-## 待实现：房间生命周期
+| 用途 | 已有接口 |
+| --- | --- |
+| 登录、刷新、退出 | `/api/auth/login`、`/api/auth/refresh`、`/api/auth/logout` |
+| 验证账号 | `GET /api/user/profile` |
+| 幂等创建会话 | `POST /api/sessions`，使用预先持久化的 UUID `client_session_id` |
+| 音频代理 | `/ws/speechmatics?session_id=…`，后端携带用户 Bearer token |
+| 幂等归档与译文更新 | `POST /api/sessions/{id}/transcripts`，使用稳定的 `client_segment_id` |
+| 生命周期同步 | `PATCH /api/sessions/{id}` |
 
-1. 主持人在 YuAction 中授权连接 Yufolo 账号，后端校验两侧身份与活动管理权限。
-2. YuAction 以活动 ID 为幂等键请求创建共享转录会话；保留两侧 ID 映射，不假设两者 ID 相同。
-3. 主持人明确开始采集，Yufolo 对该房间建立唯一活动转录任务。并发点击 / 重试不能创建重复上游会话。
-4. Yufolo 将最终字幕与共享译文通过受限集成接口发送给 YuAction；听众只读取，不建立自己的识别连接。
-5. 暂停、余额不足、断网、恢复、结束的状态需要同步到整个房间；不应将意外断线显示为已结束。
-6. 结束活动后停止采集、结算房间使用量并确定允许参与者保存的公开内容范围。
+音频由 AudioWorklet 转为单声道 PCM16，以浏览器实际采样率发送。服务端生成 `StartRecognition`，可选 `translation_config`；暂停发送包含实际音频帧数的 `EndOfStream`，等待 `EndOfTranscript`。协议参考 [Speechmatics 实时转录文档](https://docs.speechmatics.com/api-ref/realtime-transcription-websocket)。
 
-## 待实现：顺序与恢复
+## 保存与恢复
 
-正式事件需要 `eventId`、`activityId`、`transcriptSessionId`、`sequence`、`speaker`、`startMs`、`endMs`、`sourceLanguage`、`translations` 和 `final`。按房间保存连续序列，重连使用游标补齐；字幕修订使用版本号，不复用当前仅针对最终内容的写入合同。
+- 收到最终原文后先保存到 YuAction 并广播，再归档到 Yufolo。收到译文后按时间范围匹配本次音频连接中重叠最多的原文段，更新两端记录。
+- 归档失败会停止录音并提示。已持久保存的最终字幕保留在活动中；下次开始先补存尚未归档的字幕，成功后才建立新的付费识别连接。结束活动时也会补存，失败则保留活动并提示重试。
+- 意外断线显示为中断，由主持人手动恢复，不自动反复开启付费连接。浏览器关闭页面会释放麦克风；服务重启后不会把失效连接显示为正在录音。
+- 这里只保证已经持久保存的最终字幕可补存。断线时尚未收到的识别结果、尚未匹配原文的待处理译文不能保证恢复；不保存音频。复杂跨段译文目前归到重叠最多的一段，不提供逐词对齐。
+- 新增版本化迁移为 `rooms` 增加私有 `integration` 列，并记录迁移版本。旧活动保留；共享安装不修改 DreamTrans 的业务表。
 
-Yufolo 与 YuAction 之间需要 durable outbox / acknowledgement，防止临时网络故障丢失已识别内容。中间识别文本可以短暂广播，但不能混入最终归档。
+## 部署范围与验证
 
-## 产品约束
+当前使用单个 YuAction 后端实例。会话缓存、录音互斥与 SSE 广播在进程内，不能直接增加后端副本。每活动上限为 5,000 段字幕、200 个实时订阅连接。
 
-- 学生不需要为接收同一份字幕启动额外识别任务。
-- 相同目标语言共享翻译任务；个人 AI 学习操作独立授权与计费。
-- 老师看到的是公开提问与主动反馈；学生的私人笔记、AI 对话不因加入房间而共享。
-- 共享内容是否可回看、保存到个人 Yufolo 空间，应由活动权限控制。
-- 当前代码不自动启动任何付费转录服务。
+测试包含 Go race、PostgreSQL 持久化与权限隔离、原生协议模拟、浏览器麦克风采集与观众同步、归档失败后的补存，以及隔离运行的真实 DreamTrans 登录、创建会话、字幕更新和结束会话接口。自动化测试不调用真实付费识别服务，不代表已经验证真实语音的识别质量。
+
+## 可选外部字幕接入
+
+原有 `POST /api/internal/rooms/{code}/segments` 接口继续保留，要求部署级 `YUFOLO_INGEST_KEY`，接受稳定 `id`、最终 `text` 和可选 `translation`。同 ID 同内容可重试，冲突内容返回 409；密钥不能放到浏览器。内置麦克风转录不依赖此接口或密钥。

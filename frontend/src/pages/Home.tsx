@@ -14,6 +14,7 @@ import {
 import { api, recentRooms, rememberRoom, saveHostKey, type Room } from "../api";
 import { useConfig } from "../hooks/useConfig";
 import { Brand, Button, ErrorNote, Pill } from "../components/ui";
+import AccountPanel, { type Account } from "../components/AccountPanel";
 
 export default function Home() {
   const { config, error: configError } = useConfig();
@@ -24,7 +25,18 @@ export default function Home() {
   const [joinCode, setJoinCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const rooms = recentRooms();
+  const [user, setUser] = useState<Account | null>(null);
+  const [ownedRooms, setOwnedRooms] = useState<Room[]>([]);
+  const rooms = config?.yufoloConnected ? ownedRooms : recentRooms();
+  useEffect(() => {
+    if (!user) {
+      setOwnedRooms([]);
+      return;
+    }
+    api<Room[]>("/my/rooms")
+      .then(setOwnedRooms)
+      .catch((e) => setError(e.message));
+  }, [user]);
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     if (creating) dialog.current?.showModal();
@@ -109,6 +121,7 @@ export default function Home() {
           <Pill tone="neutral">EARLY PREVIEW · 0.1</Pill>
         </header>
         <div className="home-content">
+          {config?.yufoloConnected && <AccountPanel onChange={setUser} />}
           <div className="page-heading">
             <div>
               <div className="eyebrow">A LITTLE MORE CONNECTION</div>
@@ -120,7 +133,7 @@ export default function Home() {
             <Button
               className="primary"
               onClick={() => setCreating(true)}
-              disabled={!config}
+              disabled={!config || (config.yufoloConnected && !user)}
             >
               <Plus size={18} />
               创建活动
@@ -145,7 +158,7 @@ export default function Home() {
               <Button
                 className="dark"
                 onClick={() => setCreating(true)}
-                disabled={!config}
+                disabled={!config || (config.yufoloConnected && !user)}
               >
                 开启你的第一场互动
                 <ArrowRight size={17} />
@@ -197,7 +210,11 @@ export default function Home() {
               <h2>
                 我的活动 <span>{rooms.length.toString().padStart(2, "0")}</span>
               </h2>
-              <p>此浏览器最近创建的课堂与演讲</p>
+              <p>
+                {config?.yufoloConnected
+                  ? "此 Yufolo 账号创建的课堂与演讲"
+                  : "此浏览器最近创建的课堂与演讲"}
+              </p>
             </div>
             <span className="muted-label">一个房间，无限种交流</span>
           </div>
@@ -232,7 +249,7 @@ export default function Home() {
             <button
               className="new-activity"
               onClick={() => setCreating(true)}
-              disabled={!config}
+              disabled={!config || (config.yufoloConnected && !user)}
             >
               <span>
                 <Plus size={24} />
@@ -269,12 +286,15 @@ export default function Home() {
                   <AudioLines size={19} />
                   YUFOLO × YUACTION
                 </span>
-                <Pill tone="neutral">即将连接</Pill>
+                <Pill tone={config?.yufoloConnected ? "green" : "neutral"}>
+                  {config?.yufoloConnected ? "已连接" : "等待配置"}
+                </Pill>
               </div>
               <h3>一个人开讲，所有人跟上。</h3>
               <p>
-                我们正在连接
-                Yufolo：让同一场转录，成为每个人手中的字幕与学习起点。
+                {config?.yufoloConnected
+                  ? "用 Yufolo 账号登录，开启一次转录，让全场同步阅读原文与译文。"
+                  : "连接 Yufolo 后，主持人可以开启麦克风，让全场共享同一份字幕。"}
               </p>
               <a href="https://yufolo.com" target="_blank" rel="noreferrer">
                 了解 Yufolo
@@ -285,7 +305,7 @@ export default function Home() {
           <ErrorNote message={configError || (!creating ? error : "")} />
           {config?.demo && (
             <p className="preview-note">
-              当前为本地预览。尚未接入真实转录；未配置数据库时，重启会清空活动。
+              已启用演示模式。演示字幕不调用识别服务；未配置数据库时，重启会清空活动。
             </p>
           )}
           <footer>

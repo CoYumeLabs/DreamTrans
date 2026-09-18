@@ -3,6 +3,8 @@ import { ArrowRight, Settings2 } from "lucide-react";
 import { api, readHostKey, saveHostKey } from "../api";
 import { Brand, Button, ErrorNote } from "../components/ui";
 import RoomPage from "./RoomPage";
+import { useConfig } from "../hooks/useConfig";
+import AccountPanel from "../components/AccountPanel";
 
 function HostGate({
   code,
@@ -63,7 +65,31 @@ function HostGate({
 }
 
 export default function Host({ code }: { code: string }) {
+  const { config } = useConfig();
   const [hostKey, setHostKey] = useState("");
+  const [accountReady, setAccountReady] = useState(false);
+  const [error, setError] = useState("");
+  if (config?.yufoloConnected)
+    return accountReady ? (
+      <RoomPage code={code} hostKey={readHostKey(code)} isHost />
+    ) : (
+      <div className="center-page">
+        <Brand />
+        <AccountPanel
+          onChange={(user) => {
+            if (!user) {
+              setAccountReady(false);
+              return;
+            }
+            api(`/rooms/${code}/host`, { key: readHostKey(code) })
+              .then(() => setAccountReady(true))
+              .catch((e) => setError(e.message));
+          }}
+        />
+        <ErrorNote message={error} />
+        <a href={`/rooms/${code}`}>以参与者身份加入</a>
+      </div>
+    );
   return hostKey ? (
     <RoomPage code={code} hostKey={hostKey} />
   ) : (

@@ -22,6 +22,7 @@ export type Room = {
   createdAt: string;
   questions: Question[];
   segments: Segment[];
+  transcription?: string;
 };
 export type Config = {
   demo: boolean;

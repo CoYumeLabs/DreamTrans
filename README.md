@@ -4,7 +4,7 @@
 
 YuAction 面向教师与演讲者，把活动、现场提问、大屏与共享字幕放进同一个房间。它与 Yufolo 的产品分工是：YuAction 组织现场互动，Yufolo 提供转录、翻译和个人学习能力。
 
-**当前版本：0.1 开发预览。** 已实现可运行的多人互动闭环，尚未接通 Yufolo 的真实音频采集与房间创建。演示字幕始终明确标注，不会调用付费服务。
+**当前版本：开发预览。** 已实现多人互动、Yufolo 账号登录、主持端麦克风转录与共享字幕。真实转录由主持人明确开启，使用其 Yufolo 余额；独立的演示字幕仍不调用付费服务。
 
 界面预览：[活动空间](docs/previews/workspace.png) · [主持人工作台](docs/previews/host.png) · [手机参与页](docs/previews/participant-mobile.png) · [现场大屏](docs/previews/display.png)
 
@@ -18,6 +18,9 @@ YuAction 面向教师与演讲者，把活动、现场提问、大屏与共享�
 - PostgreSQL 持久化与乐观并发控制；本地也可以显式选择内存演示模式。
 - 主持人密钥校验、活动创建密钥、服务端字幕接入凭证、请求大小与基本速率限制。
 - 已确认字幕的幂等接收和一对多分发；同一字幕 ID 的重复提交不会产生第二条字幕。
+- Yufolo 邮箱密码登录、账号活动列表、换浏览器恢复主持权限。
+- 创建关联转录会话、单路麦克风采集、暂停／继续、共享一份目标语言译文、结束活动时停止上游转录。
+- 最终字幕先持久化，再归档到 Yufolo；归档失败后停止录音，下次开始补存。
 
 ## 一键安装 / 更新
 
@@ -43,7 +46,7 @@ curl -fsSL https://raw.githubusercontent.com/CoYumeLabs/YuAction/main/scripts/in
 curl -fsSL https://raw.githubusercontent.com/CoYumeLabs/YuAction/main/scripts/install.sh | bash -s -- --dreamtrans-dir /dreamtrans
 ```
 
-YuAction 使用独立的 `yuaction` schema，自己的端口、密钥和镜像版本保存在 `/dreamtrans/yuaction/.env`。该模式复用数据库配置；账号授权与实时转录联动仍待实现。
+YuAction 使用独立的 `yuaction` schema，自己的端口、密钥和镜像版本保存在 `/dreamtrans/yuaction/.env`。安装脚本会发现 DreamTrans 应用容器并配置 `YUFOLO_URL`；更新后用已有 Yufolo 邮箱密码登录，创建活动并点击「开始转录」。主持人页面需要 HTTPS 或 localhost 才能使用麦克风。详情见 [账号与转录联动](docs/YUFOLO_INTEGRATION.md)。
 
 ## 本地启动
 
@@ -78,7 +81,7 @@ docker compose up -d --build
 
 访问 http://127.0.0.1:11452 。Compose 默认关闭演示模式，数据库持久化到 `yuaction_postgres` 卷；只有前端 Nginx 暴露本机端口。创建活动需要输入 `.env` 中的活动创建密钥。主持人仍通过每个房间独立的密钥管理活动。
 
-这不是完整的账号系统。公开上线前需要完成账户、成员授权、主持人恢复、内容管理与部署边界检查，见 [开发路线](docs/ROADMAP.md)。
+配置 `YUFOLO_URL` 后改用 Yufolo 账号创建和管理活动；未配置时保留创建密钥模式。成员角色、问题审核等能力仍待完善，见 [开发路线](docs/ROADMAP.md)。
 
 ## 自动 Docker 发布（GHCR）
 
@@ -107,6 +110,7 @@ docker compose -f compose.ghcr.yml up -d --no-build
 | `YUACTION_DEMO` | 必须显式设为 `true` 才开启匿名创建 / 演示字幕及内存存储回退 |
 | `YUACTION_CREATOR_KEY` | 活动创建凭证；非演示模式至少 32 字符 |
 | `YUFOLO_INGEST_KEY` | 服务端字幕接入凭证，至少 32 字符；不设置时关闭接入 |
+| `YUFOLO_URL` | DreamTrans 后端地址；开启账号登录与实时转录，关联安装时自动发现 |
 | `TRUST_PROXY` | 仅在受控代理之后设为 `true`，使用代理覆盖写入的 `X-Real-IP` 限流 |
 | `API_TARGET` | Vite 开发代理的后端地址 |
 

@@ -24,7 +24,7 @@ curl -fsSL https://raw.githubusercontent.com/CoYumeLabs/YuAction/main/scripts/in
 bash ~/yuaction/install.sh --show-key
 ```
 
-在创建活动界面输入该密钥。Yufolo 接入密钥默认留空，需要接入时在 `.env` 中配置 `YUFOLO_INGEST_KEY`。不要直接更改已有数据库的 `POSTGRES_PASSWORD`，修改配置文件不会同步修改 PostgreSQL 内部密码。
+未连接 Yufolo 时，在创建活动界面输入该密钥。配置 `YUFOLO_URL` 后使用已有 Yufolo 邮箱密码登录。`YUFOLO_INGEST_KEY` 是可选的外部字幕推送凭证，内置麦克风转录不需要它。不要直接更改已有数据库的 `POSTGRES_PASSWORD`，修改配置文件不会同步修改 PostgreSQL 内部密码。
 
 也可以先下载、检查脚本，再运行：
 
@@ -71,7 +71,11 @@ bash /dreamtrans/yuaction/install.sh --dir /dreamtrans/yuaction --show-key
 
 更新备份只包含 `yuaction` schema 和 YuAction 配置，不包含 DreamTrans 业务表或父 `.env`。DreamTrans 原有备份需要继续保留；若整库恢复 DreamTrans，也会影响同库的 YuAction 数据。两个应用共享数据库可用性，DreamTrans 数据库停止时 YuAction 也无法读写。
 
-已有独立安装不能直接加此选项切换数据库。请保留原安装和备份，另做数据迁移；本脚本不会自动搬运旧房间。已有 `yuaction` schema 却缺少原安装配置时也会停止，避免用新密钥接管旧数据。账号登录、转录启动与字幕联动不会因为共用 `.env` 自动接通，仍按 [Yufolo 联动合同](YUFOLO_INTEGRATION.md)推进。
+已有独立安装不能直接加此选项切换数据库。请保留原安装和备份，另做数据迁移；本脚本不会自动搬运旧房间。已有 `yuaction` schema 却缺少原安装配置时也会停止，避免用新密钥接管旧数据。
+
+安装 / 更新时还会识别同一部署下的 `app` 或 `dreamtrans` 应用容器，把其内网地址写为子 `.env` 的 `YUFOLO_URL`。不需要复制父配置的 JWT 签名密钥。应用容器未运行时，该自动发现步骤会提示；启动 DreamTrans 后再次更新即可启用账号登录。独立部署也可手动设置 `YUFOLO_URL=https://你的Yufolo服务地址`，后端需可访问该地址。
+
+主持人通过 HTTPS 或 localhost 打开 YuAction，使用现有 Yufolo 邮箱密码登录，创建活动后选择语言并点击「开始转录」。反向代理需支持 WebSocket Upgrade，前端镜像已配置；外层代理也需透传升级请求。登录会话目前保存在 YuAction 服务端内存中，服务重启后重新登录即可找回账号所属活动。详见 [联动说明](YUFOLO_INTEGRATION.md)。
 
 ## 更新
 

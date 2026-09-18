@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 )
 
@@ -15,6 +16,17 @@ type Record struct {
 	HostHash string
 	Revision int64
 	Data     []byte
+	Link     Link
+}
+
+// Link is private: never included in room snapshots or participant responses.
+type Link struct {
+	OwnerID        string  `json:"ownerId,omitempty"`
+	SessionID      string  `json:"sessionId,omitempty"`
+	SourceLanguage string  `json:"sourceLanguage,omitempty"`
+	TargetLanguage string  `json:"targetLanguage,omitempty"`
+	Offset         float64 `json:"offset,omitempty"`
+	Created        bool    `json:"created,omitempty"`
 }
 
 type Store interface {
@@ -22,6 +34,7 @@ type Store interface {
 	Get(context.Context, string) (Record, error)
 	Save(context.Context, int64, Record) error
 	Ping(context.Context) error
+	ListOwned(context.Context, string) ([]Record, error)
 }
 
 type Memory struct {
@@ -63,3 +76,19 @@ func (m *Memory) Save(_ context.Context, expected int64, r Record) error {
 	return nil
 }
 func (m *Memory) Ping(context.Context) error { return nil }
+
+func (m *Memory) ListOwned(_ context.Context, owner string) ([]Record, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	rows := []Record{}
+	for _, r := range m.rooms {
+		if r.Link.OwnerID == owner {
+			rows = append(rows, clone(r))
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Code < rows[j].Code })
+	if len(rows) > 100 {
+		rows = rows[:100]
+	}
+	return rows, nil
+}

@@ -26,13 +26,20 @@ type Config struct {
 	CreatorKey string
 	IngestKey  string
 	TrustProxy bool
+	YufoloURL  string
 }
 type Server struct {
-	store  storage.Store
-	cfg    Config
-	hub    *hub
-	mu     sync.Mutex
-	limits map[string]limit
+	store    storage.Store
+	cfg      Config
+	hub      *hub
+	mu       sync.Mutex
+	limits   map[string]limit
+	yufolo   *yufoloClient
+	authMu   sync.Mutex
+	sessions map[string]*loginSession
+	streamMu sync.Mutex
+	streams  map[string]*liveStream
+	controls map[string]bool
 }
 type limit struct {
 	n     int
@@ -47,14 +54,25 @@ func (e apiError) Error() string            { return e.message }
 func fail(status int, message string) error { return apiError{status, message} }
 
 func New(store storage.Store, cfg Config) *Server {
-	return &Server{store: store, cfg: cfg, hub: newHub(), limits: make(map[string]limit)}
+	s := &Server{store: store, cfg: cfg, hub: newHub(), limits: make(map[string]limit), sessions: make(map[string]*loginSession), streams: make(map[string]*liveStream), controls: make(map[string]bool)}
+	if cfg.YufoloURL != "" {
+		s.yufolo = newYufoloClient(cfg.YufoloURL)
+	}
+	return s
 }
 func (s *Server) Handler() http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /api/health", s.health)
 	m.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
-		respond(w, 200, map[string]any{"demo": s.cfg.Demo, "creatorKeyRequired": s.cfg.CreatorKey != "", "yufoloConnected": false})
+		respond(w, 200, map[string]any{"demo": s.cfg.Demo, "creatorKeyRequired": s.cfg.CreatorKey != "" && s.yufolo == nil, "yufoloConnected": s.yufolo != nil})
 	})
+	m.HandleFunc("POST /api/auth/login", s.login)
+	m.HandleFunc("POST /api/auth/logout", s.logout)
+	m.HandleFunc("GET /api/auth/me", s.me)
+	m.HandleFunc("GET /api/my/rooms", s.myRooms)
+	m.HandleFunc("POST /api/rooms/{code}/transcription", s.prepareTranscription)
+	m.HandleFunc("GET /api/rooms/{code}/transcription", s.transcriptionInfo)
+	m.HandleFunc("GET /api/rooms/{code}/audio", s.audio)
 	m.HandleFunc("POST /api/rooms", s.create)
 	m.HandleFunc("GET /api/rooms/{code}", s.get)
 	m.HandleFunc("GET /api/rooms/{code}/events", s.events)
@@ -70,7 +88,7 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		// No cross-origin API access. Browser traffic goes through the same-origin
 		// Vite/production proxy; host and ingestion credentials never enter URLs.
-		if r.Method != "GET" && r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+		if (r.Method != "GET" || strings.HasSuffix(r.URL.Path, "/audio")) && !sameOrigin(r) {
 			writeError(w, fail(403, "不允许跨站操作"))
 			return
 		}
@@ -91,11 +109,23 @@ func (s *Server) Handler() http.Handler {
 				key = ip + ":create"
 				max = 10
 			}
+			if r.URL.Path == "/api/auth/login" {
+				key = ip + ":login"
+				max = 10
+			}
 			if !s.allow(key, max) {
 				w.Header().Set("Retry-After", "60")
 				writeError(w, fail(429, "操作较频繁，请稍后再试"))
 				return
 			}
+		}
+		if s.yufolo != nil && needsAccount(r) {
+			session, err := s.account(r)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			r = r.WithContext(context.WithValue(r.Context(), accountContextKey{}, session))
 		}
 		m.ServeHTTP(w, r)
 	})
@@ -188,11 +218,11 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	respond(w, 200, map[string]string{"status": "ok"})
 }
 func (s *Server) create(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.CreatorKey != "" && !equal(bearer(r), s.cfg.CreatorKey) {
+	if s.yufolo == nil && s.cfg.CreatorKey != "" && !equal(bearer(r), s.cfg.CreatorKey) {
 		writeError(w, fail(401, "请输入正确的活动创建密钥"))
 		return
 	}
-	if s.cfg.CreatorKey == "" && !s.cfg.Demo {
+	if s.yufolo == nil && s.cfg.CreatorKey == "" && !s.cfg.Demo {
 		writeError(w, fail(503, "尚未配置活动创建权限"))
 		return
 	}
@@ -210,10 +240,14 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hostKey := token(32)
+	link := storage.Link{}
+	if a := currentAccount(r); a != nil {
+		link.OwnerID = a.user.ID
+	}
 	for i := 0; i < 5; i++ {
 		room := Room{Code: strings.ToUpper(token(4)), Title: in.Title, Kind: in.Kind, Status: "live", Revision: 1, CreatedAt: time.Now().UTC(), Questions: []Question{}, Segments: []Segment{}}
 		data, _ := json.Marshal(room)
-		err := s.store.Create(r.Context(), storage.Record{Code: room.Code, HostHash: digest(hostKey), Revision: 1, Data: data})
+		err := s.store.Create(r.Context(), storage.Record{Code: room.Code, HostHash: digest(hostKey), Revision: 1, Data: data, Link: link})
 		if errors.Is(err, storage.ErrConflict) {
 			continue
 		}
@@ -241,7 +275,7 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	respond(w, 200, room.Public())
+	respond(w, 200, s.publicRoom(room))
 }
 func (s *Server) host(w http.ResponseWriter, r *http.Request) {
 	room, rec, err := s.read(r.Context(), roomCode(r))
@@ -249,11 +283,11 @@ func (s *Server) host(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if !equal(digest(bearer(r)), rec.HostHash) {
+	if !s.hostAllowed(r, rec) {
 		writeError(w, fail(401, "需要此房间的主持人密钥"))
 		return
 	}
-	respond(w, 200, room.Public())
+	respond(w, 200, s.publicRoom(room))
 }
 func (s *Server) mutate(r *http.Request, host bool, change func(*Room) error) (Room, error) {
 	for i := 0; i < 8; i++ {
@@ -261,7 +295,7 @@ func (s *Server) mutate(r *http.Request, host bool, change func(*Room) error) (R
 		if err != nil {
 			return Room{}, err
 		}
-		if host && !equal(digest(bearer(r)), rec.HostHash) {
+		if host && !s.hostAllowed(r, rec) {
 			return Room{}, fail(401, "需要此房间的主持人密钥")
 		}
 		if err = change(&room); err != nil {
@@ -282,7 +316,7 @@ func (s *Server) mutate(r *http.Request, host bool, change func(*Room) error) (R
 			return Room{}, err
 		}
 		s.hub.publish(room.Code)
-		return room.Public(), nil
+		return s.publicRoom(room), nil
 	}
 	return Room{}, storage.ErrConflict
 }
@@ -385,6 +419,27 @@ func (s *Server) roomStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, fail(400, "活动状态不正确"))
 		return
 	}
+	release, err := s.beginControl(roomCode(r))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer release()
+	if in.Status == "ended" {
+		_, rec, err := s.read(r.Context(), roomCode(r))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		if !s.hostAllowed(r, rec) {
+			writeError(w, fail(401, "需要此房间的主持权限"))
+			return
+		}
+		if err = s.endTranscription(r, rec); err != nil {
+			writeError(w, err)
+			return
+		}
+	}
 	room, err := s.mutate(r, true, func(room *Room) error { room.Status = in.Status; return nil })
 	if err != nil {
 		writeError(w, err)
@@ -477,7 +532,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = controller.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		if room.Revision != last {
-			data, err := json.Marshal(room.Public())
+			data, err := json.Marshal(s.publicRoom(room))
 			if err != nil {
 				return false
 			}

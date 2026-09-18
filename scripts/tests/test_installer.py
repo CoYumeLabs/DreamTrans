@@ -34,16 +34,17 @@ elif tool=='docker':
     if args[0]=='ps':
         if args[-1]=='label=com.docker.compose.project.working_dir':
             if os.environ.get('MOCK_DREAMTRANS'): print('parent-db')
+            if os.environ.get('MOCK_DREAMTRANS_APP'): print('parent-app')
             sys.exit(0)
         if os.environ.get('MOCK_OTHER_OWNER'): print('other-container')
         sys.exit(0)
     if args[0]=='inspect':
-        if args[-1]=='parent-db':
+        if args[-1] in ('parent-db','parent-app'):
             template=args[args.index('--format')+1]
             if 'working_dir' in template: print(os.environ['MOCK_DREAMTRANS'])
-            elif 'com.docker.compose.service' in template: print(os.environ.get('MOCK_DB_SERVICE','db'))
+            elif 'com.docker.compose.service' in template: print('app' if args[-1]=='parent-app' else os.environ.get('MOCK_DB_SERVICE','db'))
             elif '.NetworkSettings.Networks' in template: print('dreamtrans_default')
-            elif '.Name' in template: print('/dreamtrans-db-1')
+            elif '.Name' in template: print('/dreamtrans-app-1' if args[-1]=='parent-app' else '/dreamtrans-db-1')
             else: sys.exit('unexpected inspect')
         else: print(os.environ['MOCK_OTHER_OWNER'])
         sys.exit(0)
@@ -251,6 +252,12 @@ class InstallerTests(unittest.TestCase):
         self.run_installer('--update', ok=False, MOCK_DREAMTRANS=str(parent), MOCK_FAIL_BACKUP='1', MOCK_REVISION='b'*40)
         self.assertEqual((self.install / '.env').read_bytes(), original)
         self.assertFalse(any('up' in c['args'] for c in self.calls()))
+
+    def test_dreamtrans_app_is_discovered_for_account_and_transcription(self):
+        parent = self.parent_install()
+        self.run_installer('--dreamtrans-dir', str(parent), MOCK_DREAMTRANS=str(parent), MOCK_DREAMTRANS_APP='1')
+        self.assertEqual(self.config()['YUFOLO_URL'], 'http://dreamtrans-app-1:8080')
+        self.assertNotIn('JWT_SECRET', self.config())
 
     def test_dreamtrans_defaults_to_child_directory_and_rejects_parent_overwrite(self):
         parent = self.parent_install()

@@ -155,7 +155,7 @@ compose_at() {
   [[ -z "$dreamtrans_dir" ]] || env_files+=(--env-file "$dreamtrans_dir/.env")
   # A caller's exported variables must not override saved database credentials.
   env -u POSTGRES_PASSWORD -u YUACTION_CREATOR_KEY -u YUFOLO_INGEST_KEY \
-    -u POSTGRES_USER -u POSTGRES_DB -u DREAMTRANS_NETWORK -u DREAMTRANS_DB_HOST \
+    -u POSTGRES_USER -u POSTGRES_DB -u DREAMTRANS_NETWORK -u DREAMTRANS_DB_HOST -u YUFOLO_URL \
     -u YUACTION_DEMO -u APP_BIND -u APP_PORT -u IMAGE_TAG -u IMAGE_PREFIX \
     -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME -u COMPOSE_ENV_FILES COMPOSE_PROFILES= \
     docker compose --project-name "$project" --project-directory "$install_dir" \
@@ -163,7 +163,7 @@ compose_at() {
 }
 
 discover_dreamtrans() {
-  local id owner service candidate="" network networks host
+  local id owner service candidate="" network networks host app_container=""
   [[ -f "$dreamtrans_dir/.env" && -f "$dreamtrans_dir/docker-compose.yml" ]] || die "DreamTrans 目录缺少 .env 或 docker-compose.yml"
   # Inspect labels only, never print the existing containers' secret environment.
   while IFS= read -r id; do
@@ -171,6 +171,11 @@ discover_dreamtrans() {
     owner=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$id")
     [[ "$owner" == "$dreamtrans_dir" ]] || continue
     service=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$id")
+    if [[ "$service" == app || "$service" == dreamtrans ]]; then
+      [[ -z "$app_container" ]] || die "DreamTrans 目录对应多个应用容器，无法确定登录接口"
+      app_container="$id"
+      continue
+    fi
     [[ "$service" == db || "$service" == postgres ]] || continue
     [[ -z "$candidate" ]] || die "DreamTrans 目录对应多个数据库容器，无法确定目标"
     candidate="$id"
@@ -187,6 +192,13 @@ discover_dreamtrans() {
   [[ "$network" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ && "$host" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || die "无法解析 DreamTrans 数据库网络"
   set_env_value DREAMTRANS_NETWORK "$network" "$work_dir/.env"
   set_env_value DREAMTRANS_DB_HOST "$host" "$work_dir/.env"
+  if [[ -n "$app_container" ]]; then
+    host=$(docker inspect --format '{{.Name}}' "$app_container"); host="${host#/}"
+    [[ "$host" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || die "无法解析 DreamTrans 应用容器"
+    set_env_value YUFOLO_URL "http://$host:8080" "$work_dir/.env"
+  else
+    log "尚未发现 DreamTrans 应用容器；账号与转录功能需要启动应用后再更新 YuAction"
+  fi
 }
 
 check_project_owner() {
@@ -250,6 +262,7 @@ install_or_update() {
     cat > "$work_dir/.env" <<ENV
 YUACTION_CREATOR_KEY=$(random_key)
 YUFOLO_INGEST_KEY=
+YUFOLO_URL=
 YUACTION_DEMO=false
 APP_BIND=127.0.0.1
 APP_PORT=11452
