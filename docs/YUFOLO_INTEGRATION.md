@@ -12,6 +12,8 @@ YuAction 直接复用 DreamTrans 已有的登录、会话、转录代理与归�
 
 转录和原生翻译沿用 Yufolo 的余额、权限、并发限制及计费逻辑。翻译默认关闭。每个活动同一时间只允许一个主持端采集音频；听众不会建立额外识别连接。
 
+中文普通话使用与 DreamTrans 一致的 `cmn` 语言代码（见 [Speechmatics 支持语言](https://docs.speechmatics.com/speech-to-text/languages)）。旧版 YuAction 保存或提交的 `zh` 会自动兼容为 `cmn`，原活动和关联会话继续使用，无须删除重建或为此更新 Yufolo。
+
 ## 登录与权限
 
 - 浏览器只持有随机的 HttpOnly、SameSite=Lax 会话 Cookie；通过受信任 HTTPS 代理访问时带 Secure。Yufolo access/refresh token 保存在 YuAction 后端内存中，按需刷新，不返回浏览器，不写入活动公开数据。

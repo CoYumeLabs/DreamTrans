@@ -27,6 +27,8 @@ type fakeYufolo struct {
 	sessions                       map[string]string
 	archives                       map[string]map[string]any
 	sessionStatus                  map[string]string
+	lastStart                      map[string]any
+	lastSession                    map[string]string
 	starts, refreshes, audioFrames atomic.Int32
 	archiveFailure, disabled       atomic.Bool
 	shortToken                     bool
@@ -94,6 +96,7 @@ func (f *fakeYufolo) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.sessions[id] = owner
+		f.lastSession = in
 		reply(map[string]string{"id": id})
 		return
 	}
@@ -138,6 +141,27 @@ func (f *fakeYufolo) handle(w http.ResponseWriter, r *http.Request) {
 		if c.ReadJSON(&start) != nil || start["message"] != "StartRecognition" {
 			return
 		}
+		// Match the provider's language codes instead of accepting any config.
+		transcription, _ := start["transcription_config"].(map[string]any)
+		source, _ := transcription["language"].(string)
+		supported := map[string]bool{"cmn": true, "en": true, "ja": true, "ko": true, "de": true, "fr": true, "es": true}
+		validConfig := supported[source]
+		if translation, ok := start["translation_config"].(map[string]any); ok {
+			targets, _ := translation["target_languages"].([]any)
+			if len(targets) != 1 {
+				validConfig = false
+			} else {
+				target, _ := targets[0].(string)
+				validConfig = validConfig && supported[target] && target != source && (source == "en" || target == "en")
+			}
+		}
+		if !validConfig {
+			_ = c.WriteJSON(map[string]string{"message": "Error", "reason": "unsupported language configuration"})
+			return
+		}
+		f.mu.Lock()
+		f.lastStart = start
+		f.mu.Unlock()
 		f.starts.Add(1)
 		_ = c.WriteJSON(map[string]string{"message": "RecognitionStarted"})
 		emitted := false
@@ -271,6 +295,116 @@ func TestYufoloLoginOwnershipRefreshAndCSRF(t *testing.T) {
 	f.disabled.Store(false)
 	httpJSON(t, teacher, server.URL+"/api/auth/logout", "POST", nil, 200)
 	httpJSON(t, teacher, base+"/host", "GET", nil, 401)
+}
+
+func TestTranscriptionMandarinCompatibility(t *testing.T) {
+	for _, tc := range []struct {
+		name, source, target, wantSource, wantTarget string
+		legacy, prepareAgain                         bool
+	}{
+		{"English to Mandarin", "en", "cmn", "en", "cmn", false, false},
+		{"Mandarin to English", "cmn", "en", "cmn", "en", false, false},
+		{"old browser target", "en", "zh", "en", "cmn", false, false},
+		{"old browser source", "zh", "en", "cmn", "en", false, false},
+		{"saved target prepare", "en", "zh", "en", "cmn", true, true},
+		{"saved source prepare", "zh", "en", "cmn", "en", true, true},
+		{"saved target direct resume", "en", "zh", "en", "cmn", true, false},
+		{"saved source direct resume", "zh", "en", "cmn", "en", true, false},
+		{"saved source without translation", "zh", "", "cmn", "", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeYufolo(t)
+			app := New(storage.NewMemory(), Config{YufoloURL: f.server.URL})
+			server := httptest.NewServer(app.Handler())
+			defer server.Close()
+			teacher := integrationClient(t, server.URL, "teacher@example.com")
+			room := integratedRoom(t, teacher, server.URL)
+			base := server.URL + "/api/rooms/" + room.Room.Code
+			var first map[string]any
+			_ = json.Unmarshal(httpJSON(t, teacher, base+"/transcription", "POST", map[string]string{"sourceLanguage": tc.source, "targetLanguage": tc.target}, 200), &first)
+			if tc.legacy {
+				// Reproduce a persisted room from the release that wrote zh.
+				if err := app.changeRecord(context.Background(), room.Room.Code, func(_ *Room, rec *storage.Record) error {
+					rec.Link.SourceLanguage, rec.Link.TargetLanguage = tc.source, tc.target
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var info map[string]any
+			_ = json.Unmarshal(httpJSON(t, teacher, base+"/transcription", "GET", nil, 200), &info)
+			if info["sourceLanguage"] != tc.wantSource || info["targetLanguage"] != tc.wantTarget || info["sessionId"] != first["sessionId"] {
+				t.Fatalf("wrong saved room info: %v", info)
+			}
+			if tc.prepareAgain {
+				_ = json.Unmarshal(httpJSON(t, teacher, base+"/transcription", "POST", map[string]string{"sourceLanguage": tc.wantSource, "targetLanguage": tc.wantTarget}, 200), &info)
+				if info["sessionId"] != first["sessionId"] {
+					t.Fatal("legacy room created a second session")
+				}
+				_, rec, err := app.read(context.Background(), room.Room.Code)
+				if err != nil || rec.Link.SourceLanguage != tc.wantSource || rec.Link.TargetLanguage != tc.wantTarget {
+					t.Fatalf("legacy languages not persisted: %+v %v", rec.Link, err)
+				}
+			}
+			f.mu.Lock()
+			parentSource, parentTarget := f.lastSession["source_language"], f.lastSession["target_language"]
+			f.mu.Unlock()
+			wantParentTarget := tc.wantTarget
+			if wantParentTarget == "" {
+				wantParentTarget = tc.wantSource
+			}
+			if parentSource != tc.wantSource || parentTarget != wantParentTarget {
+				t.Fatalf("wrong session languages: %s -> %s", parentSource, parentTarget)
+			}
+			socket, _, err := dialAudio(t, teacher, server.URL, room.Room.Code)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer socket.Close()
+			_ = socket.SetReadDeadline(time.Now().Add(5 * time.Second))
+			var event map[string]string
+			if err = socket.ReadJSON(&event); err != nil || event["type"] != "ready" {
+				t.Fatalf("provider rejected languages: %v %v", event, err)
+			}
+			f.mu.Lock()
+			start := f.lastStart
+			f.mu.Unlock()
+			if start["transcription_config"].(map[string]any)["language"] != tc.wantSource {
+				t.Fatalf("wrong transcription language: %v", start)
+			}
+			if tc.wantTarget == "" {
+				if start["translation_config"] != nil {
+					t.Fatal("translation enabled unexpectedly")
+				}
+			} else if start["translation_config"].(map[string]any)["target_languages"].([]any)[0] != tc.wantTarget {
+				t.Fatalf("wrong translation language: %v", start)
+			}
+			_ = socket.WriteJSON(map[string]string{"type": "stop"})
+			if err = socket.ReadJSON(&event); err != nil || event["type"] != "stopped" {
+				t.Fatalf("stream did not stop: %v %v", event, err)
+			}
+		})
+	}
+}
+
+func TestTranscriptionRejectsSameLanguageAliases(t *testing.T) {
+	f := newFakeYufolo(t)
+	app := New(storage.NewMemory(), Config{YufoloURL: f.server.URL})
+	server := httptest.NewServer(app.Handler())
+	defer server.Close()
+	teacher := integrationClient(t, server.URL, "teacher@example.com")
+	room := integratedRoom(t, teacher, server.URL)
+	base := server.URL + "/api/rooms/" + room.Room.Code
+	for _, source := range []string{"zh", "cmn"} {
+		for _, target := range []string{"zh", "cmn"} {
+			httpJSON(t, teacher, base+"/transcription", "POST", map[string]string{"sourceLanguage": source, "targetLanguage": target}, 400)
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.sessions) != 0 {
+		t.Fatal("invalid configuration created an upstream session")
+	}
 }
 
 func TestSharedTranscriptionSingleProducerArchiveAndStop(t *testing.T) {

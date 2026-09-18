@@ -78,6 +78,16 @@ func (s *Server) changeRecord(ctx context.Context, code string, change func(*Roo
 	}
 	return storage.ErrConflict
 }
+
+// Earlier YuAction releases used zh for Mandarin. DreamTrans and Speechmatics
+// use cmn for both transcription and translation; keep saved rooms compatible.
+func transcriptionLanguage(v string) string {
+	if v == "zh" {
+		return "cmn"
+	}
+	return v
+}
+
 func languageOK(v string) bool {
 	if len(v) < 2 || len(v) > 12 {
 		return false
@@ -103,6 +113,8 @@ func (s *Server) prepareTranscription(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	in.Source = transcriptionLanguage(in.Source)
+	in.Target = transcriptionLanguage(in.Target)
 	if !languageOK(in.Source) || (in.Target != "" && !languageOK(in.Target)) || in.Source == in.Target {
 		writeError(w, fail(400, "请选择原文和不同的翻译语言，或关闭翻译"))
 		return
@@ -122,6 +134,8 @@ func (s *Server) prepareTranscription(w http.ResponseWriter, r *http.Request) {
 			return fail(409, "请先重新开启活动")
 		}
 		if rec.Link.SessionID != "" {
+			rec.Link.SourceLanguage = transcriptionLanguage(rec.Link.SourceLanguage)
+			rec.Link.TargetLanguage = transcriptionLanguage(rec.Link.TargetLanguage)
 			if rec.Link.SourceLanguage != in.Source || rec.Link.TargetLanguage != in.Target {
 				return fail(409, "已关联会话的语言不能更改，请创建新活动")
 			}
@@ -175,7 +189,7 @@ func (s *Server) transcriptionInfo(w http.ResponseWriter, r *http.Request) {
 	s.streamMu.Lock()
 	active := s.streams[rec.Code] != nil
 	s.streamMu.Unlock()
-	respond(w, 200, map[string]any{"sessionId": rec.Link.SessionID, "sourceLanguage": rec.Link.SourceLanguage, "targetLanguage": rec.Link.TargetLanguage, "active": active, "linked": rec.Link.Created})
+	respond(w, 200, map[string]any{"sessionId": rec.Link.SessionID, "sourceLanguage": transcriptionLanguage(rec.Link.SourceLanguage), "targetLanguage": transcriptionLanguage(rec.Link.TargetLanguage), "active": active, "linked": rec.Link.Created})
 }
 func (s *Server) archiveSegment(ctx context.Context, a *loginSession, code string, link storage.Link, seg Segment) error {
 	status := "confirmed"
@@ -397,9 +411,9 @@ func (s *Server) audio(w http.ResponseWriter, r *http.Request) {
 			return nil
 		})
 	}()
-	config := map[string]any{"message": "StartRecognition", "audio_format": map[string]any{"type": "raw", "encoding": "pcm_s16le", "sample_rate": rate}, "transcription_config": map[string]any{"language": rec.Link.SourceLanguage, "enable_partials": true, "max_delay": 2}}
+	config := map[string]any{"message": "StartRecognition", "audio_format": map[string]any{"type": "raw", "encoding": "pcm_s16le", "sample_rate": rate}, "transcription_config": map[string]any{"language": transcriptionLanguage(rec.Link.SourceLanguage), "enable_partials": true, "max_delay": 2}}
 	if rec.Link.TargetLanguage != "" {
-		config["translation_config"] = map[string]any{"target_languages": []string{rec.Link.TargetLanguage}, "enable_partials": false}
+		config["translation_config"] = map[string]any{"target_languages": []string{transcriptionLanguage(rec.Link.TargetLanguage)}, "enable_partials": false}
 	}
 	upMu.Lock()
 	err = up.WriteJSON(config)

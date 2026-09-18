@@ -19,7 +19,7 @@ type Capture = {
   timer?: ReturnType<typeof setTimeout>;
 };
 const languages = [
-  ["zh", "中文"],
+  ["cmn", "中文"],
   ["en", "英语"],
   ["ja", "日语"],
   ["ko", "韩语"],
@@ -34,7 +34,7 @@ export default function TranscriptionPanel({
   room: Room;
   hostKey: string;
 }) {
-  const [source, setSource] = useState("zh");
+  const [source, setSource] = useState("cmn");
   const [target, setTarget] = useState("");
   const [link, setLink] = useState<Link | null>(null);
   const [state, setState] = useState("idle");

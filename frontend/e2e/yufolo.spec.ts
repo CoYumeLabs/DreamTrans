@@ -35,6 +35,7 @@ test("Yufolo login, one microphone, shared captions, pause and account recovery"
   await guest.goto(guestURL);
   await expect(guest.getByRole("heading", { name: title })).toBeVisible();
   await expect(guest.getByRole("button", { name: "开始转录" })).toHaveCount(0);
+  await expect(page.getByLabel("原文语言", { exact: true })).toHaveValue("cmn");
   await page.getByLabel("共享译文", { exact: true }).selectOption("en");
   await page.getByRole("button", { name: "开始转录", exact: true }).click();
   await expect(page.getByText("正在采集麦克风")).toBeVisible();
@@ -108,4 +109,37 @@ test("Yufolo login, one microphone, shared captions, pause and account recovery"
   ).toBeTruthy();
   await guestContext.close();
   await recoveredContext.close();
+});
+
+test("English to Chinese uses the provider Mandarin code and resumes the same room", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByLabel("邮箱", { exact: true }).fill("teacher@example.com");
+  await page.getByLabel("密码", { exact: true }).fill("test-password");
+  await page.getByRole("button", { name: "登录 Yufolo", exact: true }).click();
+  await expect(
+    page.getByText("已连接 Yufolo · 活动归属于此账号"),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "创建活动", exact: true }).click();
+  await page
+    .getByLabel("活动名称", { exact: true })
+    .fill("English to Chinese regression");
+  await page.getByRole("button", { name: "创建并进入工作台" }).click();
+  await page.getByLabel("原文语言", { exact: true }).selectOption("en");
+  await page
+    .getByLabel("共享译文", { exact: true })
+    .selectOption({ label: "中文" });
+  await expect(page.getByLabel("共享译文", { exact: true })).toHaveValue("cmn");
+  await page.getByRole("button", { name: "开始转录", exact: true }).click();
+  await expect(page.getByText("正在采集麦克风")).toBeVisible();
+  await page.getByRole("button", { name: "暂停转录", exact: true }).click();
+  await expect(page.getByText("麦克风未开启")).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel("共享译文", { exact: true })).toHaveValue("cmn");
+  await expect(page.getByLabel("共享译文", { exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "开始转录", exact: true }).click();
+  await expect(page.getByText("正在采集麦克风")).toBeVisible();
+  await page.getByRole("button", { name: "暂停转录", exact: true }).click();
+  await expect(page.getByText("麦克风未开启")).toBeVisible();
 });
