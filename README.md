@@ -41,7 +41,7 @@ npm run dev
 
 未设置 `DATABASE_URL` 的演示实例重启会丢失数据。要保留数据，同时设置 PostgreSQL 连接串。手机扫码测试需让手机能够访问前端：在可信局域网运行 `npm run dev -- --host 0.0.0.0`，通过主机局域网 IP 打开页面后再分享。公网部署应使用 HTTPS。
 
-## Docker Compose
+## Docker Compose（本地构建）
 
 ```bash
 cp .env.example .env
@@ -53,6 +53,24 @@ docker compose up -d --build
 访问 http://127.0.0.1:11452 。Compose 默认关闭演示模式，数据库持久化到 `yuaction_postgres` 卷；只有前端 Nginx 暴露本机端口。创建活动需要输入 `.env` 中的活动创建密钥。主持人仍通过每个房间独立的密钥管理活动。
 
 这不是完整的账号系统。公开上线前需要完成账户、成员授权、主持人恢复、内容管理与部署边界检查，见 [开发路线](docs/ROADMAP.md)。
+
+## 自动 Docker 发布（GHCR）
+
+推送 `main` 后先执行完整 CI，通过后自动发布前后端的 AMD64 / ARM64 镜像；两个组件均成功后才更新 `latest`。PR 只验证，不发布。推送 `v0.1.0` 等版本标签也会先验证，再发布对应版本。
+
+```text
+ghcr.io/coyumelabs/yuaction-backend:latest
+ghcr.io/coyumelabs/yuaction-frontend:latest
+```
+
+准备 `.env` 后，可以直接拉取镜像部署：
+
+```bash
+docker compose -f compose.ghcr.yml pull
+docker compose -f compose.ghcr.yml up -d --no-build
+```
+
+将 `.env` 的 `IMAGE_TAG` 设为同一个 `sha-<完整commit SHA>` 可固定前后端版本。首次发布的 GHCR 包可能需要设为 Public 或先登录才能拉取；详见 [发布、更新和回退说明](docs/DOCKER_RELEASE.md)。自动化范围为镜像发布，服务器更新使用上述命令。
 
 ## 配置
 

@@ -1,0 +1,71 @@
+# 自动 Docker 发布
+
+工作流：`.github/workflows/ci.yml`，GitHub Actions 中名为 **YuAction CI and Docker**。
+
+## 触发与顺序
+
+| 触发 | 验证 | 发布镜像 | 更新 latest |
+|---|---|---|---|
+| 推送 main | 是 | 是 | 两个镜像成功且提交仍为 main 最新版本时 |
+| 推送 v 开头的版本标签 | 是 | 是 | 否 |
+| Pull request | 是 | 否 | 否 |
+| 手动运行 main | 是 | 是 | 两个镜像成功且提交仍为 main 最新版本时 |
+
+`verify` 先完成 Go race 测试、PostgreSQL 集成测试、前端构建和浏览器测试。通过后，`publish` 并行构建两个组件的 `linux/amd64` 与 `linux/arm64` 镜像。全部成功后，单独的 `promote` 才更新 `latest`。因此失败的测试和 PR 不会发布镜像，一个组件构建失败也不会触发 latest 更新。
+
+工作流按 Git ref 串行运行，且提升 latest 前检查远程 main，防止重新运行旧提交时回退 latest。跨镜像的两个标签更新仍不是注册表层面的原子事务；正式部署建议使用同一个 SHA 标签固定前后端版本。
+
+## 镜像与标签
+
+```text
+ghcr.io/coyumelabs/yuaction-backend:latest
+ghcr.io/coyumelabs/yuaction-frontend:latest
+```
+
+- 每次发布都有 `sha-<完整40位commit SHA>` 标签，前后端一致，便于固定版本和回退。
+- 推送 `v0.1.0` 这样的 SemVer 标签时，额外生成 `0.1.0` 镜像标签；预发布版本保留后缀。
+- 镜像附带源码、提交信息、构建 provenance 和 SBOM；各组件摘要记录在 Actions 运行摘要中。
+- 使用仓库的 `GITHUB_TOKEN` 和仅发布任务授予的 `packages: write`，不需要新增 Docker Hub 密码。
+
+## 拉取与运行
+
+服务器需要 Docker 和 Docker Compose，只需 `compose.ghcr.yml` 与 `.env`，不需要 Go / Node 或本地编译。
+
+```bash
+cp .env.example .env
+# 设置 POSTGRES_PASSWORD、YUACTION_CREATOR_KEY（分别生成随机值）
+# 设置 IMAGE_TAG=sha-<目标提交>，或测试时使用 latest
+docker compose -f compose.ghcr.yml pull
+docker compose -f compose.ghcr.yml up -d --no-build
+```
+
+默认访问 `http://127.0.0.1:11452`。对外访问可沿用本机 HTTPS 反向代理，或按部署环境调整 `APP_BIND` / `APP_PORT`。数据库不暴露宿主端口，数据保存在同一个 `yuaction_postgres` 卷中。
+
+源代码构建用 `compose.yml`；拉取已发布镜像用 `compose.ghcr.yml`。两者使用相同 project 名、服务名、环境变量与数据卷，在同一个部署目录切换不需要删除数据库。
+
+### 首次 GHCR 访问
+
+GitHub 仓库公开不意味着首次创建的容器包自动公开。如果匿名拉取提示 denied，请将组织 Packages 中的两个镜像设为 Public，或使用拥有该包读取权限的账号登录 GHCR：
+
+```bash
+# 交互输入 GitHub 用户名，以及具有 read:packages 权限的 PAT classic。
+docker login ghcr.io
+```
+
+如果组织策略禁止工作流创建包，需要管理员允许仓库使用 `GITHUB_TOKEN` 发布容器包。具体错误可在发布任务日志中查看。
+
+## 更新与回退
+
+修改 `.env` 的 `IMAGE_TAG`，然后执行：
+
+```bash
+docker compose -f compose.ghcr.yml pull
+docker compose -f compose.ghcr.yml up -d --no-build
+docker compose -f compose.ghcr.yml ps
+```
+
+回退时把 `IMAGE_TAG` 改为之前成功部署的 SHA 标签，再执行同样命令。保留数据库卷；后续出现数据库 schema 迁移时，应先核对该版本的数据兼容性。
+
+当前自动化截止于镜像发布，不会登录服务器替换运行中的容器。服务器自动更新需要另外配置目标环境和部署凭证。
+
+参考：[GitHub 容器注册表](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)、[Docker 多平台构建](https://docs.docker.com/build/building/multi-platform/)。

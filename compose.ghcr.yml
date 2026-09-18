@@ -1,0 +1,38 @@
+name: yuaction
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: yuaction
+      POSTGRES_DB: yuaction
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - yuaction_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U yuaction -d yuaction"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    restart: unless-stopped
+  backend:
+    image: ${IMAGE_PREFIX:-ghcr.io/coyumelabs/yuaction}-backend:${IMAGE_TAG:-latest}
+    environment:
+      DATABASE_URL: postgres://yuaction:${POSTGRES_PASSWORD}@db:5432/yuaction?sslmode=disable
+      LISTEN_ADDR: 0.0.0.0:18083
+      YUACTION_CREATOR_KEY: ${YUACTION_CREATOR_KEY:?Set YUACTION_CREATOR_KEY in .env}
+      YUFOLO_INGEST_KEY: ${YUFOLO_INGEST_KEY:-}
+      YUACTION_DEMO: ${YUACTION_DEMO:-false}
+      TRUST_PROXY: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+  frontend:
+    image: ${IMAGE_PREFIX:-ghcr.io/coyumelabs/yuaction}-frontend:${IMAGE_TAG:-latest}
+    ports:
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-11452}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+volumes:
+  yuaction_postgres:
