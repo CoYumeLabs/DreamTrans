@@ -14,6 +14,17 @@ test("host, two participants and display share questions and captions", async ({
     page.getByRole("heading", { name: "设计思维 · 第一堂课", exact: true }),
   ).toBeVisible();
   const code = page.url().match(/rooms\/([A-F0-9]+)\/host/)![1];
+  await page.getByRole("button", { name: "邀请参与", exact: true }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page.getByLabel("邀请链接")).toHaveValue(
+    new RegExp(`/rooms/${code}$`),
+  );
+  await page.screenshot({ path: "test-results/invite.png" });
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).not.toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "邀请参与", exact: true }),
+  ).toBeFocused();
   const one = await browser.newContext({
     viewport: { width: 390, height: 844 },
   });

@@ -6,6 +6,8 @@ import {
   GraduationCap,
   LayoutDashboard,
   MessageCircle,
+  Radio,
+  ScanLine,
   Mic,
   Plus,
   Users,
@@ -27,6 +29,8 @@ export default function Home() {
   const [error, setError] = useState("");
   const [user, setUser] = useState<Account | null>(null);
   const [ownedRooms, setOwnedRooms] = useState<Room[]>([]);
+  const [awaitingLogin, setAwaitingLogin] = useState(false);
+  const accountSlot = useRef<HTMLDivElement>(null);
   const rooms = config?.yufoloConnected ? ownedRooms : recentRooms();
   useEffect(() => {
     if (!user) {
@@ -38,6 +42,27 @@ export default function Home() {
       .catch((e) => setError(e.message));
   }, [user]);
   const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (user && awaitingLogin) {
+      setAwaitingLogin(false);
+      setCreating(true);
+    }
+  }, [user, awaitingLogin]);
+  function beginCreate() {
+    setError("");
+    if (config?.yufoloConnected && !user) {
+      setAwaitingLogin(true);
+      accountSlot.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+      accountSlot.current
+        ?.querySelector("input")
+        ?.focus({ preventScroll: true });
+      return;
+    }
+    setCreating(true);
+  }
   useEffect(() => {
     if (creating) dialog.current?.showModal();
     else dialog.current?.close();
@@ -74,7 +99,7 @@ export default function Home() {
     <div className="app-shell">
       <aside className="sidebar">
         <Brand />
-        <div className="workspace-label">YOUR WORKSPACE</div>
+        <div className="workspace-label">工作空间</div>
         <nav>
           <a className="nav-item active" href="/">
             <LayoutDashboard size={18} />
@@ -96,7 +121,7 @@ export default function Home() {
           </a>
         </nav>
         <div className="sidebar-note">
-          <span className="mini-label">BUILT FOR CONNECTION</span>
+          <span className="mini-label">专为真实的交流</span>
           <p>
             好的表达，
             <br />
@@ -107,104 +132,111 @@ export default function Home() {
         <div className="sidebar-bottom">
           <span className="avatar">Y</span>
           <div>
-            <strong>YuAction 预览版</strong>
-            <small>一起，让现场发生连接</small>
+            <strong>现场，从这里开始</strong>
+            <small>课堂 · 演讲 · 每一次分享</small>
           </div>
         </div>
       </aside>
       <main className="home-main">
         <header className="topbar">
-          <span>
+          <span className="workspace-breadcrumb">
             工作空间 <ChevronRight size={14} />
             <strong>活动概览</strong>
           </span>
-          <Pill tone="neutral">EARLY PREVIEW · 0.1</Pill>
+          <div className="mobile-brand">
+            <Brand />
+          </div>
+          <span className="topbar-note">
+            <Radio size={14} /> 让交流发生在现场
+          </span>
         </header>
         <div className="home-content">
-          {config?.yufoloConnected && <AccountPanel onChange={setUser} />}
           <div className="page-heading">
             <div>
-              <div className="eyebrow">A LITTLE MORE CONNECTION</div>
+              <div className="eyebrow">YOUR NEXT CONVERSATION</div>
               <h1>
                 让每一次表达，都有回应<span>。</span>
               </h1>
-              <p>把提问、理解与交流，带回同一个现场。</p>
+              <p>创建一个活动，把实时字幕、现场提问和每一位听众连接起来。</p>
             </div>
-            <Button
-              className="primary"
-              onClick={() => setCreating(true)}
-              disabled={!config || (config.yufoloConnected && !user)}
-            >
-              <Plus size={18} />
-              创建活动
-            </Button>
-          </div>
-          <section className="hero-card">
-            <div className="hero-copy">
-              <Pill>
-                <span className="tiny-dot" />
-                为课堂与演讲而生
-              </Pill>
-              <h2>
-                你专注讲述。
-                <br />
-                我们连接每一个人。
-              </h2>
-              <p>
-                一个房间，让台上的表达与台下的思考相遇。
-                <br />
-                扫码参与、实时提问，让每个问题被看见。
-              </p>
+            <div className="page-actions">
+              <a href="#join" className="button outline">
+                <Users size={16} />
+                加入活动
+              </a>
               <Button
-                className="dark"
-                onClick={() => setCreating(true)}
-                disabled={!config || (config.yufoloConnected && !user)}
+                className="primary"
+                onClick={beginCreate}
+                disabled={!config}
               >
-                开启你的第一场互动
-                <ArrowRight size={17} />
+                <Plus size={18} />
+                创建活动
               </Button>
             </div>
-            <div className="hero-art" aria-hidden="true">
-              <div className="orbit orbit-one" />
-              <div className="orbit orbit-two" />
-              <div className="art-host">
-                <span className="art-icon">
-                  <Mic size={25} />
+          </div>
+          <div
+            className={`welcome-grid ${config?.yufoloConnected ? "with-account" : ""} ${user ? "is-authenticated" : ""}`}
+          >
+            <section className="hero-card">
+              <div className="hero-copy">
+                <span className="hero-label">
+                  <span className="tiny-dot" /> 一场讲述，多种回应
                 </span>
-                <div>
-                  <strong>一个讲台</strong>
-                  <small>开启连接</small>
+                <h2>
+                  你专注讲述。
+                  <br />
+                  <span>让全场，跟上你的想法。</span>
+                </h2>
+                <p>
+                  字幕跟随声音，问题随时抵达。
+                  <br />
+                  为课堂和演讲，留出更多交流的空间。
+                </p>
+                <a href="#join" className="hero-link">
+                  受邀参加？加入活动 <ArrowRight size={16} />
+                </a>
+              </div>
+              <div className="hero-visual" aria-hidden="true">
+                <div className="signal-ring ring-outer" />
+                <div className="signal-ring ring-inner" />
+                <div className="signal-center">
+                  <AudioLines size={38} strokeWidth={1.5} />
                 </div>
-                <AudioLines size={26} />
+                <span className="signal-chip chip-caption">
+                  <AudioLines size={15} /> 实时字幕
+                </span>
+                <span className="signal-chip chip-question">
+                  <MessageCircle size={15} /> 现场提问
+                </span>
+                <span className="signal-chip chip-people">
+                  <Users size={15} /> 共同参与
+                </span>
               </div>
-              <div className="art-note">
-                <span className="avatar lavender">Y</span>
-                <div>
-                  让思考，加入对话。
-                  <span className="art-bars">
-                    <i />
-                    <i />
-                    <i />
-                    <i />
-                    <i />
-                    <i />
-                    <i />
-                    <i />
-                  </span>
-                </div>
+              <div className="hero-steps">
+                <span>
+                  <ScanLine size={16} /> 扫码加入
+                </span>
+                <i />
+                <span>
+                  <AudioLines size={16} /> 字幕同步
+                </span>
+                <i />
+                <span>
+                  <MessageCircle size={16} /> 随时提问
+                </span>
               </div>
-              <div className="art-question">
-                <MessageCircle size={17} />
-                <span>这个部分，可以再讲讲吗？</span>
+            </section>
+            {config?.yufoloConnected && (
+              <div className="account-slot" ref={accountSlot}>
+                {awaitingLogin && (
+                  <p className="account-prompt" role="status">
+                    先登录，随后继续创建你的活动。
+                  </p>
+                )}
+                <AccountPanel onChange={setUser} />
               </div>
-              <div className="art-audience">
-                <span className="avatar peach">A</span>
-                <span className="avatar green">B</span>
-                <span className="avatar lavender">C</span>
-                <span className="audience-caption">每个人，都在现场</span>
-              </div>
-            </div>
-          </section>
+            )}
+          </div>
           <div className="section-title">
             <div>
               <h2>
@@ -212,26 +244,33 @@ export default function Home() {
               </h2>
               <p>
                 {config?.yufoloConnected
-                  ? "此 Yufolo 账号创建的课堂与演讲"
+                  ? "你的课堂与演讲，都在这里"
                   : "此浏览器最近创建的课堂与演讲"}
               </p>
             </div>
-            <span className="muted-label">一个房间，无限种交流</span>
+            <span className="muted-label">随时回到你的现场</span>
           </div>
-          <div className="activity-grid">
+          <div className={`activity-grid ${rooms.length ? "" : "is-empty"}`}>
             {rooms.map((room) => (
               <a
                 className="activity-card"
                 href={`/rooms/${room.code}/host`}
                 key={room.code}
               >
-                <span className={`activity-icon ${room.kind}`}>
-                  {room.kind === "classroom" ? (
-                    <GraduationCap size={24} />
-                  ) : (
-                    <Mic size={24} />
+                <div className="activity-card-header">
+                  <span className={`activity-icon ${room.kind}`}>
+                    {room.kind === "classroom" ? (
+                      <GraduationCap size={24} />
+                    ) : (
+                      <Mic size={24} />
+                    )}
+                  </span>
+                  {"status" in room && (
+                    <Pill tone={room.status === "live" ? "green" : "neutral"}>
+                      {room.status === "live" ? "进行中" : "已结束"}
+                    </Pill>
                   )}
-                </span>
+                </div>
                 <div className="activity-card-title">
                   <h3>{room.title}</h3>
                   <ArrowRight size={18} />
@@ -248,14 +287,18 @@ export default function Home() {
             ))}
             <button
               className="new-activity"
-              onClick={() => setCreating(true)}
-              disabled={!config || (config.yufoloConnected && !user)}
+              onClick={beginCreate}
+              disabled={!config}
             >
               <span>
                 <Plus size={24} />
               </span>
               <strong>创建新的活动</strong>
-              <small>下一次连接，从这里开始</small>
+              <small>
+                {rooms.length
+                  ? "为下一次分享准备一个空间"
+                  : "给活动起个名字，邀请大家一起加入。"}
+              </small>
             </button>
           </div>
           <div className="home-bottom-grid">
@@ -316,14 +359,16 @@ export default function Home() {
       </main>
       <dialog
         ref={dialog}
+        aria-labelledby="create-activity-title"
         onCancel={() => setCreating(false)}
+        onClose={() => setCreating(false)}
         className="create-dialog"
       >
         <form onSubmit={create}>
           <div className="dialog-heading">
             <div>
-              <div className="eyebrow">MAKE ROOM FOR IDEAS</div>
-              <h2>开启一场新的连接</h2>
+              <div className="eyebrow">NEW SESSION</div>
+              <h2 id="create-activity-title">创建活动</h2>
             </div>
             <button
               className="icon-button"
@@ -351,6 +396,7 @@ export default function Home() {
               <button
                 type="button"
                 className={kind === "classroom" ? "selected" : ""}
+                aria-pressed={kind === "classroom"}
                 onClick={() => setKind("classroom")}
               >
                 <GraduationCap size={24} />
@@ -360,6 +406,7 @@ export default function Home() {
               <button
                 type="button"
                 className={kind === "talk" ? "selected" : ""}
+                aria-pressed={kind === "talk"}
                 onClick={() => setKind("talk")}
               >
                 <Mic size={24} />

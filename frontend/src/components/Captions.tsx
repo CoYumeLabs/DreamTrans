@@ -21,7 +21,10 @@ export default function Captions({
       list.current.scrollTop = list.current.scrollHeight;
   }, [latest, language, follow]);
   return (
-    <section className={`panel caption-panel ${large ? "large-captions" : ""}`}>
+    <section
+      id="captions"
+      className={`panel caption-panel ${large ? "large-captions" : ""}`}
+    >
       <div className="panel-heading">
         <h3>
           <AudioLines size={18} />

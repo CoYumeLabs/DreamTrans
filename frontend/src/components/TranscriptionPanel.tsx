@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type Room } from "../api";
 import { Button, ErrorNote, Pill } from "./ui";
+import { AudioLines, Mic, Pause } from "lucide-react";
 
 type Link = {
   sessionId: string;
@@ -223,9 +224,23 @@ export default function TranscriptionPanel({
     }
   }
   const working = state !== "idle";
+  const recordingElsewhere =
+    state === "idle" && room.transcription === "recording";
   return (
-    <section className="panel transcription-panel">
-      <h3>共享实时转录</h3>
+    <section
+      id="transcription"
+      className={`panel transcription-panel ${state === "recording" ? "is-recording" : ""}`}
+    >
+      <div className="transcription-heading">
+        <span className="control-icon">
+          <Mic size={22} />
+        </span>
+        <div>
+          <span className="eyebrow">LIVE TRANSCRIPTION</span>
+          <h3>共享实时转录</h3>
+        </div>
+        <AudioLines className="control-wave" size={28} />
+      </div>
       <Pill tone={state === "recording" ? "green" : "neutral"}>
         {state === "recording"
           ? "正在采集麦克风"
@@ -233,50 +248,55 @@ export default function TranscriptionPanel({
             ? "正在连接…"
             : state === "stopping"
               ? "正在保存最后的字幕…"
-              : "麦克风未开启"}
+              : recordingElsewhere
+                ? "其他主持端正在转录"
+                : "麦克风未开启"}
       </Pill>
-      <label>
-        原文语言
-        <select
-          aria-label="原文语言"
-          value={source}
-          disabled={working || !!link?.sessionId}
-          onChange={(e) => {
-            setSource(e.target.value);
-            if (e.target.value === target) setTarget("");
-          }}
-        >
-          {languages.map(([v, name]) => (
-            <option key={v} value={v}>
-              {name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        共享译文
-        <select
-          aria-label="共享译文"
-          value={target}
-          disabled={working || !!link?.sessionId}
-          onChange={(e) => setTarget(e.target.value)}
-        >
-          <option value="">不翻译</option>
-          {languages
-            .filter(([v]) => v !== source)
-            .map(([v, name]) => (
+      <div className="language-fields">
+        <label>
+          原文语言
+          <select
+            aria-label="原文语言"
+            value={source}
+            disabled={working || !!link?.sessionId}
+            onChange={(e) => {
+              setSource(e.target.value);
+              if (e.target.value === target) setTarget("");
+            }}
+          >
+            {languages.map(([v, name]) => (
               <option key={v} value={v}>
                 {name}
               </option>
             ))}
-        </select>
-      </label>
+          </select>
+        </label>
+        <label>
+          共享译文
+          <select
+            aria-label="共享译文"
+            value={target}
+            disabled={working || !!link?.sessionId}
+            onChange={(e) => setTarget(e.target.value)}
+          >
+            <option value="">不翻译</option>
+            {languages
+              .filter(([v]) => v !== source)
+              .map(([v, name]) => (
+                <option key={v} value={v}>
+                  {name}
+                </option>
+              ))}
+          </select>
+        </label>
+      </div>
       <p>
         仅此主持端采集音频，观众共享字幕。转录和所选翻译使用你的 Yufolo 余额。
       </p>
       <ErrorNote message={error} />
       {state === "recording" ? (
         <Button className="outline full" onClick={() => void stop()}>
+          <Pause size={17} />
           暂停转录
         </Button>
       ) : state === "starting" ? (
@@ -293,10 +313,17 @@ export default function TranscriptionPanel({
       ) : (
         <Button
           className="primary full"
-          disabled={working || room.status !== "live"}
+          disabled={working || recordingElsewhere || room.status !== "live"}
           onClick={() => void start()}
         >
-          {working ? "请稍候…" : "开始转录"}
+          <Mic size={17} />
+          {working
+            ? "请稍候…"
+            : recordingElsewhere
+              ? "正在接收共享字幕"
+              : room.status !== "live"
+                ? "活动已结束"
+                : "开始转录"}
         </Button>
       )}
       {link?.linked && (

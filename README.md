@@ -6,12 +6,14 @@ YuAction 面向教师与演讲者，把活动、现场提问、大屏与共享�
 
 **当前版本：开发预览。** 已实现多人互动、Yufolo 账号登录、主持端麦克风转录与共享字幕。真实转录由主持人明确开启，使用其 Yufolo 余额；独立的演示字幕仍不调用付费服务。
 
-界面预览：[活动空间](docs/previews/workspace.png) · [主持人工作台](docs/previews/host.png) · [手机参与页](docs/previews/participant-mobile.png) · [现场大屏](docs/previews/display.png)
+界面预览：[登录首页](docs/previews/login.png) · [活动空间](docs/previews/workspace.png) · [主持人工作台](docs/previews/host.png) · [手机参与页](docs/previews/participant-mobile.png) · [现场大屏](docs/previews/display.png)
 
 ## 已实现
 
 - 创建课堂 / 演讲，生成房间码、邀请链接和二维码。
 - 主持人工作台、手机参与页、独立大屏，采用 React + TypeScript。
+- 创建活动时引导登录并自动继续；已登录用户直接查看活动，显示进行中 / 已结束状态。
+- 邀请弹窗集中展示二维码和链接；手机端提供字幕 / 提问快捷入口，跨设备录音状态明确提示。
 - 匿名公开提问，可引用一段共享字幕。
 - 主持人展示问题、标记已解答、结束和重新开启活动。
 - 房间内 SSE 实时同步；重连获取最新快照，不会修改其他房间的上屏状态。
@@ -145,7 +147,7 @@ frontend/
   e2e/                   多浏览器功能测试
 docs/
   ARCHITECTURE.md         当前设计与边界
-  YUFOLO_INTEGRATION.md   已实现的接收接口与待实现的房间联动
+  YUFOLO_INTEGRATION.md   账号、会话与实时转录联动
   ROADMAP.md              后续开发顺序
 ```
 

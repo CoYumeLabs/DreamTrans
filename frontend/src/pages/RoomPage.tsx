@@ -10,6 +10,7 @@ import {
   Radio,
   Send,
   Settings2,
+  Users,
   X,
 } from "lucide-react";
 import { api, type Room, type Segment } from "../api";
@@ -52,6 +53,7 @@ export default function RoomPage({
     "Welcome to today’s class. Feel free to ask a question at any time.",
   );
   const questionInput = useRef<HTMLTextAreaElement>(null);
+  const inviteDialog = useRef<HTMLDialogElement>(null);
   const host = isHost || !!hostKey;
   async function mutate(path: string, body: unknown, method = "POST") {
     setBusy(true);
@@ -132,7 +134,9 @@ export default function RoomPage({
         <div className="room-heading">
           <div>
             <div className="eyebrow">
-              {host ? "YOUR LIVE WORKSPACE" : "A SPACE FOR EVERY VOICE"}
+              {host
+                ? "主持人工作台 / LIVE WORKSPACE"
+                : "一起参与 / LIVE SESSION"}
             </div>
             <h1>{room.title}</h1>
             <div className="room-subtitle">
@@ -146,6 +150,13 @@ export default function RoomPage({
           </div>
           {host && (
             <div className="heading-actions">
+              <Button
+                className="primary"
+                onClick={() => inviteDialog.current?.showModal()}
+              >
+                <Users size={17} />
+                邀请参与
+              </Button>
               <a
                 className="button soft"
                 href={`/rooms/${code}/display`}
@@ -177,6 +188,29 @@ export default function RoomPage({
             </div>
           )}
         </div>
+        <nav className="room-shortcuts" aria-label="活动内容">
+          {host && config?.yufoloConnected && (
+            <a href="#transcription">
+              <AudioLines size={15} />
+              转录控制
+            </a>
+          )}
+          <a href="#captions">
+            <AudioLines size={15} />
+            共享字幕
+          </a>
+          {!host && room.status === "live" && (
+            <a href="#ask">
+              <Send size={15} />
+              我要提问
+            </a>
+          )}
+          <a href="#questions">
+            <MessageCircle size={15} />
+            {host ? "现场提问" : "大家的提问"}
+            <span>{room.questions.length}</span>
+          </a>
+        </nav>
         <ErrorNote message={loadError || error} />
         {notice && (
           <div className="notice" role="status">
@@ -239,7 +273,7 @@ export default function RoomPage({
         <div className="room-grid">
           <div className="room-primary">
             {!host && (
-              <section className="panel question-compose">
+              <section className="panel question-compose" id="ask">
                 <div className="panel-heading">
                   <h3>你的问题，值得被听见。</h3>
                   <MessageCircle size={19} />
@@ -284,7 +318,7 @@ export default function RoomPage({
                 </form>
               </section>
             )}
-            <section className="panel questions-panel">
+            <section className="panel questions-panel" id="questions">
               <div className="panel-heading">
                 <h3>
                   {host ? "现场提问" : "大家的提问"}{" "}
@@ -302,6 +336,7 @@ export default function RoomPage({
                   <button
                     key={value}
                     className={filter === value ? "selected" : ""}
+                    aria-pressed={filter === value}
                     onClick={() => setFilter(value)}
                   >
                     {label}
@@ -344,7 +379,6 @@ export default function RoomPage({
             />
           </div>
           <aside className="room-aside">
-            <Share room={room} />
             {host && config?.yufoloConnected ? (
               <TranscriptionPanel room={room} hostKey={hostKey} />
             ) : (
@@ -375,6 +409,7 @@ export default function RoomPage({
                 </Pill>
               </section>
             )}
+            {!host && <Share room={room} />}
             {host && config?.demo && (
               <section className="panel demo-panel">
                 <div className="panel-heading">
@@ -459,6 +494,28 @@ export default function RoomPage({
           <span>{host ? "主持人工作台" : "参与者空间"}</span>
         </footer>
       </main>
+      {host && (
+        <dialog
+          ref={inviteDialog}
+          className="create-dialog invite-dialog"
+          aria-labelledby="invite-activity-title"
+        >
+          <div className="dialog-heading">
+            <div>
+              <span className="eyebrow">INVITE YOUR AUDIENCE</span>
+              <h2 id="invite-activity-title">分享这个现场</h2>
+            </div>
+            <button
+              className="icon-button"
+              aria-label="关闭邀请"
+              onClick={() => inviteDialog.current?.close()}
+            >
+              <X size={20} />
+            </button>
+          </div>
+          <Share room={room} />
+        </dialog>
+      )}
     </div>
   );
 }
