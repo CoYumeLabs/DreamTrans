@@ -35,14 +35,21 @@ type Store interface {
 	Save(context.Context, int64, Record) error
 	Ping(context.Context) error
 	ListOwned(context.Context, string) ([]Record, error)
+	ListPrivate(context.Context, string, string) ([]PrivateRecord, error)
+	GetPrivate(context.Context, string, string, string) (PrivateRecord, error)
+	SavePrivate(context.Context, int64, PrivateRecord) error
+	DeletePrivate(context.Context, string, string, string) error
 }
 
 type Memory struct {
-	mu    sync.RWMutex
-	rooms map[string]Record
+	mu      sync.RWMutex
+	rooms   map[string]Record
+	private map[string]PrivateRecord
 }
 
-func NewMemory() *Memory    { return &Memory{rooms: make(map[string]Record)} }
+func NewMemory() *Memory {
+	return &Memory{rooms: make(map[string]Record), private: make(map[string]PrivateRecord)}
+}
 func clone(r Record) Record { r.Data = append([]byte(nil), r.Data...); return r }
 func (m *Memory) Create(_ context.Context, r Record) error {
 	m.mu.Lock()

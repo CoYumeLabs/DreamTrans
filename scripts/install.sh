@@ -156,6 +156,9 @@ compose_at() {
   # A caller's exported variables must not override saved database credentials.
   env -u POSTGRES_PASSWORD -u YUACTION_CREATOR_KEY -u YUFOLO_INGEST_KEY \
     -u POSTGRES_USER -u POSTGRES_DB -u DREAMTRANS_NETWORK -u DREAMTRANS_DB_HOST -u YUFOLO_URL \
+    -u OPENAI_API_KEY -u OPENAI_API_KEYs -u OPENAI_API_BASE -u OPENAI_API_URL -u OPENAI_MODEL \
+    -u OPENAI_EMBEDDING_API_KEY -u OPENAI_EMBEDDING_API_URL -u OPENAI_EMBEDDING_MODEL \
+    -u GENERIC_SYSTEM_PROMPT -u KB_SYSTEM_PROMPT \
     -u YUACTION_DEMO -u APP_BIND -u APP_PORT -u IMAGE_TAG -u IMAGE_PREFIX \
     -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME -u COMPOSE_ENV_FILES COMPOSE_PROFILES= \
     docker compose --project-name "$project" --project-directory "$install_dir" \

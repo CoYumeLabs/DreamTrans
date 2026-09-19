@@ -28,6 +28,8 @@ import Captions from "../components/Captions";
 import Share from "../components/Share";
 import QuestionCard from "../components/QuestionCard";
 import TranscriptionPanel from "../components/TranscriptionPanel";
+import AssistantPanel from "../components/AssistantPanel";
+import { useAssistant } from "../useAssistant";
 
 export default function RoomPage({
   code,
@@ -55,6 +57,7 @@ export default function RoomPage({
   const questionInput = useRef<HTMLTextAreaElement>(null);
   const inviteDialog = useRef<HTMLDialogElement>(null);
   const host = isHost || !!hostKey;
+  const assistant = useAssistant(code, hostKey, host);
   async function mutate(path: string, body: unknown, method = "POST") {
     setBusy(true);
     setError("");
@@ -272,6 +275,15 @@ export default function RoomPage({
         )}
         <div className="room-grid">
           <div className="room-primary">
+            {host && (
+              <AssistantPanel
+                code={code}
+                hostKey={hostKey}
+                info={assistant.info}
+                error={assistant.error}
+                refresh={assistant.refresh}
+              />
+            )}
             {!host && (
               <section className="panel question-compose" id="ask">
                 <div className="panel-heading">
@@ -351,6 +363,19 @@ export default function RoomPage({
                       key={q.id}
                       host={host}
                       disabled={busy || room.status !== "live"}
+                      aiEnabled={assistant.info?.configured}
+                      draft={assistant.info?.answers.find(
+                        (a) => a.questionId === q.id,
+                      )}
+                      onGenerate={() => void assistant.generate(q.id)}
+                      onDelete={() => {
+                        if (confirm("删除这个问题及其 AI 草稿？"))
+                          void mutate(
+                            `/questions/${q.id}`,
+                            undefined,
+                            "DELETE",
+                          );
+                      }}
                       onStatus={(status) =>
                         void mutate(`/questions/${q.id}`, { status }, "PATCH")
                       }
@@ -372,6 +397,8 @@ export default function RoomPage({
               )}
             </section>
             <Captions
+              code={code}
+              chooseTranslation={!host && !!config?.yufoloConnected}
               segments={room.segments}
               onQuote={
                 host || room.status !== "live" ? undefined : quoteSegment

@@ -11,18 +11,22 @@ type Question struct {
 	CreatedAt  time.Time `json:"createdAt"`
 }
 
-// Only finalized segments enter the shared room. ID is the provider's stable
-// event identifier: retries replace neither content nor sequence.
+// Final recognition fragments form stable caption cards. Appended fragments
+// update a card without duplicating its identity; translations key by language.
 type Segment struct {
-	ID          string    `json:"id"`
-	Text        string    `json:"text"`
-	Translation string    `json:"translation,omitempty"`
-	Source      string    `json:"source"`
-	CreatedAt   time.Time `json:"createdAt"`
-	StartTime   float64   `json:"startTime,omitempty"`
-	EndTime     float64   `json:"endTime,omitempty"`
-	Speaker     string    `json:"speaker,omitempty"`
-	Archived    bool      `json:"archived,omitempty"`
+	ID                string            `json:"id"`
+	Text              string            `json:"text"`
+	Translation       string            `json:"translation,omitempty"`
+	Source            string            `json:"source"`
+	CreatedAt         time.Time         `json:"createdAt"`
+	StartTime         float64           `json:"startTime,omitempty"`
+	EndTime           float64           `json:"endTime,omitempty"`
+	Speaker           string            `json:"speaker,omitempty"`
+	Archived          bool              `json:"archived,omitempty"`
+	UpdatedAt         time.Time         `json:"updatedAt,omitempty"`
+	Parts             int               `json:"parts,omitempty"`
+	Translations      map[string]string `json:"translations,omitempty"`
+	TranslationErrors map[string]string `json:"translationErrors,omitempty"`
 }
 
 type Room struct {

@@ -1,4 +1,6 @@
-import { AudioLines, Check, Monitor } from "lucide-react";
+import { AudioLines, Check, Monitor, Sparkles, Trash2 } from "lucide-react";
+import type { AnswerDraft as Draft } from "../useAssistant";
+import AnswerDraft from "./AnswerDraft";
 import type { Question } from "../api";
 import { Button, Pill, Time } from "./ui";
 
@@ -7,11 +9,19 @@ export default function QuestionCard({
   host,
   disabled,
   onStatus,
+  onDelete,
+  onGenerate,
+  draft,
+  aiEnabled,
 }: {
   question: Question;
   host: boolean;
   disabled: boolean;
   onStatus: (status: Question["status"]) => void;
+  onDelete?: () => void;
+  onGenerate?: () => void;
+  draft?: Draft;
+  aiEnabled?: boolean;
 }) {
   return (
     <article className={`question-card ${q.status}`}>
@@ -48,6 +58,18 @@ export default function QuestionCard({
       <p>{q.content}</p>
       {host && (
         <div className="question-actions">
+          <Button
+            className="soft small"
+            disabled={
+              !aiEnabled ||
+              draft?.generic.status === "processing" ||
+              draft?.knowledge.status === "processing"
+            }
+            onClick={onGenerate}
+          >
+            <Sparkles size={14} />
+            {draft ? "重新生成 AI 建议" : "生成 AI 建议"}
+          </Button>
           {q.status !== "showing" && (
             <Button
               className="soft small"
@@ -77,8 +99,17 @@ export default function QuestionCard({
               移回待回应
             </Button>
           )}
+          <Button
+            className="text small"
+            onClick={onDelete}
+            aria-label={`删除问题：${q.content}`}
+          >
+            <Trash2 size={14} />
+            删除
+          </Button>
         </div>
       )}
+      {host && draft && <AnswerDraft draft={draft} />}
     </article>
   );
 }

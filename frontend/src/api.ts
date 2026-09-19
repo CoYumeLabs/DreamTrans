@@ -12,6 +12,11 @@ export type Segment = {
   translation?: string;
   source: "demo" | "yufolo";
   createdAt: string;
+  updatedAt?: string;
+  startTime?: number;
+  endTime?: number;
+  translations?: Record<string, string>;
+  translationErrors?: Record<string, string>;
 };
 export type Room = {
   code: string;

@@ -27,6 +27,7 @@ type Config struct {
 	IngestKey  string
 	TrustProxy bool
 	YufoloURL  string
+	AI         AIConfig
 }
 type Server struct {
 	store    storage.Store
@@ -40,6 +41,9 @@ type Server struct {
 	streamMu sync.Mutex
 	streams  map[string]*liveStream
 	controls map[string]bool
+	aiMu     sync.Mutex
+	aiJobs   map[string]context.CancelFunc
+	aiHosts  map[string]*loginSession
 }
 type limit struct {
 	n     int
@@ -55,6 +59,8 @@ func fail(status int, message string) error { return apiError{status, message} }
 
 func New(store storage.Store, cfg Config) *Server {
 	s := &Server{store: store, cfg: cfg, hub: newHub(), limits: make(map[string]limit), sessions: make(map[string]*loginSession), streams: make(map[string]*liveStream), controls: make(map[string]bool)}
+	s.aiJobs = make(map[string]context.CancelFunc)
+	s.aiHosts = make(map[string]*loginSession)
 	if cfg.YufoloURL != "" {
 		s.yufolo = newYufoloClient(cfg.YufoloURL)
 	}
@@ -73,12 +79,24 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /api/rooms/{code}/transcription", s.prepareTranscription)
 	m.HandleFunc("GET /api/rooms/{code}/transcription", s.transcriptionInfo)
 	m.HandleFunc("GET /api/rooms/{code}/audio", s.audio)
+	m.HandleFunc("POST /api/rooms/{code}/translations", s.requestTranslations)
 	m.HandleFunc("POST /api/rooms", s.create)
 	m.HandleFunc("GET /api/rooms/{code}", s.get)
 	m.HandleFunc("GET /api/rooms/{code}/events", s.events)
 	m.HandleFunc("GET /api/rooms/{code}/host", s.host)
 	m.HandleFunc("POST /api/rooms/{code}/questions", s.question)
 	m.HandleFunc("PATCH /api/rooms/{code}/questions/{id}", s.questionStatus)
+	m.HandleFunc("DELETE /api/rooms/{code}/questions/{id}", s.deleteQuestion)
+	m.HandleFunc("GET /api/rooms/{code}/assistant", s.assistantInfo)
+	m.HandleFunc("GET /api/rooms/{code}/assistant/projects", s.assistantProjects)
+	m.HandleFunc("POST /api/rooms/{code}/assistant/index-preview", s.assistantIndexPreview)
+	m.HandleFunc("POST /api/rooms/{code}/assistant/index", s.assistantIndex)
+	m.HandleFunc("PUT /api/rooms/{code}/assistant/settings", s.updateAssistantSettings)
+	m.HandleFunc("POST /api/rooms/{code}/assistant/answers/{id}", s.generateAnswer)
+	m.HandleFunc("POST /api/rooms/{code}/assistant/documents", s.uploadDocument)
+	m.HandleFunc("GET /api/rooms/{code}/assistant/documents/{id}", s.documentText)
+	m.HandleFunc("DELETE /api/rooms/{code}/assistant/documents/{id}", s.deleteDocument)
+	m.HandleFunc("POST /api/rooms/{code}/assistant/documents/{id}/index", s.retryDocument)
 	m.HandleFunc("PATCH /api/rooms/{code}", s.roomStatus)
 	m.HandleFunc("POST /api/rooms/{code}/demo-segments", s.demoSegment)
 	m.HandleFunc("POST /api/internal/rooms/{code}/segments", s.ingest)
@@ -364,6 +382,7 @@ func (s *Server) question(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond(w, 201, room)
+	s.autoAnswer(room.Code, id)
 }
 func (s *Server) questionStatus(w http.ResponseWriter, r *http.Request) {
 	var in struct {

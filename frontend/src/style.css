@@ -2499,3 +2499,32 @@ footer > span:first-child {
     display: none;
   }
 }
+
+/* Host knowledge and private answer drafts */
+.assistant-panel { padding: 24px; }
+.assistant-settings { margin: 16px 0; border: 1px solid var(--border, #e5e4eb); border-radius: 12px; padding: 14px; }
+.assistant-settings summary, .answer-draft summary { cursor: pointer; font-weight: 600; }
+.assistant-settings label { display: grid; gap: 8px; margin-top: 16px; }
+.assistant-settings textarea { min-height: 110px; resize: vertical; }
+.assistant-settings .check-label { display: flex; flex-direction: row; align-items: center; }
+.check-label input { width: auto; }
+.assistant-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.document-list { list-style: none; padding: 0; margin: 16px 0 0; }
+.document-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 0; border-top: 1px solid #ecebf0; }
+.document-list li > div:first-child { min-width: 0; overflow-wrap: anywhere; }
+.document-list strong, .document-list small { display: block; }
+.document-list small { color: #777282; margin-top: 4px; }
+.document-actions { display: flex; align-items: center; flex-shrink: 0; }
+.assistant-notice { background: #f6f0df; padding: 12px; border-radius: 10px; font-size: 13px; }
+.answer-draft { margin-top: 18px; border-radius: 12px; background: #f7f5fc; padding: 16px; }
+.draft-grid { display: grid; gap: 20px; margin-top: 14px; }
+.draft-part h4 { color: #695493; margin: 0 0 10px; font-size: 13px; }
+.draft-part p, .draft-part li { font-size: 14px; line-height: 1.75; }
+.draft-part blockquote { margin: 10px 0; padding: 10px 14px; border-left: 3px solid #b6a6d0; background: white; }
+.markdown-content { overflow-wrap: anywhere; }
+.markdown-content pre { white-space: pre-wrap; background: #efedf4; padding: 12px; border-radius: 8px; }
+.markdown-content img { display: none; }
+.dialog-panel { width: min(480px, calc(100vw - 32px)); border: 0; border-radius: 18px; padding: 24px; }
+.dialog-panel::backdrop { background: #17132170; }
+.question-actions { flex-wrap: wrap; }
+@media (max-width: 640px) { .assistant-panel { padding: 18px; } .assistant-actions .button { max-width: 100%; } }

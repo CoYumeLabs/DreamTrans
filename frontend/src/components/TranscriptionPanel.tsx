@@ -19,6 +19,7 @@ type Capture = {
   timer?: ReturnType<typeof setTimeout>;
 };
 const languages = [
+  ["cmn_en", "自动（中英混合）"],
   ["cmn", "中文"],
   ["en", "英语"],
   ["ja", "日语"],
@@ -35,7 +36,7 @@ export default function TranscriptionPanel({
   hostKey: string;
 }) {
   const [source, setSource] = useState("cmn");
-  const [target, setTarget] = useState("");
+
   const [link, setLink] = useState<Link | null>(null);
   const [state, setState] = useState("idle");
   const [error, setError] = useState("");
@@ -61,7 +62,6 @@ export default function TranscriptionPanel({
         setLink(v);
         if (v.sourceLanguage) {
           setSource(v.sourceLanguage);
-          setTarget(v.targetLanguage);
         }
       })
       .catch((e) => setError(e.message));
@@ -111,7 +111,7 @@ export default function TranscriptionPanel({
       const next = await api<Link>(`/rooms/${room.code}/transcription`, {
         method: "POST",
         key: hostKey,
-        body: { sourceLanguage: source, targetLanguage: target },
+        body: { sourceLanguage: source, targetLanguage: "" },
       });
       if (generation.current !== own) {
         releaseMic(c);
@@ -261,7 +261,6 @@ export default function TranscriptionPanel({
             disabled={working || !!link?.sessionId}
             onChange={(e) => {
               setSource(e.target.value);
-              if (e.target.value === target) setTarget("");
             }}
           >
             {languages.map(([v, name]) => (
@@ -271,28 +270,16 @@ export default function TranscriptionPanel({
             ))}
           </select>
         </label>
-        <label>
-          共享译文
-          <select
-            aria-label="共享译文"
-            value={target}
-            disabled={working || !!link?.sessionId}
-            onChange={(e) => setTarget(e.target.value)}
-          >
-            <option value="">不翻译</option>
-            {languages
-              .filter(([v]) => v !== source)
-              .map(([v, name]) => (
-                <option key={v} value={v}>
-                  {name}
-                </option>
-              ))}
-          </select>
-        </label>
       </div>
       <p>
-        仅此主持端采集音频，观众共享字幕。转录和所选翻译使用你的 Yufolo 余额。
+        仅此主持端采集音频，参与者自行选择译文语言；同一种译文共享生成。转录与
+        AI 翻译使用你的 Yufolo 余额。
       </p>
+      {source === "cmn_en" && (
+        <p className="form-note">
+          自动模式识别中文与英文混合讲话；其他语种请手动选择。
+        </p>
+      )}
       <ErrorNote message={error} />
       {state === "recording" ? (
         <Button className="outline full" onClick={() => void stop()}>

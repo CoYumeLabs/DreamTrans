@@ -32,6 +32,9 @@ type fakeYufolo struct {
 	starts, refreshes, audioFrames atomic.Int32
 	archiveFailure, disabled       atomic.Bool
 	shortToken                     bool
+	ai                             fixtureAI
+	translations                   atomic.Int32
+	microFinals                    bool
 }
 
 func newFakeYufolo(t *testing.T) *fakeYufolo {
@@ -75,6 +78,9 @@ func (f *fakeYufolo) handle(w http.ResponseWriter, r *http.Request) {
 	if f.disabled.Load() {
 		w.WriteHeader(401)
 		reply(map[string]string{"error": "account disabled"})
+		return
+	}
+	if f.handleAI(w, r, owner) {
 		return
 	}
 	if r.URL.Path == "/api/user/profile" {
@@ -144,7 +150,7 @@ func (f *fakeYufolo) handle(w http.ResponseWriter, r *http.Request) {
 		// Match the provider's language codes instead of accepting any config.
 		transcription, _ := start["transcription_config"].(map[string]any)
 		source, _ := transcription["language"].(string)
-		supported := map[string]bool{"cmn": true, "en": true, "ja": true, "ko": true, "de": true, "fr": true, "es": true}
+		supported := map[string]bool{"cmn_en": true, "cmn": true, "en": true, "ja": true, "ko": true, "de": true, "fr": true, "es": true}
 		validConfig := supported[source]
 		if translation, ok := start["translation_config"].(map[string]any); ok {
 			targets, _ := translation["target_languages"].([]any)
@@ -178,6 +184,14 @@ func (f *fakeYufolo) handle(w http.ResponseWriter, r *http.Request) {
 					emitted = true
 					if start["translation_config"] != nil {
 						_ = c.WriteJSON(map[string]any{"message": "AddTranslation", "results": []any{map[string]any{"content": "Hello everyone", "start_time": 0, "end_time": 1}}})
+					}
+					if f.microFinals {
+						for i, text := range []string{"Hi.", "Hello.", "Could you", "hear", "me", "?"} {
+							final := map[string]any{"message": "AddTranscript", "metadata": map[string]any{"transcript": text, "start_time": float64(i) * 0.4, "end_time": float64(i)*0.4 + 0.3}}
+							_ = c.WriteJSON(final)
+							_ = c.WriteJSON(final)
+						}
+						continue
 					}
 					final := map[string]any{"message": "AddTranscript", "metadata": map[string]any{"transcript": "欢迎来到课堂", "start_time": 0, "end_time": 1}}
 					_ = c.WriteJSON(final)
@@ -614,4 +628,38 @@ func TestEndActivityRequiresPendingArchiveToSucceed(t *testing.T) {
 	if len(f.archives) != 1 || f.starts.Load() != 0 {
 		t.Fatal("ending must archive pending finals without starting recognition")
 	}
+}
+
+func TestSlowYufoloAIAllowsConcurrentProfile(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/rag/ask" {
+			close(started)
+			<-release
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer upstream.Close()
+	defer close(release)
+	c := newYufoloClient(upstream.URL)
+	a := &loginSession{access: "access", expires: time.Now().Add(time.Hour), deadline: time.Now().Add(time.Hour)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- c.request(ctx, a, "POST", "/api/rag/ask", nil, nil) }()
+	<-started
+	profileCtx, profileCancel := context.WithTimeout(context.Background(), time.Second)
+	defer profileCancel()
+	profile := make(chan error, 1)
+	go func() { profile <- c.request(profileCtx, a, "GET", "/api/user/profile", nil, nil) }()
+	select {
+	case err := <-profile:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-profileCtx.Done():
+		t.Fatal("AI request blocked account/archiving calls")
+	}
+	cancel()
+	<-done
 }

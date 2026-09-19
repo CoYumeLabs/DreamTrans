@@ -36,6 +36,10 @@ func OpenPostgres(ctx context.Context, dsn string) (*Postgres, error) {
 		db.Close()
 		return nil, err
 	}
+	if _, err = db.ExecContext(ctx, assistantMigration); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Postgres{db: db}, nil
 }
 func (p *Postgres) Close() error                   { return p.db.Close() }
@@ -106,3 +110,6 @@ func (p *Postgres) ListOwned(ctx context.Context, owner string) ([]Record, error
 
 //go:embed migrations/001_yufolo.sql
 var integrationMigration string
+
+//go:embed migrations/002_assistant.sql
+var assistantMigration string

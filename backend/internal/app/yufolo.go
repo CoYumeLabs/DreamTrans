@@ -24,6 +24,11 @@ func newYufoloClient(base string) *yufoloClient {
 	return &yufoloClient{strings.TrimRight(base, "/"), &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
+type upstreamBody struct {
+	Data        []byte
+	ContentType string
+}
+
 type upstreamError struct {
 	status  int
 	message string
@@ -33,7 +38,10 @@ func (e upstreamError) Error() string { return e.message }
 func (c *yufoloClient) call(ctx context.Context, method, path, access string, body, out any) error {
 	var payload []byte
 	var err error
-	if body != nil {
+	contentType := "application/json"
+	if raw, ok := body.(upstreamBody); ok {
+		payload, contentType = raw.Data, raw.ContentType
+	} else if body != nil {
 		payload, err = json.Marshal(body)
 		if err != nil {
 			return err
@@ -43,11 +51,15 @@ func (c *yufoloClient) call(ctx context.Context, method, path, access string, bo
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 	if access != "" {
 		req.Header.Set("Authorization", "Bearer "+access)
 	}
-	res, err := c.http.Do(req)
+	client := *c.http
+	if strings.HasPrefix(path, "/api/rag/") {
+		client.Timeout = 150 * time.Second
+	}
+	res, err := client.Do(req)
 	if err != nil {
 		return fail(502, "暂时无法连接 Yufolo，请稍后重试")
 	}
@@ -125,7 +137,7 @@ func sameOrigin(r *http.Request) bool {
 }
 func needsAccount(r *http.Request) bool {
 	p := r.URL.Path
-	return p == "/api/auth/me" || p == "/api/my/rooms" || (p == "/api/rooms" && r.Method == "POST") || strings.HasSuffix(p, "/host") || strings.HasSuffix(p, "/transcription") || strings.HasSuffix(p, "/audio") || r.Method == "PATCH"
+	return p == "/api/auth/me" || p == "/api/my/rooms" || (p == "/api/rooms" && r.Method == "POST") || strings.Contains(p, "/assistant") || strings.HasSuffix(p, "/host") || strings.HasSuffix(p, "/transcription") || strings.HasSuffix(p, "/audio") || r.Method == "PATCH" || r.Method == "DELETE"
 }
 func (s *Server) hostAllowed(r *http.Request, rec storage.Record) bool {
 	if rec.Link.OwnerID != "" {
@@ -143,37 +155,41 @@ func (s *Server) sessionFor(r *http.Request) *loginSession {
 	defer s.authMu.Unlock()
 	return s.sessions[digest(cookie.Value)]
 }
-func (c *yufoloClient) request(ctx context.Context, a *loginSession, method, path string, body, out any) error {
+
+// Refresh is serialized, but slow AI calls must not hold the login mutex and
+// block transcript archives, profile checks or logout for the same account.
+func (c *yufoloClient) accessToken(ctx context.Context, a *loginSession, rejected string) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.revoked || time.Now().After(a.deadline) {
-		return fail(401, "请重新登录 Yufolo")
+		return "", fail(401, "请重新登录 Yufolo")
 	}
-	refresh := func() error {
+	if time.Until(a.expires) < 30*time.Second || (rejected != "" && rejected == a.access) {
 		var next authResponse
 		if err := c.call(ctx, "POST", "/api/auth/refresh", "", map[string]string{"refresh_token": a.refresh}, &next); err != nil {
-			return upstreamFailure(err)
+			return "", upstreamFailure(err)
 		}
 		if next.User.ID != a.user.ID || next.Access == "" || next.Refresh == "" {
-			return fail(502, "Yufolo 登录响应不正确")
+			return "", fail(502, "Yufolo 登录响应不正确")
 		}
-		a.access = next.Access
-		a.refresh = next.Refresh
+		a.access, a.refresh = next.Access, next.Refresh
 		a.expires = time.Now().Add(time.Duration(next.ExpiresIn) * time.Second)
-		return nil
 	}
-	if time.Until(a.expires) < 30*time.Second {
-		if err := refresh(); err != nil {
-			return err
-		}
+	return a.access, nil
+}
+func (c *yufoloClient) request(ctx context.Context, a *loginSession, method, path string, body, out any) error {
+	access, err := c.accessToken(ctx, a, "")
+	if err != nil {
+		return err
 	}
-	err := c.call(ctx, method, path, a.access, body, out)
+	err = c.call(ctx, method, path, access, body, out)
 	var e upstreamError
 	if errors.As(err, &e) && e.status == 401 {
-		if err = refresh(); err != nil {
+		access, err = c.accessToken(ctx, a, access)
+		if err != nil {
 			return err
 		}
-		err = c.call(ctx, method, path, a.access, body, out)
+		err = c.call(ctx, method, path, access, body, out)
 	}
 	return upstreamFailure(err)
 }

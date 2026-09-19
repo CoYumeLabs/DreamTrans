@@ -58,7 +58,7 @@ func main() {
 	}
 	root, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	srv := &http.Server{Addr: addr, Handler: app.New(store, app.Config{Demo: demo, CreatorKey: creatorKey, IngestKey: ingestKey, TrustProxy: os.Getenv("TRUST_PROXY") == "true", YufoloURL: yufoloURL}).Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: app.New(store, app.Config{Demo: demo, CreatorKey: creatorKey, IngestKey: ingestKey, TrustProxy: os.Getenv("TRUST_PROXY") == "true", YufoloURL: yufoloURL, AI: app.AIConfigFromEnv()}).Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 60 * time.Second, IdleTimeout: 60 * time.Second}
 	go func() {
 		<-root.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

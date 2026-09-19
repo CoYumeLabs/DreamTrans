@@ -89,6 +89,9 @@ func transcriptionLanguage(v string) string {
 }
 
 func languageOK(v string) bool {
+	if v == "cmn_en" {
+		return true
+	}
 	if len(v) < 2 || len(v) > 12 {
 		return false
 	}
@@ -136,6 +139,12 @@ func (s *Server) prepareTranscription(w http.ResponseWriter, r *http.Request) {
 		if rec.Link.SessionID != "" {
 			rec.Link.SourceLanguage = transcriptionLanguage(rec.Link.SourceLanguage)
 			rec.Link.TargetLanguage = transcriptionLanguage(rec.Link.TargetLanguage)
+			// New hosts configure only the spoken language. Clearing the old
+			// shared target keeps the same room/session while switching to
+			// participant-selected AI translations.
+			if in.Target == "" {
+				rec.Link.TargetLanguage = ""
+			}
 			if rec.Link.SourceLanguage != in.Source || rec.Link.TargetLanguage != in.Target {
 				return fail(409, "已关联会话的语言不能更改，请创建新活动")
 			}
@@ -550,7 +559,7 @@ func (s *Server) audio(w http.ResponseWriter, r *http.Request) {
 			}
 			send(map[string]string{"type": "ready"})
 		case "AddTranscript":
-			text := strings.TrimSpace(event.Metadata.Text)
+			text := normalizeSegmentText(event.Metadata.Text)
 			start, end := event.Metadata.Start+rec.Link.Offset, event.Metadata.End+rec.Link.Offset
 			if text == "" || end < start || start < 0 {
 				continue
@@ -560,15 +569,30 @@ func (s *Server) audio(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			seen[id] = true
-			seg := Segment{ID: id, Text: text, Source: "yufolo", CreatedAt: time.Now().UTC(), StartTime: start, EndTime: end, Speaker: "Speaker"}
+			seg := Segment{ID: id, Text: text, Source: "yufolo", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Parts: 1, StartTime: start, EndTime: end, Speaker: "Speaker"}
+			incoming := seg
 			err = s.changeRecord(ctx, code, func(room *Room, row *storage.Record) error {
+				seg = incoming
 				if room.Status != "live" {
 					return fail(409, "活动已结束")
 				}
-				if len(room.Segments) >= 5000 {
-					return fail(409, "活动字幕已达到容量上限")
+				if n := len(room.Segments); n > 0 && strings.HasPrefix(room.Segments[n-1].ID, "live-"+streamID+"-") && canMergeSegment(room.Segments[n-1], seg) {
+					previous := room.Segments[n-1]
+					previous.Text = joinSegmentText(previous.Text, seg.Text)
+					previous.EndTime = math.Max(previous.EndTime, end)
+					previous.UpdatedAt = seg.UpdatedAt
+					previous.Parts++
+					previous.Archived = false
+					previous.Translations = nil
+					previous.TranslationErrors = nil
+					seg = previous
+					room.Segments[n-1] = seg
+				} else {
+					if len(room.Segments) >= 5000 {
+						return fail(409, "活动字幕已达到容量上限")
+					}
+					room.Segments = append(room.Segments, seg)
 				}
-				room.Segments = append(room.Segments, seg)
 				if end > row.Link.Offset {
 					row.Link.Offset = end
 				}

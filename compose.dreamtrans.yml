@@ -18,6 +18,16 @@ services:
       YUFOLO_URL: ${YUFOLO_URL:-}
       YUACTION_DEMO: ${YUACTION_DEMO:-false}
       TRUST_PROXY: "true"
+      # Used only without YUFOLO_URL. Connected deployments use Yufolo APIs.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-${OPENAI_API_KEYs:-}}
+      OPENAI_API_BASE: ${OPENAI_API_BASE:-https://api.openai.com/v1}
+      OPENAI_API_URL: ${OPENAI_API_URL:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      OPENAI_EMBEDDING_API_KEY: ${OPENAI_EMBEDDING_API_KEY:-}
+      OPENAI_EMBEDDING_API_URL: ${OPENAI_EMBEDDING_API_URL:-}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      GENERIC_SYSTEM_PROMPT: ${GENERIC_SYSTEM_PROMPT:-}
+      KB_SYSTEM_PROMPT: ${KB_SYSTEM_PROMPT:-}
     networks: [default, dreamtrans]
     restart: unless-stopped
   frontend:

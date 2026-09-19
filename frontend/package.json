@@ -16,7 +16,8 @@
     "lucide-react": "1.47.0",
     "qrcode.react": "4.2.0",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "react-markdown": "10.1.0"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
