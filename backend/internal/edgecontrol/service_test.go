@@ -122,8 +122,12 @@ func TestConcurrentAuthorizationAndIdempotentOrderedSettlement(t *testing.T) {
 		t.Fatal("token replay connected twice")
 	}
 	first := edgeprotocol.Event{SessionID: id, Generation: 1, Sequence: 1, EventID: uuid.NewString(), Kind: "transcript", AudioSequence: 10, Samples: 48000, ProviderSamples: 48000, Transcript: &edgeprotocol.Transcript{ID: "one", Speaker: "S1", Text: "preserved", Start: 0, End: 1}}
+	empty := first
+	empty.Sequence = 2
+	empty.EventID = uuid.NewString()
+	empty.Transcript = &edgeprotocol.Transcript{ID: "empty-provider-final", Start: 1, End: 1}
 	end := first
-	end.Sequence = 2
+	end.Sequence = 3
 	end.EventID = uuid.NewString()
 	end.Kind = "end"
 	end.Transcript = nil
@@ -131,8 +135,12 @@ func TestConcurrentAuthorizationAndIdempotentOrderedSettlement(t *testing.T) {
 	if err != nil || ack.Sequence != 0 {
 		t.Fatalf("out-of-order event: %+v %v", ack, err)
 	}
+	ack, err = s.Event(t.Context(), a.Grant.NodeID, &empty)
+	if err != nil || ack.Sequence != 0 {
+		t.Fatalf("queued empty final: %+v %v", ack, err)
+	}
 	ack, err = s.Event(t.Context(), a.Grant.NodeID, &first)
-	if err != nil || ack.Sequence != 2 {
+	if err != nil || ack.Sequence != 3 {
 		t.Fatalf("contiguous apply: %+v %v", ack, err)
 	}
 	if _, err = s.Event(t.Context(), a.Grant.NodeID, &first); err != nil {

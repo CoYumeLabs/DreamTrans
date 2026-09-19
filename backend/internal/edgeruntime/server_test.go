@@ -58,6 +58,10 @@ func TestAudioBypassesMainAndOutboxSurvivesNetworkPartitionAndDrain(t *testing.T
 				w.WriteHeader(400)
 				return
 			}
+			if event.Transcript != nil && event.Transcript.Text == "" {
+				http.Error(w, "legacy main rejects empty transcript", http.StatusServiceUnavailable)
+				return
+			}
 			saved.Add(1)
 			_ = json.NewEncoder(w).Encode(edgeprotocol.Ack{Saved: true, Sequence: event.Sequence, AudioSequence: event.AudioSequence})
 		default:
@@ -89,6 +93,7 @@ func TestAudioBypassesMainAndOutboxSurvivesNetworkPartitionAndDrain(t *testing.T
 				return
 			}
 			if kind == websocket.TextMessage {
+				_ = ws.WriteJSON(map[string]any{"message": "AddTranscript", "metadata": map[string]any{"transcript": "", "start_time": .04, "end_time": .04}})
 				_ = ws.WriteJSON(map[string]string{"message": "EndOfTranscript"})
 				return
 			}

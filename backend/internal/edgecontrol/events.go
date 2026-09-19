@@ -98,7 +98,7 @@ func validateEvent(e *edgeprotocol.Event) error {
 	}
 	if e.Kind == "transcript" {
 		t := e.Transcript
-		if t == nil || t.Text == "" || len(t.Text) > 64*1024 || len(t.Speaker) > 50 || len(t.ID) > 100 || t.ID == "" || math.IsNaN(t.Start) || math.IsNaN(t.End) || math.IsInf(t.Start, 0) || math.IsInf(t.End, 0) || t.Start < 0 || t.End < t.Start {
+		if t == nil || len(t.Text) > 64*1024 || len(t.Speaker) > 50 || len(t.ID) > 100 || t.ID == "" || math.IsNaN(t.Start) || math.IsNaN(t.End) || math.IsInf(t.Start, 0) || math.IsInf(t.End, 0) || t.Start < 0 || t.End < t.Start {
 			return errors.New("invalid transcript")
 		}
 	} else if e.Transcript != nil {
@@ -189,7 +189,9 @@ func (s *Service) applyEvent(ctx context.Context, tx *sql.Tx, v *session, e *edg
 	v.Provider = e.ProviderSamples
 	v.AudioSeq = e.AudioSequence
 	v.EventSeq = e.Sequence
-	if e.Transcript != nil {
+	// Older Edges may already have journaled an empty provider final. Accept its
+	// ordered counters without creating a blank history entry or blocking the end.
+	if e.Transcript != nil && e.Transcript.Text != "" {
 		t := e.Transcript
 		// Namespaced stable identifiers prevent collisions with client and prior generation writes.
 		segment := fmt.Sprintf("edge:%d:%s", v.Generation, t.ID)

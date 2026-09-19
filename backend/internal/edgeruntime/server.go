@@ -307,6 +307,11 @@ func (s *Server) readProvider(st *stream) {
 				return
 			}
 			text, _ := metadata["transcript"].(string)
+			// The provider can emit an empty final segment before its last text.
+			// Do not enqueue an invalid transcript ahead of that text and settlement.
+			if text == "" {
+				continue
+			}
 			start, _ := metadata["start_time"].(float64)
 			end, _ := metadata["end_time"].(float64)
 			start += offset
