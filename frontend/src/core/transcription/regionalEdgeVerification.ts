@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { EdgeAudioBuffer, RegionalEdgeSocket, type EdgeAuthorization } from './RegionalEdge'
+import { SpeechmaticsProxyClient } from './SpeechmaticsProxyClient'
 
 class FakeNativeSocket {
   static instances: FakeNativeSocket[] = []
@@ -83,6 +84,41 @@ try {
   const legacyNative = FakeNativeSocket.instances.at(-1)!
   legacyNative.message({ message: 'RecognitionStarted' })
   assert.equal(new DataView((legacyNative.sent[0] as Uint8Array).buffer).getBigUint64(0), 1n)
+  // Exercise the actual caller's queue too: failed fresh sends belong to the
+  // client, whereas successfully sent frames belong to the Edge replay buffer.
+  let generation = 0
+  const transportBuffer = new EdgeAudioBuffer()
+  const client = new SpeechmaticsProxyClient({
+    url: 'wss://edge.example.test/ws/edge',
+    tokenProvider: async () => 'short-grant',
+    socketFactory: () => new RegionalEdgeSocket(authorization(++generation), transportBuffer),
+    reconnect: { baseDelayMs: 1, maxDelayMs: 1, jitterMs: 0 },
+    audio: { sampleRate: 44100, frameDurationMs: 40, maxQueuedAudioSeconds: 30 },
+  })
+  try {
+    const started = client.start()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const failedNative = FakeNativeSocket.instances.at(-1)!
+    failedNative.onopen?.(new Event('open'))
+    failedNative.message({ message: 'RecognitionStarted' })
+    await started
+    failedNative.failSend = true
+    client.sendAudio(new Float32Array(1764))
+    assert.equal(transportBuffer.bytes, 0, 'failed fresh send must remain solely in the client queue')
+    assert.equal(transportBuffer.sequence, 0, 'failed send must not consume a sequence')
+    await new Promise(resolve => setTimeout(resolve, 10))
+    const recoveredNative = FakeNativeSocket.instances.at(-1)!
+    assert.notEqual(recoveredNative, failedNative)
+    recoveredNative.onopen?.(new Event('open'))
+    recoveredNative.message({ message: 'RecognitionStarted' })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const sentAudio = recoveredNative.sent.filter((item): item is Uint8Array => item instanceof Uint8Array)
+    assert.equal(sentAudio.length, 1, 'reconnect must send the failed frame exactly once')
+    assert.equal(transportBuffer.frames.length, 1)
+    assert.equal(new DataView(sentAudio[0]!.buffer).getBigUint64(0), 1n)
+  } finally {
+    client.destroy()
+  }
   console.log('Regional Edge replay and credential boundary verification passed')
 } finally {
   Object.defineProperty(globalThis, 'WebSocket', { configurable: true, writable: true, value: original })

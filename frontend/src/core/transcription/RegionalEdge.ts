@@ -108,11 +108,13 @@ export class RegionalEdgeSocket implements SpeechmaticsSocket {
       throw new Error('主站未确认的音频已达到 30 秒，请等待恢复连接')
     }
     const sequence = this.sequence + 1
+    // The caller retains unsent frames on failure. Take replay ownership only
+    // after the native transport accepts this frame, or both queues replay it.
+    this.sendFrame(sequence, data)
     this.sequence = sequence
     this.buffer.sequence = sequence
     this.buffer.frames.push({ generation: this.authorization.grant.generation, sequence, data })
     this.buffer.bytes += data.byteLength
-    this.sendFrame(sequence, data)
   }
   private sendFrame(sequence: number, data: ArrayBuffer) {
     const wire = new Uint8Array(data.byteLength + 8)
