@@ -6,6 +6,8 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import subprocess
+import sqlite3
+import fcntl
 import sys
 import tempfile
 import threading
@@ -20,6 +22,42 @@ spec.loader.exec_module(edge_install)
 
 
 class EdgeBootstrapTest(unittest.TestCase):
+    def test_stopped_candidate_requires_an_empty_readable_exclusive_journal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            c=edge_install.EdgeController(directory)
+            spool=c.path/'blue'/'spool';spool.mkdir(parents=True)
+            c.verify_stopped_candidate('blue')
+            with sqlite3.connect(spool/'outbox.db') as db:
+                db.execute('CREATE TABLE events(payload TEXT)')
+            c.verify_stopped_candidate('blue')
+            with (spool/'owner.lock').open('a') as owner:
+                fcntl.flock(owner,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                with self.assertRaisesRegex(edge_install.ReleaseError,'owner'):
+                    c.verify_stopped_candidate('blue')
+            with sqlite3.connect(spool/'outbox.db') as db:
+                db.execute("INSERT INTO events VALUES('unsent result')")
+            with self.assertRaisesRegex(edge_install.ReleaseError,'unacknowledged'):
+                c.verify_stopped_candidate('blue')
+            with sqlite3.connect(spool/'outbox.db') as db:
+                self.assertEqual(db.execute('SELECT count(*) FROM events').fetchone()[0],1)
+            (spool/'outbox.db').write_bytes(b'corrupt journal')
+            with self.assertRaisesRegex(edge_install.ReleaseError,'cannot be verified'):
+                c.verify_stopped_candidate('blue')
+
+    def test_reinstall_reuses_only_the_nodes_own_retained_network(self):
+        with tempfile.TemporaryDirectory() as directory:
+            c=edge_install.EdgeController(directory)
+            c.state={'network':'node-entry','prefix':'node'}
+            with patch.object(edge_install,'docker',return_value='node-entry') as engine, patch.object(edge_install,'inspect',return_value={'Labels':{'dreamtrans.release':'node'}}):
+                c.ensure_entry_network()
+                engine.assert_called_once_with('network','ls','--format','{{.Name}}')
+            with patch.object(edge_install,'docker',return_value='node-entry'), patch.object(edge_install,'inspect',return_value={'Labels':{}}):
+                with self.assertRaisesRegex(edge_install.ReleaseError,'not owned'):
+                    c.ensure_entry_network()
+            c.state['phase']='uninstalled'
+            with self.assertRaisesRegex(edge_install.ReleaseError,'new --dir'):
+                c.install(None)
+
     def test_fresh_install_creates_private_root_and_preserves_existing_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)/'new-node'

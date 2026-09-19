@@ -66,10 +66,11 @@ python3 scripts/release.py --dir /root/dreamtrans status
 python3 scripts/release.py --dir /root/dreamtrans deploy --image MAIN_REPOSITORY@sha256:RELEASE_DIGEST
 python3 scripts/release.py --dir /root/dreamtrans drain
 python3 scripts/release.py --dir /root/dreamtrans resume
+python3 scripts/release.py --dir /root/dreamtrans abort # 仅切流前中止候选
 python3 scripts/release.py --dir /root/dreamtrans rollback
 ```
 
-发布检查不可变镜像、内存余量、兼容性清单、已应用迁移校验和，再启动候选实例。候选默认不接业务和后台任务；通过就绪/功能检查后切代理。进度显示各阶段、内存和排空计数。`--pause` 可停在候选阶段；排空超时保留旧实例，不强制结束转录。
+发布检查不可变镜像、内存余量、兼容性清单、已应用迁移校验和，再启动候选实例。候选默认不接业务和后台任务；通过就绪/功能检查后切代理。进度显示各阶段、内存和排空计数。`--pause` 可停在候选阶段；`abort` 可中止尚未切流的失败候选。候选已崩溃时，Edge 以独占锁和只读查询检查回传队列；非空、损坏或被占用时拒绝复用。排空超时保留旧实例，不强制结束转录。
 
 Nginx 平滑重载让旧 worker 继续处理已有连接，见 [Nginx 官方控制说明](https://nginx.org/en/docs/control.html)。应用自身仍须拒绝新工作并持续统计旧工作。长连接、未完成任务、未确认队列未清零时不得停止旧版。
 
@@ -90,6 +91,7 @@ python3 /opt/dreamtrans-edge/edge-install.py diagnose
 python3 /opt/dreamtrans-edge/edge-install.py drain
 python3 /opt/dreamtrans-edge/edge-install.py --image EDGE_REPOSITORY@sha256:RELEASE_DIGEST upgrade
 python3 /opt/dreamtrans-edge/edge-install.py rollback
+python3 /opt/dreamtrans-edge/edge-install.py abort # 仅切流前中止候选
 python3 /opt/dreamtrans-edge/edge-install.py pause-releases
 python3 /opt/dreamtrans-edge/edge-install.py resume-releases
 python3 /opt/dreamtrans-edge/edge-install.py uninstall
@@ -99,8 +101,10 @@ python3 /opt/dreamtrans-edge/edge-install.py uninstall
 
 可在主站配置受限 `EDGE_CLOUDFLARE_API_TOKEN`、`EDGE_CLOUDFLARE_ACCOUNT_ID`、`EDGE_CLOUDFLARE_ZONE_ID`、`EDGE_CLOUDFLARE_ZONE_NAME`，自动创建节点 Tunnel/DNS；账户凭证留在主站，仅下发节点 token。已有 DNS 指向不符时拒绝覆盖。也支持 API 提供已有节点专用 token。凭证轮换、部分安装恢复和远端自动发布仍需完整生命周期验收。
 
+通过 `ci.yml` 的手动运行可以为指定分支发行验证后的镜像；工作流输出 `release-images-<commit>` 清单，包含主站与 Edge 的不可变 digest。Edge 标签为 `edge-<完整提交号>`，安装配置始终使用清单中的 digest。非默认分支的发行不会更新主站 `latest`。
+
 ## 备份与恢复边界
 
 现有 R2 备份保留。新增全量快照包含 PostgreSQL dump、实际应用卷文件、Compose 叠加配置与发布状态，并记录哈希和实际卷标识；备份期间阻止知识文件物理删除，数据库备份前后应用仍可写入新数据。备份输出含密钥，必须沿用加密上传，不得当普通日志分享。
 
-数据库备份不等于完整应用备份。Edge 每颜色回传队列单独保留，不并写、不覆盖、不随镜像清理。全量快照隔离恢复、R2 安装衔接、损坏验证和队列冲突人工恢复流程尚未完成，详见验证记录。
+数据库备份不等于完整应用备份。Edge 每颜色回传队列单独保留，不并写、不覆盖、不随镜像清理。全量快照及 R2 加密上传/下载、隔离恢复和损坏校验已经在测试环境执行，详见验证记录。队列冲突的人工对账流程仍需完善。

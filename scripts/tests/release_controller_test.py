@@ -33,6 +33,29 @@ class ReleaseRecoveryTest(unittest.TestCase):
         with self.assertRaisesRegex(release.ReleaseError, 'already authorized'):
             release.check_contract(legacy, current)
 
+    def test_abort_records_empty_spool_and_does_not_offer_failed_slot_for_rollback(self):
+        c=self.controller
+        c.state.update(phase='candidate',target='blue')
+        with patch.object(release,'inspect',return_value={'State':{'Running':True}}), patch.object(c,'control',return_value={'drained':True}), patch.object(release,'docker') as engine:
+            c.abort()
+        self.assertTrue(c.state['colors']['blue']['empty_spool'])
+        self.assertEqual(c.state['active'],'green')
+        self.assertIsNone(c.state['previous'])
+        self.assertEqual(c.state['phase'],'ready')
+        engine.assert_called_once_with('stop','--timeout','-1','isolated-test-blue')
+
+    def test_crashed_main_candidate_can_abort_without_calling_a_dead_control_socket(self):
+        c=self.controller
+        c.state.update(role='main',phase='candidate',target='blue')
+        with patch.object(release,'inspect',return_value={'State':{'Running':False}}), patch.object(c,'control') as control, patch.object(release,'docker'):
+            c.abort()
+        control.assert_not_called()
+        self.assertEqual(c.state['phase'],'ready')
+        self.assertEqual(c.state['active'],'green')
+
+    def test_abort_after_cutover_is_rejected(self):
+        with self.assertRaises(release.ReleaseError):self.controller.abort()
+
     def test_timeout_keeps_running_websocket_and_unsent_results(self):
         c = self.controller
         status = {'drained': False, 'websockets': 1, 'requests': 0, 'tasks': 0, 'pending': 2}

@@ -464,7 +464,7 @@ http {{
     def deploy(self, args):
         self.assert_database()
         if self.state['phase'] not in ('ready', 'draining'):
-            raise ReleaseError('unfinished release; run resume or rollback first')
+            raise ReleaseError('unfinished release; run resume, abort before cutover, or rollback after cutover')
         image = image_id(args.image)
         active = self.state['active']
         color = 'green' if active == 'blue' else 'blue'
@@ -526,14 +526,33 @@ http {{
                 return
             time.sleep(3)
 
+    def verify_stopped_candidate(self, color):
+        # A main candidate has never received the public route. Its durable
+        # work remains in PostgreSQL; never delete its shared application mount.
+        if self.state.get('role') == 'edge':
+            raise ReleaseError('stopped Edge journal requires an explicit empty check')
+
     def abort(self):
         if self.state['phase']!='candidate' or self.state['target']==self.state['active']:
             raise ReleaseError('abort is only valid before cutover; use rollback after cutover')
         target=self.state['target']
-        snapshot=self.control(target,'draining')
-        if not snapshot['drained']:
-            raise ReleaseError('candidate still owns work; drain it before abort')
-        docker('stop','--timeout','-1',self.name(target))
+        running=inspect(self.name(target))['State']['Running']
+        if running:
+            snapshot=self.control(target,'draining')
+            if not snapshot['drained']:
+                raise ReleaseError('candidate still owns work; drain it before abort')
+        else:
+            # Also disables Docker's restart policy while the offline journal
+            # is inspected. Never race a restarting owner of the same spool.
+            docker('stop','--timeout','-1',self.name(target))
+            self.verify_stopped_candidate(target)
+        if self.state.get('role') == 'edge':
+            self.state['colors'][target]['empty_spool']=True
+            self.persist()
+        if running:
+            docker('stop','--timeout','-1',self.name(target))
+        if self.state.get('previous') == target:
+            self.state['previous']=None  # This slot now holds the failed candidate.
         self.state.update(phase='ready',target=None)
         self.persist()
         progress('中止','候选实例已停止；原版本与数据库新写入保留')

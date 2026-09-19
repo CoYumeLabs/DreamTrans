@@ -1,9 +1,11 @@
-FROM golang:1.26.5-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine AS build
 WORKDIR /src
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 COPY backend/ ./
-RUN CGO_ENABLED=0 go build -trimpath -o /edge ./cmd/edge
+ARG TARGETOS
+ARG TARGETARCH
+RUN test -n "$TARGETOS" && test -n "$TARGETARCH" && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -o /edge ./cmd/edge
 FROM build AS edge-runtime-test-builder
 RUN CGO_ENABLED=0 go test -c -o /edge-runtime.test ./internal/edgeruntime
 FROM scratch AS edge-runtime-test-binary

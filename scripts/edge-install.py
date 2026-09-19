@@ -12,6 +12,7 @@ from pathlib import Path
 import platform
 import shutil
 import socket
+import sqlite3
 import sys
 import time
 import urllib.error
@@ -101,12 +102,22 @@ class EdgeController(Controller):
             self.state['colors'][old]['empty_spool']=True
             self.persist()
 
+    def ensure_entry_network(self):
+        network=self.state['network']
+        if network in docker('network','ls','--format','{{.Name}}').splitlines():
+            existing=inspect(network,'network')
+            if existing.get('Labels',{}).get('dreamtrans.release')!=self.state['prefix']:
+                raise ReleaseError('existing entry network is not owned by this node; installation refused')
+        else:
+            docker('network','create','--label',f'dreamtrans.release={self.state["prefix"]}',network)
+
     def install(self,args):
         if self.state:
+            if self.state.get('phase')=='uninstalled':
+                raise ReleaseError('installation was uninstalled; keep this audit directory, rotate registration and use a new --dir')
             self.assert_database()
             if not self.state.get('active'):
-                if self.state['network'] not in docker('network','ls','--format','{{.Name}}').splitlines():
-                    docker('network','create',self.state['network'])
+                self.ensure_entry_network()
                 self.finish_install(args)
                 return
             progress('✓','已有安装：保留节点身份、配置与队列；使用 status/resume/upgrade')
@@ -136,7 +147,7 @@ class EdgeController(Controller):
         prefix='dreamtrans-edge-'+registration['node_id'][:8]
         self.state={'format':1,'role':'edge','prefix':prefix,'network':prefix+'-entry','port':args.port,'bind':'127.0.0.1','proxy_image':proxy,'active':None,'previous':None,'colors':{},'phase':'initializing','initial_image':image,'initial_contract':contract}
         self.persist()
-        docker('network','create','--label',f'dreamtrans.release={prefix}',self.state['network'])
+        self.ensure_entry_network()
         self.finish_install(args)
 
     def finish_install(self,args):
@@ -160,6 +171,24 @@ class EdgeController(Controller):
             self.state['tunnel']=True
         self.state.update(active='blue',phase='ready');self.persist()
         progress('✓',f'节点已安装，入口 127.0.0.1:{self.state["port"]}；在主站启用调度前确认独立 Tunnel 指向 http://dreamtrans:8080')
+
+    def verify_stopped_candidate(self, color):
+        spool=self.path/color/'spool'
+        with (spool/'owner.lock').open('a') as owner:
+            try:fcntl.flock(owner,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            except BlockingIOError:raise ReleaseError('candidate spool still has an owner; abort refused') from None
+            database=spool/'outbox.db'
+            if not database.exists():
+                if any(p.name!='owner.lock' for p in spool.iterdir()):
+                    raise ReleaseError('unknown candidate spool files; abort refused')
+                return
+            try:
+                with sqlite3.connect(database.resolve().as_uri()+'?mode=ro',uri=True) as connection:
+                    pending=connection.execute('SELECT count(*) FROM events').fetchone()[0]
+            except sqlite3.Error:
+                raise ReleaseError('candidate journal cannot be verified; abort refused, data retained') from None
+            if pending:
+                raise ReleaseError('candidate has unacknowledged results; abort refused, data retained')
 
     def uninstall(self):
         config=read(self.root/'config'/'edge.json')
@@ -206,7 +235,7 @@ def main():
     parser.add_argument('--observe',type=int,default=60)
     parser.add_argument('--drain-timeout',type=int,default=60)
     parser.add_argument('--pause',action='store_true')
-    parser.add_argument('action',choices=['install','status','logs','diagnose','upgrade','drain','rollback','resume','uninstall','converge','pause-releases','resume-releases'],nargs='?',default='install')
+    parser.add_argument('action',choices=['install','status','logs','diagnose','upgrade','drain','rollback','resume','abort','uninstall','converge','pause-releases','resume-releases'],nargs='?',default='install')
     args=parser.parse_args()
     if os.geteuid()!=0:raise ReleaseError('root is required for host lifecycle operations')
     if args.action=='install':
@@ -235,6 +264,7 @@ def main():
         elif args.action=='drain':controller.drain_node()
         elif args.action=='resume':controller.resume(args)
         elif args.action=='rollback':controller.rollback()
+        elif args.action=='abort':controller.abort()
         elif args.action=='uninstall':controller.uninstall()
         elif args.action=='pause-releases':controller.state['release_paused']=True;controller.persist();progress('暂停','地区自动发布已暂停，现有服务继续运行')
         elif args.action=='resume-releases':controller.state['release_paused']=False;controller.persist()

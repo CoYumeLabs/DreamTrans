@@ -137,6 +137,31 @@ rclone() {
         "$RCLONE_IMAGE" "$@"
 }
 
+# The managed deployment may have been converted using a checkout or extracted
+# release bundle; never assume a controller was copied to the installation root.
+managed_snapshot() (
+    local output="$1" controller="$INSTALL_DIR/release.py" work="" extraction=""
+    if [[ ! -f "$controller" ]]; then
+        controller="$(dirname -- "${BASH_SOURCE[0]}")/release.py"
+    fi
+    if [[ ! -f "$controller" ]]; then
+        work="$(mktemp -d /tmp/dreamtrans-backup-controller.XXXXXX)"
+        trap '[[ -z "$extraction" ]] || "$DOCKER" rm -v "$extraction" >/dev/null 2>&1; [[ -z "$work" ]] || rm -rf -- "$work"' EXIT
+        local image
+        image="$(python3 - "$INSTALL_DIR/.bluegreen/state.json" <<'PYTHON'
+import json, sys
+with open(sys.argv[1]) as source:
+    state = json.load(source)
+print(state['colors'][state['active']]['image'])
+PYTHON
+)"
+        extraction="$("$DOCKER" create "$image")"
+        "$DOCKER" cp "$extraction:/usr/share/dreamtrans/release.py" "$work/release.py"
+        controller="$work/release.py"
+    fi
+    python3 "$controller" --dir "$INSTALL_DIR" snapshot --output "$output"
+)
+
 run_backup() {
     load_env
     mkdir -p "$BACKUP_DIR"
@@ -157,12 +182,23 @@ run_backup() {
 
     if [[ -f "$INSTALL_DIR/.bluegreen/state.json" ]]; then
         local full="$BACKUP_DIR/${name}.full.tar" encrypted="$BACKUP_DIR/${name}.full.tar.enc"
-        python3 "$INSTALL_DIR/release.py" --dir "$INSTALL_DIR" snapshot --output "$full" || fail "full deployment snapshot failed"
-        compose exec -T -e BACKUP_PASSPHRASE db openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:BACKUP_PASSPHRASE \
+        managed_snapshot "$full" || fail "full deployment snapshot failed"
+        local database_id
+        database_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["database_id"])' "$INSTALL_DIR/.bluegreen/state.json")"
+        "$DOCKER" exec -i -e BACKUP_PASSPHRASE "$database_id" openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:BACKUP_PASSPHRASE \
             < "$full" > "$encrypted" || fail "full snapshot encryption failed"
         rm -f -- "$full"
         rclone copyto "/backups/$(basename "$encrypted")" "r2:${R2_BUCKET}/${REMOTE_PREFIX}/$(basename "$encrypted")" || fail "full snapshot upload failed"
         rclone delete "r2:${R2_BUCKET}/${REMOTE_PREFIX}" --min-age "${RETENTION_DAYS}d" || log "remote prune failed (ignored)"
+        python3 - "$BACKUP_DIR" "$LOCAL_KEEP" <<'PYTHON'
+from pathlib import Path
+import sys
+keep = int(sys.argv[2])
+if keep < 1:
+    raise ValueError('BACKUP_LOCAL_KEEP must be positive')
+for old in sorted(Path(sys.argv[1]).glob('dreamtrans-*.full.tar.enc'), key=lambda p: p.stat().st_mtime, reverse=True)[keep:]:
+    old.unlink()
+PYTHON
         log "full deployment backup complete"
         ping_healthcheck ok
         return
