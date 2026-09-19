@@ -2640,7 +2640,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER:-dreamtrans} -d \${POSTGRES_DB:-dreamtrans}"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \${POSTGRES_USER:-dreamtrans} -d \${POSTGRES_DB:-dreamtrans}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -2801,7 +2801,8 @@ compose_service_container_id_any_state() {
     fi
 }
 
-# Wait for PostgreSQL to be ready
+# The entrypoint's temporary initialization server accepts Unix sockets only.
+# Wait for the final TCP listener used by migrations and applications.
 wait_for_db() {
     local max_attempts=30
     local attempt=0
@@ -2811,6 +2812,7 @@ wait_for_db() {
         if [[ -n "$db_container_id" ]] &&
            docker exec "$db_container_id" /bin/sh -c '
                exec pg_isready \
+                   -h 127.0.0.1 \
                    -U "${POSTGRES_USER:-dreamtrans}" \
                    -d "${POSTGRES_DB:-dreamtrans}"
            ' >/dev/null 2>&1; then

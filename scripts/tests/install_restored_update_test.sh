@@ -108,6 +108,9 @@ PORT=0
 ALLOW_ANONYMOUS_API=false
 CORS_ALLOWED_ORIGINS=https://production.example.test
 ENV
+# Keep the temporary Unix-socket server alive long enough to expose premature
+# readiness. Migrations must wait for the final TCP server, not this init phase.
+printf '%s\n' 'SELECT pg_sleep(6);' > "$FIXTURE_ROOT/slow-init.sql"
 cat > compose.restore.yml <<YAML
 services:
   app:
@@ -116,6 +119,8 @@ services:
   db:
     image: $TEST_DB_IMAGE
     pull_policy: never
+    volumes:
+      - $FIXTURE_ROOT/slow-init.sql:/docker-entrypoint-initdb.d/010-slow-init.sql:ro
   migrate:
     image: $TEST_DB_IMAGE
     pull_policy: never
