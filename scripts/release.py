@@ -123,6 +123,8 @@ def check_contract(new, old=None):
         raise ReleaseError('unsupported release/state protocol; staged conversion required')
     if old and old.get('state_epoch') != new['state_epoch']:
         raise ReleaseError('data epochs are not rollback compatible')
+    if old and (new.get('edge_protocol_min', 1) > old.get('edge_protocol_min', 1) or new.get('edge_protocol_max', 1) < old.get('edge_protocol_max', 1)):
+        raise ReleaseError('candidate cannot serve protocols already authorized by the active release')
     if not isinstance(new.get('expand_migrations'), list):
         raise ReleaseError('release lacks reviewed expand-only migration manifest')
 

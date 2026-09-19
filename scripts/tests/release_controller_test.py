@@ -25,6 +25,14 @@ class ReleaseRecoveryTest(unittest.TestCase):
                        'green': {'image': 'new'}},
         }
 
+    def test_protocol_rollback_cannot_strand_authorized_sessions(self):
+        legacy = {'protocol': 1, 'state_epoch': 1, 'expand_migrations': [], 'edge_protocol_min': 1, 'edge_protocol_max': 1}
+        current = dict(legacy, edge_protocol_max=2)
+        release.check_contract(current, legacy)
+        release.check_contract(current, current)
+        with self.assertRaisesRegex(release.ReleaseError, 'already authorized'):
+            release.check_contract(legacy, current)
+
     def test_timeout_keeps_running_websocket_and_unsent_results(self):
         c = self.controller
         status = {'drained': False, 'websockets': 1, 'requests': 0, 'tasks': 0, 'pending': 2}

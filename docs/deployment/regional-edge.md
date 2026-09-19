@@ -25,18 +25,20 @@ flowchart LR
 
 Cloudflare 官方说明：[独立 Tunnel 与负载均衡](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/routing-to-tunnel/public-load-balancers/)、[WebSocket 连接可能中断](https://developers.cloudflare.com/network/websockets/)。
 
-## 协议 v1
+## 协议 v1 / v2
 
 - 主站 `POST /api/edges/authorize` 校验用户归属、并发和余额；用户级 PostgreSQL 事务锁串行化授权，预算账本写入与会话写入在同一事务。
 - 接入凭证为独立 Ed25519 签名，绑定用户、会话、节点、Origin、供应商、采样率、代次、额度和截止时间。浏览器通过 WebSocket 第一条 JSON 消息发送短期凭证；不将主站登录令牌发给 Edge，也不把凭证写入 URL。
 - Edge 校验公钥签名和精确 Origin，并由主站原子消费接入凭证，拒绝重复连接。默认租约 45 秒，按 30 秒窗口预留预算；每 5 秒进行用量记录与续租，不在音频分片循环中同步访问主站。
 - 音频采用 8 字节大端序号加 PCM f32le，支持 16 kHz、44.1 kHz、48 kHz。Edge 忽略已接收序号，拒绝跳号、超预算或超时继续发送。
 - 结果/用量事件携带会话、代次、事件 UUID 和递增序号。主站约束幂等键及 payload hash，允许有界乱序，按连续前缀应用。相同事件键但不同内容被拒绝。
-- `EdgeReceived` 仅表示节点收到音频。主站提交事件后才返回 `Saved`，节点再发送 `EdgeSaved`。**当前接收用量确认与音频重放缓冲释放的关系仍需完成故障验收；不能据此承诺节点宕机时完全无损恢复。**
-- 会话结束按确认的用量结算窗口并释放余款。过期会话保留对账原因；新授权递增代次，旧代次写入被拒绝。回传冲突会保留在节点队列，不自动删除。
+- `EdgeReceived` 仅表示节点收到音频。v2 的 `EdgeSaved.audio_sequence` 只覆盖主站已提交的供应商最终结果对应的完整音频帧；周期用量及异常断开不能推进该水位。浏览器保留最多 30 秒未确认音频，序号跨代次保持不变。页面刷新后缓冲丢失时明确要求新建录音，不伪装恢复成功。
+- v2 仅对已提交最终结果确认的音频采样计费。异常退出的未完成尾部释放原预留，接管节点重放后在新代次计费；正常 EndOfTranscript 确认剩余静音采样。账本分别保存接收量、供应商调用量、批准预算及最终收费采样数。v1 继续使用原计费规则。新授权递增代次，旧代次写入被拒绝；冲突队列保留用于对账。
 - 主站不可用时不批准新会话；已有会话受到原预算和租约约束。回传队列满时停止处理，保留未确认数据。跨节点重建供应商会话与重复音频计费的完整验收仍未完成。
 
-当前协议仅声明 v1。相邻应用版本必须都支持 v1 才允许滚动发布；不得通过扩大声明的版本范围来假装兼容未实现的协议。
+本版同时实现 v1 和 v2。先升级 Edge，再升级主站；旧浏览器和旧主站继续使用 v1，新浏览器申请 v2，主站只选择支持该协议的节点。单个会话的协议不可中途更改。迁移 055 为扩展列，既有会话默认 v1，历史账本的收费采样回填为原消费量。升级发布控制器后，禁止回切到无法处理当前已授权协议的镜像；需要回切时使用仍支持 v1/v2 的兼容版本。
+
+v2 的恢复粒度为完整音频帧：供应商的词时间戳是近似值，最后一个不足整帧的尾部可能重放，边界字幕仍须实测，不能宣称逐字无损去重。Edge 按供应商 AudioAdded 确认限流，最多提前发送 500 帧或 10 秒音频，等待不会阻塞主站控制面。依据 [Speechmatics WebSocket 协议](https://legacy.docs.speechmatics.com/en/real-time-appliance/api-v2/speech-api-guide/v4.0.0)。
 
 ## 首次主站转换
 
@@ -53,7 +55,7 @@ python3 scripts/release.py --dir /root/dreamtrans init \
   --port 16002 --maintenance
 ```
 
-必须把占位符替换为实际资源；不能照抄测试卷名称。转换保留原 `.env`、`compose.restore.yml`、`compose.production.yml`、external 应用卷和生产数据库卷，不重建 Compose 项目。迁移 053/054 为新增表；运行旧版本时只执行兼容扩展。停止旧写入后，以只读方式最终导入旧 SQLite 内容和配置，导入标记保证重复执行不会覆盖迁移后新写入。蓝绿实例改用 PostgreSQL RAG 和配置；知识库文件继续保存在原卷，不进行递归改权限。
+必须把占位符替换为实际资源；不能照抄测试卷名称。转换保留原 `.env`、`compose.restore.yml`、`compose.production.yml`、external 应用卷和生产数据库卷，不重建 Compose 项目。迁移 053/054 为新增表、055 为恢复协议扩展；运行旧版本时只执行兼容扩展。停止旧写入后，以只读方式最终导入旧 SQLite 内容和配置，导入标记保证重复执行不会覆盖迁移后新写入。蓝绿实例改用 PostgreSQL RAG 和配置；知识库文件继续保存在原卷，不进行递归改权限。
 
 首次交接 16002 会短暂中断。后续 Tunnel 始终连接固定代理。YuAction 必须接入控制器打印的稳定代理网络，并把内部 URL 配置为 `http://dreamtrans:8080`；自动交接及验证仍列为待完成验收。
 

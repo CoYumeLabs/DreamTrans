@@ -40,7 +40,14 @@ type Server struct {
 	providerLatency     atomic.Int64
 	successes, failures atomic.Int64
 }
+type audioBoundary struct{ sequence, sampleEnd int64 }
 type stream struct {
+	providerPending                    []audioBoundary
+	providerAckSamples                 int64
+	providerProgress                   chan struct{}
+	durableSeq, durableSamples         int64
+	audioBounds                        []audioBoundary
+	providerFrames                     int64
 	mu                                 sync.Mutex
 	write                              sync.Mutex
 	client, provider                   *websocket.Conn
@@ -134,7 +141,7 @@ func (s *Server) accept(w http.ResponseWriter, r *http.Request) {
 	if err != nil || grant.Training != s.config.Training {
 		return
 	}
-	st := &stream{client: client, grant: *grant, done: make(chan struct{}), started: time.Now()}
+	st := &stream{client: client, grant: *grant, done: make(chan struct{}), providerProgress: make(chan struct{}, 1), started: time.Now(), audioSeq: grant.DurableAudioSequence, durableSeq: grant.DurableAudioSequence, durableSamples: grant.DurableSamples}
 	s.mu.Lock()
 	if len(s.connections) >= s.config.Maximum || s.connections[grant.SessionID] != nil {
 		s.mu.Unlock()
@@ -164,7 +171,7 @@ func (s *Server) accept(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		s.failures.Add(1)
-		_ = s.event(st, "end", nil)
+		_ = s.event(st, "end")
 		return
 	}
 	s.providerLatency.Store(time.Since(start).Milliseconds())
@@ -173,16 +180,16 @@ func (s *Server) accept(w http.ResponseWriter, r *http.Request) {
 	defer st.stop()
 	var startMessage map[string]any
 	if err := client.ReadJSON(&startMessage); err != nil {
-		_ = s.event(st, "end", nil)
+		_ = s.event(st, "end")
 		return
 	}
 	if !validateStart(startMessage, st.grant.SampleRate) {
-		_ = s.event(st, "end", nil)
+		_ = s.event(st, "end")
 		return
 	}
 	delete(startMessage, "translation_config") // phase one: translations remain on the main AI WebSocket
 	if err := provider.WriteJSON(startMessage); err != nil {
-		_ = s.event(st, "end", nil)
+		_ = s.event(st, "end")
 		return
 	}
 	ended := make(chan struct{})
@@ -194,7 +201,7 @@ func (s *Server) accept(w http.ResponseWriter, r *http.Request) {
 	st.stop()
 	<-ended
 	<-controlDone
-	if err := s.event(st, "end", nil); err != nil {
+	if err := s.event(st, "end"); err != nil {
 		log.Printf("edge session=%s end event pending: journal full or unavailable", grant.SessionID)
 	}
 }
@@ -233,7 +240,7 @@ func (s *Server) readAudio(st *stream) {
 			}
 			if msg["message"] == "EndOfStream" {
 				st.mu.Lock()
-				last := st.audioSeq
+				last := st.providerFrames
 				st.mu.Unlock()
 				_ = st.provider.SetWriteDeadline(time.Now().Add(10 * time.Second))
 				_ = st.provider.WriteJSON(map[string]any{"message": "EndOfStream", "last_seq_no": last})
@@ -259,6 +266,16 @@ func (s *Server) readAudio(st *stream) {
 			st.mu.Unlock()
 			continue
 		}
+		st.mu.Unlock()
+		if !s.waitProviderCapacity(st, samples) {
+			return
+		}
+		st.mu.Lock()
+		if len(st.audioBounds) >= 4096 || (st.grant.Protocol >= 2 && st.grant.ResumeSamples+st.providerSamples+samples-st.durableSamples > int64(st.grant.SampleRate)*30) {
+			st.mu.Unlock()
+			_ = st.send(map[string]string{"message": "Error", "type": "edge_replay_limit", "reason": "Provider finalization exceeded the bounded audio replay window"})
+			return
+		}
 		if sequence != st.audioSeq+1 || time.Now().After(st.grant.ExpiresAt.Add(-2*time.Second)) || st.samples+samples > st.grant.ApprovedSamples {
 			st.mu.Unlock()
 			_ = st.send(map[string]string{"message": "Error", "type": "edge_authorization_limit", "reason": "Edge: 已批准的额度或连接授权已到期，录音已停止；请恢复连接后继续。"})
@@ -273,6 +290,11 @@ func (s *Server) readAudio(st *stream) {
 		st.audioSeq = sequence
 		st.samples += samples
 		st.providerSamples += samples
+		st.providerFrames++
+		st.providerPending = append(st.providerPending, audioBoundary{st.providerFrames, st.providerSamples})
+		if st.grant.Protocol >= 2 {
+			st.audioBounds = append(st.audioBounds, audioBoundary{sequence, st.grant.ResumeSamples + st.providerSamples})
+		}
 		st.mu.Unlock()
 		// This only acknowledges receipt, never permanent transcript storage.
 		if err := st.send(map[string]any{"message": "EdgeReceived", "sequence": sequence}); err != nil {
@@ -280,15 +302,84 @@ func (s *Server) readAudio(st *stream) {
 		}
 	}
 }
-func (s *Server) event(st *stream, kind string, t *edgeprotocol.Transcript) error {
+
+// Speechmatics limits unacknowledged input to 500 frames or ten seconds.
+// Waiting releases the stream lock so provider reads and lease checks can progress.
+func (s *Server) waitProviderCapacity(st *stream, samples int64) bool {
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	for {
+		st.mu.Lock()
+		ready := len(st.providerPending) < 500 && st.providerSamples-st.providerAckSamples+samples <= int64(st.grant.SampleRate)*10
+		expired := time.Now().After(st.grant.ExpiresAt.Add(-2 * time.Second))
+		st.mu.Unlock()
+		if expired {
+			return false
+		}
+		if ready {
+			return true
+		}
+		select {
+		case <-st.done:
+			return false
+		case <-timer.C:
+			return false
+		case <-st.providerProgress:
+		}
+	}
+}
+func (st *stream) acknowledgeProvider(sequence int64) {
+	st.mu.Lock()
+	retired := 0
+	for _, bound := range st.providerPending {
+		if bound.sequence > sequence {
+			break
+		}
+		st.providerAckSamples = bound.sampleEnd
+		retired++
+	}
+	st.providerPending = st.providerPending[retired:]
+	st.mu.Unlock()
+	select {
+	case st.providerProgress <- struct{}{}:
+	default:
+	}
+}
+
+func (s *Server) event(st *stream, kind string) error {
+	return s.checkpointEvent(st, kind, nil, -1)
+}
+
+// checkpointEvent advances replay retention only with a durably queued provider
+// final. A usage report or abrupt disconnect cannot discard untranscribed audio.
+func (s *Server) checkpointEvent(st *stream, kind string, t *edgeprotocol.Transcript, processedSamples int64) error {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	e := edgeprotocol.Event{SessionID: st.grant.SessionID, Generation: st.grant.Generation, EventID: uuid.NewString(), Kind: kind, AudioSequence: st.audioSeq, Samples: st.samples, ProviderSamples: st.providerSamples, Transcript: t}
-	return s.queue.Append(&e)
+	durableSeq, durableSamples, retired := st.durableSeq, st.durableSamples, 0
+	if processedSamples >= 0 {
+		end := st.grant.ResumeSamples + min(processedSamples, st.providerSamples)
+		for _, bound := range st.audioBounds {
+			if bound.sampleEnd > end {
+				break
+			}
+			durableSeq, durableSamples = bound.sequence, bound.sampleEnd
+			retired++
+		}
+	}
+	if st.grant.Protocol == 1 {
+		durableSeq, durableSamples = 0, 0
+	}
+	e := edgeprotocol.Event{SessionID: st.grant.SessionID, Generation: st.grant.Generation, EventID: uuid.NewString(), Kind: kind, AudioSequence: st.audioSeq, Samples: st.samples, ProviderSamples: st.providerSamples, Transcript: t, DurableAudioSequence: durableSeq, DurableSamples: durableSamples}
+	if err := s.queue.Append(&e); err != nil {
+		return err
+	}
+	st.durableSeq, st.durableSamples = durableSeq, durableSamples
+	st.audioBounds = st.audioBounds[retired:]
+	return nil
 }
 func (s *Server) readProvider(st *stream) {
 	st.mu.Lock()
-	offset, generation := st.grant.TimelineOffset, st.grant.Generation
+	offset, generation, rate, protocol := st.grant.TimelineOffset, st.grant.Generation, st.grant.SampleRate, st.grant.Protocol
 	st.mu.Unlock()
 	defer st.stop()
 	st.provider.SetReadLimit(256 * 1024)
@@ -301,19 +392,27 @@ func (s *Server) readProvider(st *stream) {
 		if json.Unmarshal(raw, &msg) != nil {
 			return
 		}
+		if msg["message"] == "AudioAdded" {
+			sequence, _ := msg["seq_no"].(float64)
+			st.acknowledgeProvider(int64(sequence))
+		}
+		if msg["message"] == "AddPartialTranscript" {
+			if metadata, ok := msg["metadata"].(map[string]any); ok {
+				start, _ := metadata["start_time"].(float64)
+				end, _ := metadata["end_time"].(float64)
+				metadata["start_time"], metadata["end_time"] = start+offset, end+offset
+				msg["edge_absolute_time"] = true
+			}
+		}
 		if msg["message"] == "AddTranscript" {
 			metadata, ok := msg["metadata"].(map[string]any)
 			if !ok {
 				return
 			}
 			text, _ := metadata["transcript"].(string)
-			// The provider can emit an empty final segment before its last text.
-			// Do not enqueue an invalid transcript ahead of that text and settlement.
-			if text == "" {
-				continue
-			}
 			start, _ := metadata["start_time"].(float64)
 			end, _ := metadata["end_time"].(float64)
+			processedSamples := int64(end * float64(rate))
 			start += offset
 			end += offset
 			metadata["start_time"] = start
@@ -332,11 +431,27 @@ func (s *Server) readProvider(st *stream) {
 					}
 				}
 			}
-			if err := s.event(st, "transcript", &edgeprotocol.Transcript{ID: id, Text: text, Speaker: speaker, Start: start, End: end}); err != nil {
+			kind := "transcript"
+			transcript := &edgeprotocol.Transcript{ID: id, Text: text, Speaker: speaker, Start: start, End: end}
+			if strings.TrimSpace(text) == "" {
+				if protocol == 1 {
+					continue
+				}
+				kind, transcript = "checkpoint", nil
+			}
+			if err := s.checkpointEvent(st, kind, transcript, processedSamples); err != nil {
 				return
 			}
 			msg["edge_segment_id"] = "edge:" + strconv.FormatInt(generation, 10) + ":" + id
 			msg["edge_saved"] = false
+		}
+		if msg["message"] == "EndOfTranscript" && protocol >= 2 {
+			st.mu.Lock()
+			processed := st.providerSamples
+			st.mu.Unlock()
+			if err := s.checkpointEvent(st, "checkpoint", nil, processed); err != nil {
+				return
+			}
 		}
 		if err := st.send(msg); err != nil {
 			return
@@ -356,7 +471,7 @@ func (s *Server) controlStream(ctx context.Context, st *stream) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := s.event(st, "usage", nil); err != nil {
+			if err := s.event(st, "usage"); err != nil {
 				st.stop()
 				return
 			}
@@ -386,7 +501,10 @@ func (s *Server) controlStream(ctx context.Context, st *stream) {
 
 // Run retries durable events with bounded backoff and leaves rejected generations for reconciliation.
 func (s *Server) Run(ctx context.Context) {
-	go s.heartbeats(ctx)
+	ctx, cancel := context.WithCancel(ctx)
+	heartbeatDone := make(chan struct{})
+	go func() { defer close(heartbeatDone); s.heartbeats(ctx) }()
+	defer func() { cancel(); <-heartbeatDone }()
 	delay := time.Second
 	for {
 		select {
@@ -451,7 +569,7 @@ func (s *Server) heartbeats(ctx context.Context) {
 				s.providerLatency.Store(time.Since(start).Milliseconds())
 			}
 		}
-		h := edgeprotocol.Heartbeat{InstanceID: s.config.Version, Role: deployment.Default.Status().Mode, Version: s.config.Version, ProtocolMin: 1, ProtocolMax: 1, Connections: connections, ProviderLatencyMS: float64(s.providerLatency.Load()), Healthy: s.providerHealthy.Load(), Load: float64(connections) / float64(s.config.Maximum), QueueBytes: bytes, OldestEventSeconds: oldest, Successes: s.successes.Load(), Failures: s.failures.Load()}
+		h := edgeprotocol.Heartbeat{InstanceID: s.config.Version, Role: deployment.Default.Status().Mode, Version: s.config.Version, ProtocolMin: edgeprotocol.MinVersion, ProtocolMax: edgeprotocol.Version, Connections: connections, ProviderLatencyMS: float64(s.providerLatency.Load()), Healthy: s.providerHealthy.Load(), Load: float64(connections) / float64(s.config.Maximum), QueueBytes: bytes, OldestEventSeconds: oldest, Successes: s.successes.Load(), Failures: s.failures.Load()}
 		var response struct {
 			Mode string `json:"mode"`
 		}

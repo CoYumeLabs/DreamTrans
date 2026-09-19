@@ -90,10 +90,10 @@ func validateEvent(e *edgeprotocol.Event) error {
 	if _, err := uuid.Parse(e.EventID); err != nil {
 		return err
 	}
-	if e.Generation < 1 || e.Sequence < 1 || e.Sequence > 1_000_000_000 || e.AudioSequence < 0 || e.Samples < 0 || e.ProviderSamples < e.Samples {
+	if e.Generation < 1 || e.Sequence < 1 || e.Sequence > 1_000_000_000 || e.AudioSequence < 0 || e.Samples < 0 || e.ProviderSamples < e.Samples || e.DurableAudioSequence < 0 || e.DurableAudioSequence > e.AudioSequence || e.DurableSamples < 0 {
 		return errors.New("invalid event counters")
 	}
-	if e.Kind != "usage" && e.Kind != "transcript" && e.Kind != "end" {
+	if e.Kind != "usage" && e.Kind != "transcript" && e.Kind != "end" && e.Kind != "checkpoint" {
 		return errors.New("invalid event kind")
 	}
 	if e.Kind == "transcript" {
@@ -140,7 +140,7 @@ func (s *Service) Event(ctx context.Context, node string, e *edgeprotocol.Event)
 		if previous != hash {
 			return ack, ErrConflict
 		}
-		return edgeprotocol.Ack{Sequence: v.EventSeq, AudioSequence: v.AudioSeq, Saved: true}, nil
+		return edgeprotocol.Ack{Sequence: v.EventSeq, AudioSequence: acknowledgedAudio(&v), Saved: true}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return ack, err
@@ -172,19 +172,30 @@ func (s *Service) Event(ctx context.Context, node string, e *edgeprotocol.Event)
 			break
 		}
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE edge_sessions SET consumed_samples=$2,provider_samples=$3,last_audio_seq=$4,last_event_seq=$5,status=$6,updated_at=now() WHERE id=$1`, v.ID, v.Consumed, v.Provider, v.AudioSeq, v.EventSeq, v.Status)
+	_, err = tx.ExecContext(ctx, `UPDATE edge_sessions SET consumed_samples=$2,provider_samples=$3,last_audio_seq=$4,last_event_seq=$5,status=$6,durable_audio_seq=$7,durable_samples=$8,updated_at=now() WHERE id=$1`, v.ID, v.Consumed, v.Provider, v.AudioSeq, v.EventSeq, v.Status, v.DurableSeq, v.DurableSamples)
 	if err != nil {
 		return ack, err
 	}
 	if err := tx.Commit(); err != nil {
 		return ack, err
 	}
-	return edgeprotocol.Ack{Sequence: v.EventSeq, AudioSequence: v.AudioSeq, Saved: true}, nil
+	return edgeprotocol.Ack{Sequence: v.EventSeq, AudioSequence: acknowledgedAudio(&v), Saved: true}, nil
 }
+func acknowledgedAudio(v *session) int64 {
+	if v.Protocol == 1 {
+		return v.AudioSeq
+	}
+	return v.DurableSeq
+}
+
 func (s *Service) applyEvent(ctx context.Context, tx *sql.Tx, v *session, e *edgeprotocol.Event) error {
-	if e.Samples < v.Consumed || e.Samples > v.Approved || e.ProviderSamples < v.Provider || e.AudioSequence < v.AudioSeq {
+	if e.Samples < v.Consumed || e.Samples > v.Approved || e.ProviderSamples < v.Provider || e.AudioSequence < v.AudioSeq || e.DurableAudioSequence < v.DurableSeq || e.DurableSamples < v.DurableSamples || e.DurableSamples > v.ResumeSamples+e.ProviderSamples {
 		return ErrConflict
 	}
+	if (e.Kind == "usage" || e.Kind == "end") && (e.DurableAudioSequence != v.DurableSeq || e.DurableSamples != v.DurableSamples) {
+		return ErrConflict // Receipt and periodic billing reports cannot finalize audio.
+	}
+	v.DurableSeq, v.DurableSamples = e.DurableAudioSequence, e.DurableSamples
 	v.Consumed = e.Samples
 	v.Provider = e.ProviderSamples
 	v.AudioSeq = e.AudioSequence
@@ -201,7 +212,11 @@ func (s *Service) applyEvent(ctx context.Context, tx *sql.Tx, v *session, e *edg
 		}
 	}
 	if e.Kind == "end" {
-		return s.settle(ctx, tx, v, "completed")
+		reason := "completed"
+		if v.Protocol >= 2 && v.DurableSamples-v.ResumeSamples < v.Consumed {
+			reason = "interrupted_unfinalized_audio"
+		}
+		return s.settle(ctx, tx, v, reason)
 	}
 	return nil
 }
@@ -231,7 +246,13 @@ func (s *Service) settle(ctx context.Context, tx *sql.Tx, v *session, reason str
 	if err != nil {
 		return err
 	}
-	remaining := v.Consumed
+	// Unfinalized audio is released on handoff. Replaying that tail belongs to
+	// the new generation; only one durable checkpoint can bill each audio range.
+	billable := min(v.Consumed, max(int64(0), v.DurableSamples-v.ResumeSamples))
+	if v.Protocol == 1 {
+		billable = v.Consumed
+	}
+	remaining := billable
 	for _, b := range budgets {
 		actual := min(remaining, b.samples)
 		remaining -= actual
@@ -243,7 +264,7 @@ func (s *Service) settle(ctx context.Context, tx *sql.Tx, v *session, reason str
 	if _, err = tx.ExecContext(ctx, `UPDATE edge_budgets SET settled=true WHERE session_id=$1 AND generation=$2`, v.ID, v.Generation); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO edge_reconciliations(session_id,generation,approved_samples,consumed_samples,provider_samples,reason) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`, v.ID, v.Generation, v.Approved, v.Consumed, v.Provider, reason); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO edge_reconciliations(session_id,generation,approved_samples,consumed_samples,provider_samples,reason,billable_samples) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`, v.ID, v.Generation, v.Approved, v.Consumed, v.Provider, reason, billable); err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE edge_sessions SET status='closed',updated_at=now() WHERE id=$1`, v.ID)

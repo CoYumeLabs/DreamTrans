@@ -310,6 +310,14 @@ async function verifyClient(): Promise<void> {
     'reconnect must flush framed audio',
   )
 
+  reconnectSocket.message({
+    message: 'AddPartialTranscript', edge_absolute_time: true,
+    metadata: { transcript: 'Recovered partial', start_time: 122, end_time: 122.5 },
+    results: [{ alternatives: [{ speaker: 'S1' }] }],
+  })
+  await nextTurn()
+  assert(client.store.getSnapshot().activePartial?.startTime === 122,
+    'Edge partial timestamps must not receive the reconnect offset twice')
   await client.stop()
   assert(client.getSnapshot().status === 'stopped', 'stop must await EndOfTranscript')
   client.destroy()

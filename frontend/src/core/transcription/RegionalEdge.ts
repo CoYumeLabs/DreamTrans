@@ -8,6 +8,8 @@ export interface EdgeAuthorization {
     generation: number
     previous_generation: number
     previous_audio_sequence: number
+    durable_audio_sequence?: number
+    protocol?: number
     sample_rate: number
   }
 }
@@ -18,10 +20,11 @@ export class EdgeAudioBuffer {
   frames: Frame[] = []
   session = ''
   bytes = 0
-  reset(session: string) { this.frames = []; this.bytes = 0; this.session = session }
-  acknowledge(generation: number, sequence: number) {
+  sequence = 0
+  reset(session: string) { this.frames = []; this.bytes = 0; this.sequence = 0; this.session = session }
+  acknowledge(sequence: number, generation?: number) {
     this.frames = this.frames.filter(frame => {
-      if (frame.generation === generation && frame.sequence <= sequence) {
+      if (frame.sequence <= sequence && (generation === undefined || frame.generation === generation)) {
         this.bytes -= frame.data.byteLength
         return false
       }
@@ -44,8 +47,19 @@ export class RegionalEdgeSocket implements SpeechmaticsSocket {
     this.authorization = authorization
     this.buffer = buffer
     const { grant } = authorization
-    if (buffer.session !== grant.session_id) buffer.reset(grant.session_id)
-    buffer.acknowledge(grant.previous_generation, grant.previous_audio_sequence)
+    if (buffer.session !== grant.session_id) {
+      if (grant.protocol === 2 && grant.previous_generation > 0) {
+        throw new Error('此页面已没有上一段录音的恢复缓冲，请新建录音；已保存字幕仍在历史记录中')
+      }
+      buffer.reset(grant.session_id)
+    }
+    if (grant.protocol === 2) {
+      buffer.acknowledge(grant.durable_audio_sequence ?? 0)
+      buffer.sequence = Math.max(buffer.sequence, grant.durable_audio_sequence ?? 0)
+    } else {
+      buffer.acknowledge(grant.previous_audio_sequence, grant.previous_generation)
+    }
+    this.sequence = buffer.sequence
     this.native = new WebSocket(authorization.endpoint.replace(/^https:/, 'wss:') + '/ws/edge', 'dreamtrans-edge-v1')
     this.native.binaryType = 'arraybuffer'
     this.native.onopen = event => {
@@ -58,15 +72,19 @@ export class RegionalEdgeSocket implements SpeechmaticsSocket {
       let message: Record<string, unknown>
       try { message = JSON.parse(String(event.data)) as Record<string, unknown> } catch { return }
       if (message.message === 'EdgeSaved') {
-        buffer.acknowledge(Number(message.generation), Number(message.audio_sequence))
+        if (Number(message.generation) === grant.generation) {
+          buffer.acknowledge(Number(message.audio_sequence), grant.protocol === 2 ? undefined : grant.generation)
+        }
       }
       if (message.message === 'RecognitionStarted') {
-        // Preserve the window through failed handshakes. Rebind all frames only
-        // after the provider is ready, including any tail a failed send leaves.
+        // Frame identifiers survive provider reconnection and failed handshakes.
+        // Only the main site's final-result checkpoint releases replay bytes.
         buffer.frames = buffer.frames.map((frame, index) => ({
-          ...frame, generation: grant.generation, sequence: index + 1,
+          ...frame, generation: grant.generation,
+          sequence: grant.protocol === 2 ? frame.sequence : index + 1,
         }))
-        this.sequence = buffer.frames.length
+        if (grant.protocol !== 2) buffer.sequence = buffer.frames.length
+        this.sequence = buffer.sequence
         try {
           for (const frame of buffer.frames) this.sendFrame(frame.sequence, frame.data)
         } catch {
@@ -90,10 +108,11 @@ export class RegionalEdgeSocket implements SpeechmaticsSocket {
       throw new Error('主站未确认的音频已达到 30 秒，请等待恢复连接')
     }
     const sequence = this.sequence + 1
-    this.sendFrame(sequence, data)
     this.sequence = sequence
+    this.buffer.sequence = sequence
     this.buffer.frames.push({ generation: this.authorization.grant.generation, sequence, data })
     this.buffer.bytes += data.byteLength
+    this.sendFrame(sequence, data)
   }
   private sendFrame(sequence: number, data: ArrayBuffer) {
     const wire = new Uint8Array(data.byteLength + 8)

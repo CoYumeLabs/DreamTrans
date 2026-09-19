@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,6 +23,11 @@ import (
 )
 
 func TestAudioBypassesMainAndOutboxSurvivesNetworkPartitionAndDrain(t *testing.T) {
+	for _, protocol := range []int{1, 2} {
+		t.Run(fmt.Sprintf("protocol_%d", protocol), func(t *testing.T) { testAudioPartitionAndDrain(t, protocol) })
+	}
+}
+func testAudioPartitionAndDrain(t *testing.T, protocol int) {
 	oldRuntime := deployment.Default
 	deployment.Default = &deployment.Runtime{}
 	t.Cleanup(func() { deployment.Default = oldRuntime })
@@ -33,7 +39,7 @@ func TestAudioBypassesMainAndOutboxSurvivesNetworkPartitionAndDrain(t *testing.T
 		t.Fatal(err)
 	}
 	node, session := uuid.NewString(), uuid.NewString()
-	grant := edgeprotocol.Grant{RegisteredClaims: jwt.RegisteredClaims{Issuer: "dreamtrans-edge", ID: uuid.NewString(), Audience: jwt.ClaimStrings{node}, ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute))}, NodeID: node, SessionID: session, UserID: uuid.NewString(), Origin: "https://main.example.test", Generation: 1, SampleRate: 48000, ApprovedSamples: 48000 * 30, Provider: "speechmatics", Protocol: 1}
+	grant := edgeprotocol.Grant{RegisteredClaims: jwt.RegisteredClaims{Issuer: "dreamtrans-edge", ID: uuid.NewString(), Audience: jwt.ClaimStrings{node}, ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute))}, NodeID: node, SessionID: session, UserID: uuid.NewString(), Origin: "https://main.example.test", Generation: 1, SampleRate: 48000, ApprovedSamples: 48000 * 30, Provider: "speechmatics", Protocol: protocol}
 	token, err := edgeprotocol.Sign(key, &grant)
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +69,7 @@ func TestAudioBypassesMainAndOutboxSurvivesNetworkPartitionAndDrain(t *testing.T
 				return
 			}
 			saved.Add(1)
-			_ = json.NewEncoder(w).Encode(edgeprotocol.Ack{Saved: true, Sequence: event.Sequence, AudioSequence: event.AudioSequence})
+			_ = json.NewEncoder(w).Encode(edgeprotocol.Ack{Saved: true, Sequence: event.Sequence, AudioSequence: event.DurableAudioSequence})
 		default:
 			w.WriteHeader(404)
 		}
@@ -198,5 +204,150 @@ func TestAudioBypassesMainAndOutboxSurvivesNetworkPartitionAndDrain(t *testing.T
 	}
 	if audioFrames.Load() != 1 {
 		t.Fatal("replayed audio billed provider twice")
+	}
+}
+
+func TestReceiptDisconnectAndFailedJournalNeverAdvanceDurableCheckpoint(t *testing.T) {
+	directory := t.TempDir()
+	queue, err := OpenQueue(directory, 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{queue: queue}
+	st := &stream{grant: edgeprotocol.Grant{SessionID: uuid.NewString(), Generation: 2, Protocol: 2, ResumeSamples: 16000}, audioSeq: 12, durableSeq: 10, durableSamples: 16000, samples: 3200, providerSamples: 3200, audioBounds: []audioBoundary{{11, 17600}, {12, 19200}}}
+	if err = server.event(st, "usage"); err != nil {
+		t.Fatal(err)
+	}
+	e, err := queue.Next()
+	if err != nil || e.AudioSequence != 12 || e.DurableAudioSequence != 10 {
+		t.Fatalf("receipt is not durable: %+v %v", e, err)
+	}
+	if err = queue.Ack(e, e.Sequence); err != nil {
+		t.Fatal(err)
+	}
+	// A final that ends halfway through frame 12 retains that entire frame.
+	if err = server.checkpointEvent(st, "transcript", &edgeprotocol.Transcript{ID: "final", Text: "saved", End: 1.15}, 2400); err != nil {
+		t.Fatal(err)
+	}
+	e, err = queue.Next()
+	if err != nil || e.DurableAudioSequence != 11 || e.DurableSamples != 17600 {
+		t.Fatalf("unsafe frame boundary: %+v %v", e, err)
+	}
+	if err = queue.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Loss of the queue must not acknowledge audio or retire replay metadata.
+	if err = server.checkpointEvent(st, "checkpoint", nil, 3200); err == nil {
+		t.Fatal("closed queue accepted checkpoint")
+	}
+	if st.durableSeq != 11 || len(st.audioBounds) != 1 {
+		t.Fatal("failed persistence advanced checkpoint")
+	}
+	queue, err = OpenQueue(directory, 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = queue.Close() }()
+	server.queue = queue
+	e, err = queue.Next()
+	if err != nil || e.DurableAudioSequence != 11 {
+		t.Fatalf("restart lost pending final: %+v %v", e, err)
+	}
+	if err = queue.Ack(e, e.Sequence); err != nil {
+		t.Fatal(err)
+	}
+	if err = server.event(st, "end"); err != nil {
+		t.Fatal(err)
+	}
+	e, err = queue.Next()
+	if err != nil || e.DurableAudioSequence != 11 {
+		t.Fatalf("disconnect finalized unprocessed tail: %+v %v", e, err)
+	}
+}
+
+func TestProviderBackpressureWaitsForAudioAddedAndStopsOnLeaseExpiry(t *testing.T) {
+	st := &stream{grant: edgeprotocol.Grant{RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute))}, SampleRate: 16000}, done: make(chan struct{}), providerProgress: make(chan struct{}, 1), providerSamples: 160000, providerPending: []audioBoundary{{1, 160000}}}
+	s := &Server{}
+	ready := make(chan bool, 1)
+	go func() { ready <- s.waitProviderCapacity(st, 1600) }()
+	select {
+	case <-ready:
+		t.Fatal("replay exceeded ten seconds ahead of provider")
+	case <-time.After(20 * time.Millisecond):
+	}
+	st.acknowledgeProvider(1)
+	select {
+	case ok := <-ready:
+		if !ok {
+			t.Fatal("provider acknowledgement did not release capacity")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("provider flow control deadlocked")
+	}
+	st.grant.ExpiresAt = jwt.NewNumericDate(time.Now().Add(-time.Second))
+	if s.waitProviderCapacity(st, 1600) {
+		t.Fatal("expired session continued sending audio")
+	}
+}
+
+func TestUnavailableMainCannotStartPaidProviderSession(t *testing.T) {
+	public, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := uuid.NewString()
+	grant := edgeprotocol.Grant{RegisteredClaims: jwt.RegisteredClaims{Issuer: "dreamtrans-edge", ID: uuid.NewString(), Audience: jwt.ClaimStrings{node}, ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute))}, NodeID: node, SessionID: uuid.NewString(), UserID: uuid.NewString(), Origin: "https://main.example.test", Generation: 1, SampleRate: 16000, ApprovedSamples: 16000 * 30, Provider: "speechmatics", Protocol: 2}
+	token, err := edgeprotocol.Sign(key, &grant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	main := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "partition", http.StatusServiceUnavailable)
+	}))
+	defer main.Close()
+	client, err := NewMainClient(main.URL, "identity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.HTTP = main.Client()
+	var calls atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { calls.Add(1); w.WriteHeader(500) }))
+	defer upstream.Close()
+	q, err := OpenQueue(t.TempDir(), 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = q.Close() }()
+	old := deployment.Default
+	deployment.Default = &deployment.Runtime{}
+	defer func() { deployment.Default = old }()
+	if err = deployment.Default.SetMode("active"); err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(&Config{NodeID: node, PublicKey: base64.RawStdEncoding.EncodeToString(public), ProviderKey: "independent", ProviderURL: "ws" + strings.TrimPrefix(upstream.URL, "http"), Origins: []string{grant.Origin}, Maximum: 1}, client, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.enabled.Store(true) // Last heartbeat was healthy, then the network broke.
+	edge := httptest.NewServer(server.Handler())
+	defer edge.Close()
+	ws, response, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(edge.URL, "http")+"/ws/edge", http.Header{"Origin": []string{grant.Origin}})
+	if response != nil && response.Body != nil {
+		_ = response.Body.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ws.Close() }()
+	if err = ws.WriteJSON(map[string]string{"token": token}); err != nil {
+		t.Fatal(err)
+	}
+	_ = ws.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var message map[string]any
+	if err = ws.ReadJSON(&message); err != nil || message["message"] != "Error" {
+		t.Fatalf("missing authorization failure: %+v %v", message, err)
+	}
+	if calls.Load() != 0 {
+		t.Fatal("main outage started a paid provider connection")
 	}
 }

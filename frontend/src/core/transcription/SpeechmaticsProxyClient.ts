@@ -1114,7 +1114,7 @@ export class SpeechmaticsProxyClient {
         this.handleTranscript(message, message.edge_absolute_time ? 0 : context.timelineOffset, false)
         break
       case 'AddPartialTranscript':
-        this.handleTranscript(message, context.timelineOffset, true)
+        this.handleTranscript(message, message.edge_absolute_time ? 0 : context.timelineOffset, true)
         break
       case 'AddTranslation':
         this.handleTranslation(message, context.timelineOffset, false)

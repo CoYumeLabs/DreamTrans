@@ -22,7 +22,7 @@ export async function authorizeEdge(sessionId: string, sampleRate: number): Prom
   }))
   return authFetch<EdgeAuthorization>('/api/edges/authorize', {
     method: 'POST',
-    body: JSON.stringify({ session_id: sessionId, sample_rate: sampleRate,
+    body: JSON.stringify({ session_id: sessionId, protocol: 2, sample_rate: sampleRate,
       region: localStorage.getItem('dreamtrans.edge.region') || 'auto', latencies }),
   })
 }

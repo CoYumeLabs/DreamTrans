@@ -14,7 +14,8 @@ import (
 )
 
 const (
-	Version       = 1
+	Version       = 2
+	MinVersion    = 1
 	LeaseSeconds  = 45
 	BudgetSeconds = 30
 	MaxEventBytes = 256 * 1024
@@ -23,6 +24,9 @@ const (
 
 // Grant never contains a main-site bearer credential or signing private key.
 type Grant struct {
+	DurableAudioSequence  int64   `json:"durable_audio_sequence,omitempty"`
+	DurableSamples        int64   `json:"durable_samples,omitempty"`
+	ResumeSamples         int64   `json:"resume_samples"`
 	TimelineOffset        float64 `json:"timeline_offset"`
 	PreviousGeneration    int64   `json:"previous_generation"`
 	PreviousAudioSequence int64   `json:"previous_audio_sequence"`
@@ -49,15 +53,17 @@ type Authorization struct {
 
 // Event is persisted on Edge before submission. Samples and audio seq are cumulative.
 type Event struct {
-	SessionID       string      `json:"session_id"`
-	Generation      int64       `json:"generation"`
-	Sequence        int64       `json:"sequence"`
-	EventID         string      `json:"event_id"`
-	Kind            string      `json:"kind"`
-	AudioSequence   int64       `json:"audio_sequence"`
-	Samples         int64       `json:"samples"`
-	ProviderSamples int64       `json:"provider_samples"`
-	Transcript      *Transcript `json:"transcript,omitempty"`
+	DurableAudioSequence int64       `json:"durable_audio_sequence,omitempty"`
+	DurableSamples       int64       `json:"durable_samples,omitempty"`
+	SessionID            string      `json:"session_id"`
+	Generation           int64       `json:"generation"`
+	Sequence             int64       `json:"sequence"`
+	EventID              string      `json:"event_id"`
+	Kind                 string      `json:"kind"`
+	AudioSequence        int64       `json:"audio_sequence"`
+	Samples              int64       `json:"samples"`
+	ProviderSamples      int64       `json:"provider_samples"`
+	Transcript           *Transcript `json:"transcript,omitempty"`
 }
 
 type Transcript struct {
@@ -109,7 +115,7 @@ func Verify(key ed25519.PublicKey, token, node, origin string) (*Grant, error) {
 	if err != nil {
 		return nil, err
 	}
-	if grant.NodeID != node || grant.Origin != origin || grant.Protocol != Version || grant.Provider != "speechmatics" || grant.ID == "" || grant.SessionID == "" || grant.Generation < 1 || !ValidSampleRate(grant.SampleRate) || grant.ApprovedSamples < 0 {
+	if grant.NodeID != node || grant.Origin != origin || (grant.Protocol < MinVersion || grant.Protocol > Version) || grant.Provider != "speechmatics" || grant.ID == "" || grant.SessionID == "" || grant.Generation < 1 || !ValidSampleRate(grant.SampleRate) || grant.ApprovedSamples < 0 {
 		return nil, errors.New("invalid edge grant")
 	}
 	return &grant, nil

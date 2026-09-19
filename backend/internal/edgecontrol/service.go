@@ -200,6 +200,7 @@ func (s *Service) Heartbeat(ctx context.Context, node string, h *edgeprotocol.He
 }
 
 type AuthorizeRequest struct {
+	Protocol   int                `json:"protocol"`
 	SessionID  string             `json:"session_id"`
 	Region     string             `json:"region"`
 	Latencies  map[string]float64 `json:"latencies"`
@@ -207,6 +208,8 @@ type AuthorizeRequest struct {
 	Origin     string             `json:"-"`
 }
 type session struct {
+	Protocol                                                     int
+	DurableSeq, DurableSamples, ResumeSamples                    int64
 	Offset                                                       float64
 	PreviousGeneration, PreviousAudioSeq                         int64
 	ID, User, Tenant, Node, Token, Status, Origin                string
@@ -217,12 +220,12 @@ type session struct {
 	Route                                                        billing.RouteDecision
 }
 
-const sessionColumns = `id,user_id,tenant_id,node_id,token_id,status,origin,generation,approved_samples,consumed_samples,provider_samples,last_audio_seq,last_event_seq,sample_rate,lease_until,training,route,timeline_offset,previous_generation,previous_audio_seq`
+const sessionColumns = `id,user_id,tenant_id,node_id,token_id,status,origin,generation,approved_samples,consumed_samples,provider_samples,last_audio_seq,last_event_seq,sample_rate,lease_until,training,route,timeline_offset,previous_generation,previous_audio_seq,durable_audio_seq,durable_samples,resume_samples,protocol`
 
 func scanSession(row *sql.Row) (session, error) {
 	var v session
 	var route []byte
-	err := row.Scan(&v.ID, &v.User, &v.Tenant, &v.Node, &v.Token, &v.Status, &v.Origin, &v.Generation, &v.Approved, &v.Consumed, &v.Provider, &v.AudioSeq, &v.EventSeq, &v.Rate, &v.Until, &v.Training, &route, &v.Offset, &v.PreviousGeneration, &v.PreviousAudioSeq)
+	err := row.Scan(&v.ID, &v.User, &v.Tenant, &v.Node, &v.Token, &v.Status, &v.Origin, &v.Generation, &v.Approved, &v.Consumed, &v.Provider, &v.AudioSeq, &v.EventSeq, &v.Rate, &v.Until, &v.Training, &route, &v.Offset, &v.PreviousGeneration, &v.PreviousAudioSeq, &v.DurableSeq, &v.DurableSamples, &v.ResumeSamples, &v.Protocol)
 	if err == nil {
 		err = json.Unmarshal(route, &v.Route)
 	}
@@ -233,7 +236,7 @@ func userLock(ctx context.Context, tx *sql.Tx, user string) error {
 	return err
 }
 func (s *Service) grant(v *session, endpoint string) (edgeprotocol.Authorization, error) {
-	g := edgeprotocol.Grant{TimelineOffset: v.Offset, PreviousGeneration: v.PreviousGeneration, PreviousAudioSequence: v.PreviousAudioSeq, RegisteredClaims: jwt.RegisteredClaims{Issuer: "dreamtrans-edge", Audience: jwt.ClaimStrings{v.Node}, Subject: v.User, ID: v.Token, IssuedAt: jwt.NewNumericDate(time.Now()), ExpiresAt: jwt.NewNumericDate(v.Until)}, NodeID: v.Node, SessionID: v.ID, UserID: v.User, Generation: v.Generation, Provider: "speechmatics", Origin: v.Origin, Training: v.Training, SampleRate: v.Rate, ApprovedSamples: v.Approved, AudioSequence: v.AudioSeq, Protocol: edgeprotocol.Version}
+	g := edgeprotocol.Grant{DurableAudioSequence: v.DurableSeq, DurableSamples: v.DurableSamples, ResumeSamples: v.ResumeSamples, TimelineOffset: v.Offset, PreviousGeneration: v.PreviousGeneration, PreviousAudioSequence: v.PreviousAudioSeq, RegisteredClaims: jwt.RegisteredClaims{Issuer: "dreamtrans-edge", Audience: jwt.ClaimStrings{v.Node}, Subject: v.User, ID: v.Token, IssuedAt: jwt.NewNumericDate(time.Now()), ExpiresAt: jwt.NewNumericDate(v.Until)}, NodeID: v.Node, SessionID: v.ID, UserID: v.User, Generation: v.Generation, Provider: "speechmatics", Origin: v.Origin, Training: v.Training, SampleRate: v.Rate, ApprovedSamples: v.Approved, AudioSequence: v.AudioSeq, Protocol: v.Protocol}
 	token, err := edgeprotocol.Sign(s.Key, &g)
 	return edgeprotocol.Authorization{Endpoint: endpoint, Token: token, Grant: g}, err
 }
@@ -258,6 +261,12 @@ func (s *Service) reserve(ctx context.Context, tx *sql.Tx, v *session) error {
 //nolint:gocyclo // Keep the authorization transaction in one auditable state transition.
 func (s *Service) Authorize(ctx context.Context, user, tenant string, req AuthorizeRequest) (edgeprotocol.Authorization, error) {
 	var empty edgeprotocol.Authorization
+	if req.Protocol == 0 {
+		req.Protocol = 1
+	}
+	if req.Protocol < edgeprotocol.MinVersion || req.Protocol > edgeprotocol.Version {
+		return empty, errors.New("unsupported edge protocol")
+	}
 	if _, err := uuid.Parse(req.SessionID); err != nil {
 		return empty, err
 	}
@@ -295,6 +304,7 @@ func (s *Service) Authorize(ctx context.Context, user, tenant string, req Author
 	old, oldErr := scanSession(tx.QueryRowContext(ctx, `SELECT `+sessionColumns+` FROM edge_sessions WHERE id=$1 FOR UPDATE`, req.SessionID))
 	generation := int64(1)
 	if oldErr == nil {
+		req.Protocol = old.Protocol // Session semantics are fixed across generations.
 		if old.Status != "closed" && old.Until.After(time.Now()) {
 			if old.Status == "authorized" && old.Origin == req.Origin && old.Rate == req.SampleRate {
 				var endpoint string
@@ -327,11 +337,21 @@ func (s *Service) Authorize(ctx context.Context, user, tenant string, req Author
 	if err != nil {
 		return empty, err
 	}
-	v := session{ID: req.SessionID, User: user, Tenant: tenant, Node: selected.ID, Token: uuid.NewString(), Status: "authorized", Origin: req.Origin, Generation: generation, Rate: req.SampleRate, Until: time.Now().Add(edgeprotocol.LeaseSeconds * time.Second), Training: route.Training, Route: route}
+	v := session{Protocol: req.Protocol, ID: req.SessionID, User: user, Tenant: tenant, Node: selected.ID, Token: uuid.NewString(), Status: "authorized", Origin: req.Origin, Generation: generation, Rate: req.SampleRate, Until: time.Now().Add(edgeprotocol.LeaseSeconds * time.Second), Training: route.Training, Route: route}
 	if oldErr == nil {
-		v.Offset = old.Offset + float64(old.Consumed)/float64(old.Rate)
+		if v.Rate != old.Rate {
+			return empty, errors.New("resuming audio requires the original sample rate")
+		}
+		v.Offset = old.Offset + float64(old.DurableSamples-old.ResumeSamples)/float64(old.Rate)
+		v.DurableSeq, v.DurableSamples, v.ResumeSamples = old.DurableSeq, old.DurableSamples, old.DurableSamples
+		v.AudioSeq = old.DurableSeq
 		v.PreviousGeneration = old.Generation
-		v.PreviousAudioSeq = old.AudioSeq
+		v.PreviousAudioSeq = old.DurableSeq
+		if v.Protocol == 1 {
+			v.Offset = old.Offset + float64(old.Consumed)/float64(old.Rate)
+			v.PreviousAudioSeq = old.AudioSeq
+			v.DurableSeq, v.DurableSamples, v.ResumeSamples, v.AudioSeq = 0, 0, 0, 0
+		}
 	} else if err := tx.QueryRowContext(ctx, `SELECT coalesce(max(end_time),0) FROM transcripts WHERE session_id=$1`, v.ID).Scan(&v.Offset); err != nil {
 		return empty, err
 	}
@@ -343,7 +363,7 @@ func (s *Service) Authorize(ctx context.Context, user, tenant string, req Author
 	if err != nil {
 		return empty, err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE edge_sessions SET timeline_offset=$2,previous_generation=$3,previous_audio_seq=$4 WHERE id=$1`, v.ID, v.Offset, v.PreviousGeneration, v.PreviousAudioSeq); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE edge_sessions SET timeline_offset=$2,previous_generation=$3,previous_audio_seq=$4,durable_audio_seq=$5,durable_samples=$6,resume_samples=$7,last_audio_seq=$5,protocol=$8 WHERE id=$1`, v.ID, v.Offset, v.PreviousGeneration, v.PreviousAudioSeq, v.DurableSeq, v.DurableSamples, v.ResumeSamples, v.Protocol); err != nil {
 		return empty, err
 	}
 	if err := s.reserve(ctx, tx, &v); err != nil {
@@ -370,7 +390,7 @@ func selectNode(ctx context.Context, tx *sql.Tx, nodes []Node, req AuthorizeRequ
 			continue
 		}
 		var eligible bool
-		err := tx.QueryRowContext(ctx, `SELECT mode='enabled' AND training=$2 AND heartbeat_at>now()-interval '30 seconds' AND protocol_min<=1 AND protocol_max>=1 AND coalesce((metrics->>'healthy')::boolean,false) AND coalesce((metrics->>'load')::float,100)<0.95 AND (SELECT count(*) FROM edge_sessions WHERE node_id=edge_nodes.id AND status<>'closed' AND lease_until>now())<max_connections FROM edge_nodes WHERE id=$1 FOR UPDATE SKIP LOCKED`, n.ID, training).Scan(&eligible)
+		err := tx.QueryRowContext(ctx, `SELECT mode='enabled' AND training=$2 AND heartbeat_at>now()-interval '30 seconds' AND protocol_min<=$3 AND protocol_max>=$3 AND coalesce((metrics->>'healthy')::boolean,false) AND coalesce((metrics->>'load')::float,100)<0.95 AND (SELECT count(*) FROM edge_sessions WHERE node_id=edge_nodes.id AND status<>'closed' AND lease_until>now())<max_connections FROM edge_nodes WHERE id=$1 FOR UPDATE SKIP LOCKED`, n.ID, training, req.Protocol).Scan(&eligible)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
