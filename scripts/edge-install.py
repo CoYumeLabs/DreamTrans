@@ -209,6 +209,8 @@ def main():
     parser.add_argument('action',choices=['install','status','logs','diagnose','upgrade','drain','rollback','resume','uninstall','converge','pause-releases','resume-releases'],nargs='?',default='install')
     args=parser.parse_args()
     if os.geteuid()!=0:raise ReleaseError('root is required for host lifecycle operations')
+    if args.action=='install':
+        Path(args.dir).mkdir(mode=0o700,parents=True,exist_ok=True)
     controller=EdgeController(args.dir)
     with (controller.path/'lock').open('a') as lock:
         try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)

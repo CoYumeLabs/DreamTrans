@@ -10,6 +10,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'scripts'))
@@ -19,6 +20,22 @@ spec.loader.exec_module(edge_install)
 
 
 class EdgeBootstrapTest(unittest.TestCase):
+    def test_fresh_install_creates_private_root_and_preserves_existing_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)/'new-node'
+            argv = ['edge-install.py', '--dir', str(root), 'install']
+            def enter_install():
+                with patch.object(sys, 'argv', argv), patch.object(os, 'geteuid', return_value=0), patch.object(edge_install.EdgeController, 'install', side_effect=edge_install.ReleaseError('fixture reached install')):
+                    with self.assertRaisesRegex(edge_install.ReleaseError, 'fixture reached install'):
+                        edge_install.main()
+            enter_install()
+            self.assertEqual(root.stat().st_mode & 0o777, 0o700)
+            root.chmod(0o750)
+            (root/'existing-config').write_text('preserve')
+            enter_install()
+            self.assertEqual(root.stat().st_mode & 0o777, 0o750)
+            self.assertEqual((root/'existing-config').read_text(), 'preserve')
+
     def test_registration_crosses_client_filter_with_identity_and_body_intact(self):
         requests = []
         class Gateway(BaseHTTPRequestHandler):
