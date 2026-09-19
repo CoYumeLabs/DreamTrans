@@ -34,7 +34,7 @@ const MAX_RECENT_FINAL_EVENTS = 512
 
 type TimerHandle = ReturnType<typeof globalThis.setTimeout>
 
-export type SpeechmaticsTokenProvider = () => string | Promise<string>
+export type SpeechmaticsTokenProvider = (sampleRate: number) => string | Promise<string>
 
 export interface SpeechmaticsSocket {
   readonly readyState: number
@@ -961,7 +961,7 @@ export class SpeechmaticsProxyClient {
       }
     }
 
-    const token = (await this.tokenProvider()).trim()
+    const token = (await this.tokenProvider(this.sampleRate)).trim()
     if (!token) throw new Error('Transcription token provider returned an empty token')
     if (!this.desiredSession || this.destroyed || this.paymentBlocked || generation !== this.connectionGeneration) {
       throw new Error('Transcription session ended while refreshing authentication')
@@ -1111,7 +1111,7 @@ export class SpeechmaticsProxyClient {
         this.handleRecognitionStarted(context)
         break
       case 'AddTranscript':
-        this.handleTranscript(message, context.timelineOffset, false)
+        this.handleTranscript(message, message.edge_absolute_time ? 0 : context.timelineOffset, false)
         break
       case 'AddPartialTranscript':
         this.handleTranscript(message, context.timelineOffset, true)
@@ -1146,7 +1146,7 @@ export class SpeechmaticsProxyClient {
         // The stream was cut on purpose from another device or by an
         // administrator: never reconnect, surface a dedicated event so the
         // recording UI can wind down cleanly.
-        if (asString(message.type) === 'stream_terminated') {
+        if (asString(message.type) === 'stream_terminated' || asString(message.type) === 'edge_authorization_limit') {
           this.desiredSession = false
           if (!context.recognitionStarted) {
             this.settleStartup(context, new Error(reason))
@@ -1226,6 +1226,7 @@ export class SpeechmaticsProxyClient {
     this.discardTranscriptPartial()
     const hadPartial = this.store.getSnapshot().activePartial !== null
     const result = this.store.appendTranscript({
+      id: asString(message.edge_segment_id) || undefined,
       speaker,
       text,
       startTime,

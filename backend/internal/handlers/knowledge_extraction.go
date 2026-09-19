@@ -10,6 +10,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"github.com/dreamtrans/backend/internal/deployment"
 	"image"
 	"regexp"
 	"sort"
@@ -1274,11 +1275,16 @@ func (p *knowledgeExtractionPool) worker() {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	for {
-		if source := p.claimOne(); source != nil {
-			// Lease renewal starts immediately after this worker's own claim;
-			// no leased source waits in an in-memory queue.
-			p.runTask(source)
-			continue
+		done, allowed := deployment.Default.BeginTask()
+		if allowed {
+			if source := p.claimOne(); source != nil {
+				// Lease renewal starts immediately after this worker's own claim;
+				// no leased source waits in an in-memory queue.
+				p.runTask(source)
+				done()
+				continue
+			}
+			done()
 		}
 		select {
 		case <-p.stop:
@@ -1294,38 +1300,7 @@ func (p *knowledgeExtractionPool) blobDeletionWorker() {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	for {
-		workerID := p.workerID + "-blob-" + uuid.NewString()
-		ctx, cancel := context.WithTimeout(p.ctx, 10*time.Second)
-		deletion, err := p.handler.store.ClaimKnowledgeBlobDeletion(
-			ctx,
-			workerID,
-			knowledgeExtractionLease,
-		)
-		cancel()
-		if err == nil && deletion != nil {
-			removeErr := removeKnowledgeBlob(deletion.BlobPath)
-			finalCtx, finalCancel := context.WithTimeout(
-				context.Background(),
-				10*time.Second,
-			)
-			if removeErr == nil {
-				err = p.handler.store.CompleteKnowledgeBlobDeletion(
-					finalCtx,
-					deletion.ID,
-					workerID,
-				)
-			} else {
-				err = p.handler.store.FailKnowledgeBlobDeletion(
-					finalCtx,
-					deletion.ID,
-					workerID,
-					removeErr.Error(),
-				)
-			}
-			finalCancel()
-			if err != nil && !errors.Is(err, store.ErrLeaseLost) {
-				log.Printf("complete knowledge blob deletion: %v", err)
-			}
+		if p.deleteOneBlob() {
 			continue
 		}
 		select {
@@ -1420,4 +1395,71 @@ func (h *RAGHandler) indexKnowledgeFile(
 		return
 	}
 	cancelActiveAIIndexJobs(cancelledJobIDs)
+}
+
+func (p *knowledgeExtractionPool) deleteOneBlob() bool {
+	done, allowed := deployment.Default.BeginTask()
+	if !allowed {
+		return false
+	}
+	defer done()
+	workerID := p.workerID + "-blob-" + uuid.NewString()
+	ctx, cancel := context.WithTimeout(p.ctx, 10*time.Second)
+	deletion, err := p.handler.store.ClaimKnowledgeBlobDeletion(
+		ctx,
+		workerID,
+		knowledgeExtractionLease,
+	)
+	cancel()
+	if err == nil && deletion != nil {
+		removeErr := p.removeBlobWithBackupLock(p.ctx, deletion.BlobPath)
+		finalCtx, finalCancel := context.WithTimeout(
+			context.Background(),
+			10*time.Second,
+		)
+		if removeErr == nil {
+			err = p.handler.store.CompleteKnowledgeBlobDeletion(
+				finalCtx,
+				deletion.ID,
+				workerID,
+			)
+		} else {
+			err = p.handler.store.FailKnowledgeBlobDeletion(
+				finalCtx,
+				deletion.ID,
+				workerID,
+				removeErr.Error(),
+			)
+		}
+		finalCancel()
+		if err != nil && !errors.Is(err, store.ErrLeaseLost) {
+			log.Printf("complete knowledge blob deletion: %v", err)
+		}
+		return true
+	}
+	return false
+}
+
+// Physical deletion waits for a full backup snapshot; normal DB and audio work continue.
+func (p *knowledgeExtractionPool) removeBlobWithBackupLock(parent context.Context, path string) error {
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+	defer cancel()
+	conn, err := p.handler.store.DB().Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	var locked bool
+	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock_shared(1146243412,54)`).Scan(&locked); err != nil {
+		return err
+	}
+	if !locked {
+		return errors.New("full backup is retaining knowledge files; retry deletion later")
+	}
+	defer func() {
+		unlockCtx, finish := context.WithTimeout(context.Background(), 5*time.Second)
+		defer finish()
+		_, _ = conn.ExecContext(unlockCtx, `SELECT pg_advisory_unlock_shared(1146243412,54)`)
+	}()
+	return removeKnowledgeBlob(path)
 }

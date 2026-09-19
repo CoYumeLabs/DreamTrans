@@ -1,3 +1,4 @@
+import './regionalEdgeVerification'
 /**
  * Dependency-free executable invariants for the transcription core.
  *

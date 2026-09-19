@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/dreamtrans/backend/internal/aiproviders"
+	"github.com/dreamtrans/backend/internal/deployment"
 	"io"
 	"log"
 	"net/http"
@@ -186,7 +187,7 @@ func (s *Service) Start(ctx context.Context) {
 	restoreCancel()
 	go func() {
 		refreshCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		_ = s.Refresh(refreshCtx)
+		s.refreshForDeployment(refreshCtx)
 		cancel()
 		ticker := time.NewTicker(refreshEvery)
 		defer ticker.Stop()
@@ -196,7 +197,7 @@ func (s *Service) Start(ctx context.Context) {
 				return
 			case <-ticker.C:
 				refreshCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-				_ = s.Refresh(refreshCtx)
+				s.refreshForDeployment(refreshCtx)
 				cancel()
 			}
 		}
@@ -1512,4 +1513,13 @@ func SortAvailable(models []AvailableModel) {
 		}
 		return models[i].Purpose < models[j].Purpose
 	})
+}
+
+func (s *Service) refreshForDeployment(ctx context.Context) {
+	done, allowed := deployment.Default.BeginTask()
+	if !allowed {
+		return
+	}
+	defer done()
+	_ = s.Refresh(ctx)
 }

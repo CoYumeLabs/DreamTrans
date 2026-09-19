@@ -1,3 +1,6 @@
+import type { SpeechmaticsSocket } from '../../core/transcription/SpeechmaticsProxyClient'
+import { EdgeAudioBuffer, RegionalEdgeSocket, type EdgeAuthorization } from '../../core/transcription/RegionalEdge'
+import { authorizeEdge } from '../workspace/edgeSelection'
 import {
   useCallback,
   useEffect,
@@ -844,6 +847,8 @@ export function useUnifiedWorkspace({
     translationEnabled: settings.translationEnabled,
   }))
   const sessionAuthRequiredRef = useRef(false)
+  const edgeAuthorizationRef = useRef<EdgeAuthorization | null>(null)
+  const [edgeBuffer] = useState(() => new EdgeAudioBuffer())
   const [client] = useState(() => new SpeechmaticsProxyClient({
     beforeReconnect: async () => {
       try {
@@ -857,9 +862,15 @@ export function useUnifiedWorkspace({
     },
     // The session id lets the backend tie this live stream to the session so
     // it can be ended remotely from another device or the admin console.
-    url: () => resolveSpeechmaticsProxyUrl(backendURL, currentSessionRef.current),
-    tokenProvider: async () => {
+    url: () => edgeAuthorizationRef.current ? edgeAuthorizationRef.current.endpoint.replace(/^https:/, 'wss:') + '/ws/edge' : resolveSpeechmaticsProxyUrl(backendURL, currentSessionRef.current),
+    socketFactory: (url, protocols) => edgeAuthorizationRef.current ? new RegionalEdgeSocket(edgeAuthorizationRef.current, edgeBuffer) : new WebSocket(url, [...protocols]) as unknown as SpeechmaticsSocket,
+    tokenProvider: async (sampleRate) => {
       const token = getAccessToken()
+      edgeAuthorizationRef.current = null
+      if (token && currentSessionRef.current) {
+        edgeAuthorizationRef.current = await authorizeEdge(currentSessionRef.current, sampleRate)
+        if (edgeAuthorizationRef.current) return edgeAuthorizationRef.current.token
+      }
       if (sessionAuthRequiredRef.current && !token) {
         throw new Error(messages().workspace.runtime.authExpired)
       }
@@ -3739,7 +3750,7 @@ export function useUnifiedWorkspace({
       }),
       client.on('terminated', (event) => {
         setError(
-          event.reason.includes('administrator')
+          event.reason.startsWith('Edge:') ? event.reason.slice(5).trim() : event.reason.includes('administrator')
             ? messages().workspace.runtime.remoteAdmin
             : messages().workspace.runtime.remoteOther,
         )

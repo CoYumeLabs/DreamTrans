@@ -77,6 +77,9 @@ const FreePlanCode = "free"
 // estimate. UserID identifies the billing account; the account is resolved
 // (and created on first use) inside the ledger transaction.
 type UsageRecord struct {
+	// StrictBudget forbids overdraft for delegated Edge work, including when general overdraft is enabled.
+	StrictBudget bool
+
 	UserID    string
 	TenantID  string
 	SessionID *string

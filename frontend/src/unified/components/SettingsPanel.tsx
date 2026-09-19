@@ -1,3 +1,4 @@
+import { EdgeRegionSelector } from './EdgeRegionSelector'
 import { useEffect, useState } from 'react'
 import {
   getAvailableModels,
@@ -114,6 +115,7 @@ export function SettingsPanel({
 
   return (
     <div className="dt-settings">
+      <EdgeRegionSelector />
       <section className="dt-settings__section">
         <div>
           <h3>{s.interfaceLanguage.title}</h3>

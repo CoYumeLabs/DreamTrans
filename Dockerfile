@@ -110,6 +110,8 @@ COPY scripts/migrate.sh /usr/share/dreamtrans/migrate.sh
 # The backup helper ships with the release too, so the installer can drop it
 # next to migrate.sh and keep it current on every --update.
 COPY scripts/backup.sh /usr/share/dreamtrans/backup.sh
+COPY scripts/release.py /usr/share/dreamtrans/release.py
+COPY deploy/release.json /usr/share/dreamtrans/release.json
 RUN chmod 0555 /usr/share/dreamtrans/migrations \
       /usr/share/dreamtrans/migrate.sh \
       /usr/share/dreamtrans/backup.sh \
@@ -132,3 +134,6 @@ USER dreamtrans
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=12 \
   CMD wget -q -O /dev/null http://127.0.0.1:8080/readyz || exit 1
 CMD ["./server"]
+
+COPY scripts/edge-install.py /usr/share/dreamtrans/edge-install.py
+COPY scripts/edge-install.sh /usr/share/dreamtrans/edge-install.sh

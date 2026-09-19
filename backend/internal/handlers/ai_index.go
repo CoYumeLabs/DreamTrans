@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/dreamtrans/backend/internal/deployment"
 	"log"
 	"net/http"
 	"os"
@@ -826,6 +827,11 @@ func (p *aiIndexPool) worker() {
 }
 
 func (p *aiIndexPool) claimAndRun() bool {
+	done, allowed := deployment.Default.BeginTask()
+	if !allowed {
+		return false
+	}
+	defer done()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	// Every claim gets a fresh fencing token. Reusing the pool identifier as
 	// lease_owner would let an expired execution regain write authority if the

@@ -1,0 +1,105 @@
+import type { SpeechmaticsSocket } from './SpeechmaticsProxyClient'
+
+export interface EdgeAuthorization {
+  endpoint: string
+  token: string
+  grant: {
+    session_id: string
+    generation: number
+    previous_generation: number
+    previous_audio_sequence: number
+    sample_rate: number
+  }
+}
+interface Frame { generation: number; sequence: number; data: ArrayBuffer }
+
+/** Retains only a bounded, not-yet-main-acknowledged audio window for this tab. */
+export class EdgeAudioBuffer {
+  frames: Frame[] = []
+  session = ''
+  bytes = 0
+  reset(session: string) { this.frames = []; this.bytes = 0; this.session = session }
+  acknowledge(generation: number, sequence: number) {
+    this.frames = this.frames.filter(frame => {
+      if (frame.generation === generation && frame.sequence <= sequence) {
+        this.bytes -= frame.data.byteLength
+        return false
+      }
+      return true
+    })
+  }
+}
+
+/** Grants travel in the first WS message, never in a URL or main login token. */
+export class RegionalEdgeSocket implements SpeechmaticsSocket {
+  readonly native: WebSocket
+  onopen: SpeechmaticsSocket['onopen'] = null
+  onmessage: SpeechmaticsSocket['onmessage'] = null
+  onerror: SpeechmaticsSocket['onerror'] = null
+  onclose: SpeechmaticsSocket['onclose'] = null
+  private sequence = 0
+  private authorization: EdgeAuthorization
+  private buffer: EdgeAudioBuffer
+  constructor(authorization: EdgeAuthorization, buffer: EdgeAudioBuffer) {
+    this.authorization = authorization
+    this.buffer = buffer
+    const { grant } = authorization
+    if (buffer.session !== grant.session_id) buffer.reset(grant.session_id)
+    buffer.acknowledge(grant.previous_generation, grant.previous_audio_sequence)
+    this.native = new WebSocket(authorization.endpoint.replace(/^https:/, 'wss:') + '/ws/edge', 'dreamtrans-edge-v1')
+    this.native.binaryType = 'arraybuffer'
+    this.native.onopen = event => {
+      this.native.send(JSON.stringify({ token: authorization.token }))
+      this.onopen?.(event)
+    }
+    this.native.onerror = event => this.onerror?.(event)
+    this.native.onclose = event => this.onclose?.(event)
+    this.native.onmessage = event => {
+      let message: Record<string, unknown>
+      try { message = JSON.parse(String(event.data)) as Record<string, unknown> } catch { return }
+      if (message.message === 'EdgeSaved') {
+        buffer.acknowledge(Number(message.generation), Number(message.audio_sequence))
+      }
+      if (message.message === 'RecognitionStarted') {
+        // Preserve the window through failed handshakes. Rebind all frames only
+        // after the provider is ready, including any tail a failed send leaves.
+        buffer.frames = buffer.frames.map((frame, index) => ({
+          ...frame, generation: grant.generation, sequence: index + 1,
+        }))
+        this.sequence = buffer.frames.length
+        try {
+          for (const frame of buffer.frames) this.sendFrame(frame.sequence, frame.data)
+        } catch {
+          this.native.close(4009, 'Audio replay interrupted')
+          return
+        }
+      }
+      this.onmessage?.(event)
+    }
+  }
+  get readyState() { return this.native.readyState }
+  get bufferedAmount() { return this.native.bufferedAmount }
+  get binaryType() { return this.native.binaryType }
+  set binaryType(value: BinaryType) { this.native.binaryType = value }
+  send(data: string | ArrayBuffer | ArrayBufferView | Blob) {
+    if (typeof data === 'string') { this.native.send(data); return }
+    if (!(data instanceof ArrayBuffer)) throw new Error('Edge requires PCM ArrayBuffer frames')
+    const maximum = this.authorization.grant.sample_rate * 4 * 30
+    if (this.buffer.bytes + data.byteLength > maximum) {
+      this.native.close(4008, 'Unacknowledged audio buffer reached 30 seconds')
+      throw new Error('主站未确认的音频已达到 30 秒，请等待恢复连接')
+    }
+    const sequence = this.sequence + 1
+    this.sendFrame(sequence, data)
+    this.sequence = sequence
+    this.buffer.frames.push({ generation: this.authorization.grant.generation, sequence, data })
+    this.buffer.bytes += data.byteLength
+  }
+  private sendFrame(sequence: number, data: ArrayBuffer) {
+    const wire = new Uint8Array(data.byteLength + 8)
+    new DataView(wire.buffer).setBigUint64(0, BigInt(sequence))
+    wire.set(new Uint8Array(data), 8)
+    this.native.send(wire)
+  }
+  close(code?: number, reason?: string) { this.native.close(code, reason) }
+}

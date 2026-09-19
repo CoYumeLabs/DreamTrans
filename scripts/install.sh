@@ -3418,6 +3418,10 @@ main() {
     validate_command_selection
     normalize_install_dir
     validate_deployment_options
+    if [[ -f "$INSTALL_DIR/.bluegreen/state.json" && "$STATUS_MODE" != "true" && "$LOGS_MODE" != "true" ]]; then
+        error "Blue/green owns this installation. Use release.py deploy/status/rollback; --update is an in-place upgrade only."
+        exit 1
+    fi
 
     # Handle special modes
     if [[ "$UNINSTALL_MODE" == "true" ]]; then

@@ -1,0 +1,9 @@
+{
+  "protocol": 1,
+  "state_epoch": 1,
+  "edge_protocol_min": 1,
+  "edge_protocol_max": 1,
+  "expand_migrations": [],
+  "minimum_free_memory_mb": 384,
+  "container_memory_mb": 256
+}

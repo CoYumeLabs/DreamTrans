@@ -1,0 +1,23 @@
+FROM golang:1.26.5-alpine AS build
+WORKDIR /src
+COPY backend/go.mod backend/go.sum ./
+RUN go mod download
+COPY backend/ ./
+RUN CGO_ENABLED=0 go build -trimpath -o /edge ./cmd/edge
+FROM build AS edge-runtime-test-builder
+RUN CGO_ENABLED=0 go test -c -o /edge-runtime.test ./internal/edgeruntime
+FROM scratch AS edge-runtime-test-binary
+COPY --from=edge-runtime-test-builder /edge-runtime.test /edge-runtime.test
+FROM alpine:3.22
+RUN apk --no-cache add ca-certificates && addgroup -g 10001 -S dreamtrans && adduser -u 10001 -S -D -H -G dreamtrans dreamtrans && mkdir -p /app /spool && chown dreamtrans:dreamtrans /spool
+COPY --from=build /edge /app/server
+COPY deploy/edge-release.json /usr/share/dreamtrans/release.json
+USER dreamtrans
+EXPOSE 8080
+ENV DREAMTRANS_ROLE=edge
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD wget -qO /dev/null http://127.0.0.1:8080/readyz || exit 1
+CMD ["/app/server"]
+
+COPY scripts/edge-install.py /usr/share/dreamtrans/edge-install.py
+COPY scripts/edge-install.sh /usr/share/dreamtrans/edge-install.sh
+COPY scripts/release.py /usr/share/dreamtrans/release.py

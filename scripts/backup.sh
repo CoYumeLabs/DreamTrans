@@ -155,6 +155,19 @@ run_backup() {
         return 0
     fi
 
+    if [[ -f "$INSTALL_DIR/.bluegreen/state.json" ]]; then
+        local full="$BACKUP_DIR/${name}.full.tar" encrypted="$BACKUP_DIR/${name}.full.tar.enc"
+        python3 "$INSTALL_DIR/release.py" --dir "$INSTALL_DIR" snapshot --output "$full" || fail "full deployment snapshot failed"
+        compose exec -T -e BACKUP_PASSPHRASE db openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:BACKUP_PASSPHRASE \
+            < "$full" > "$encrypted" || fail "full snapshot encryption failed"
+        rm -f -- "$full"
+        rclone copyto "/backups/$(basename "$encrypted")" "r2:${R2_BUCKET}/${REMOTE_PREFIX}/$(basename "$encrypted")" || fail "full snapshot upload failed"
+        rclone delete "r2:${R2_BUCKET}/${REMOTE_PREFIX}" --min-age "${RETENTION_DAYS}d" || log "remote prune failed (ignored)"
+        log "full deployment backup complete"
+        ping_healthcheck ok
+        return
+    fi
+
     log "dumping database"
     # pg_dump custom format is already compressed. The passphrase is exported
     # by load_env and forwarded by name (-e BACKUP_PASSPHRASE), so it never

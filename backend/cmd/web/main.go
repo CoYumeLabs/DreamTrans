@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/dreamtrans/backend/internal/deployment"
 	"log"
 	"net/http"
 	"net/mail"
@@ -21,7 +22,6 @@ import (
 	"github.com/dreamtrans/backend/internal/aiproviders"
 	"github.com/dreamtrans/backend/internal/auth"
 	"github.com/dreamtrans/backend/internal/billing"
-	"github.com/dreamtrans/backend/internal/config"
 	"github.com/dreamtrans/backend/internal/handlers"
 	"github.com/dreamtrans/backend/internal/mailer"
 	"github.com/dreamtrans/backend/internal/modelcatalog"
@@ -96,12 +96,28 @@ var (
 )
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "deploy-control" {
+		if err := deployment.Control(os.Args[2], os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	if len(os.Args) == 2 && os.Args[1] == "deploy-import" {
+		if err := importDeploymentState(); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		log.Fatal(err)
 	}
 }
 
+//nolint:gocyclo // Startup validates independent persistence, billing, deployment and authentication prerequisites.
 func run() error {
+	if err := deployment.Configure(); err != nil {
+		return err
+	}
 	modelCatalogContext, stopModelCatalog := context.WithCancel(context.Background())
 	defer stopModelCatalog()
 	// Load .env file
@@ -109,7 +125,7 @@ func run() error {
 		log.Println("No .env file found")
 	}
 	// Load centralized config file (creates defaults if missing)
-	if err := config.Load(); err != nil {
+	if err := loadServerConfig(); err != nil {
 		return fmt.Errorf("config load error: %w", err)
 	}
 
@@ -174,6 +190,12 @@ func run() error {
 
 	// Build and run server
 	handler, cleanupHandler := buildHandler()
+	handler = deployment.Default.Middleware(handler)
+	stopControl, err := deployment.Default.ServeControl()
+	if err != nil {
+		return err
+	}
+	defer stopControl()
 	if pgStore != nil {
 		defer func() {
 			if err := pgStore.Close(); err != nil {
@@ -215,6 +237,15 @@ func run() error {
 		log.Println("Shutdown signal received; draining active requests")
 	}
 
+	if deployment.Default.Enabled() {
+		if err := deployment.Default.SetMode("draining"); err != nil {
+			return err
+		}
+		// No deadline: deployment tooling reports a pending drain and never kills live audio.
+		for !deployment.Default.Status().Drained {
+			time.Sleep(250 * time.Millisecond)
+		}
+	}
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancelShutdown()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
@@ -257,6 +288,9 @@ func buildHandler() (http.Handler, func()) {
 	if aiproviders.Configured() {
 		ragHandler, err = handlers.NewRAGHandler(billingSvc, pgStore)
 		if err != nil {
+			if deployment.Default.Enabled() {
+				log.Fatalf("managed RAG initialization failed: %v", err)
+			}
 			log.Printf("RAG is disabled because initialization failed: %v", err)
 		}
 		if ragHandler != nil {
@@ -276,6 +310,9 @@ func buildHandler() (http.Handler, func()) {
 
 	// Create mux
 	mux := http.NewServeMux()
+	stopEdges := registerEdges(mux)
+	priorCleanup := cleanup
+	cleanup = func() { stopEdges(); priorCleanup() }
 	mux.Handle("/healthz", probeHandler(nil))
 	var readinessPinger databasePinger
 	if pgStore != nil {
@@ -309,7 +346,8 @@ func buildHandler() (http.Handler, func()) {
 
 	// Speechmatics token endpoint (legacy - for classic UI)
 	tokenRoute := http.Handler(http.HandlerFunc(tokenHandler.HandleTokenRequest))
-	mux.Handle("/api/token/rt", protect(tokenRoute))
+	edgeEnabled := os.Getenv("EDGE_SIGNING_SEED") != "" && pgStore != nil && authMw != nil
+	mux.Handle("/api/token/rt", protect(edgeIngressRoute(edgeEnabled, tokenRoute)))
 
 	// WebSocket handler with billing support
 	wsHandler := handlers.NewWebSocketHandler(billingSvc)
@@ -319,7 +357,19 @@ func buildHandler() (http.Handler, func()) {
 
 	// Speechmatics WebSocket proxy (for Pro UI - all traffic goes through backend)
 	smProxyHandler, err := handlers.NewSpeechmaticsProxyHandler(billingSvc)
-	if err != nil {
+	if edgeEnabled {
+		// Admission and budget checks run transactionally in /api/edges/authorize.
+		// The preflight must not require a main-site supplier credential.
+		mux.Handle("/api/speechmatics/preflight", protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			w.Header().Set("Cache-Control", "no-store")
+			handlers.WriteJSON(w, map[string]bool{"ready": true})
+		})))
+		mux.Handle("/ws/speechmatics", protect(edgeIngressRoute(true, nil)))
+	} else if err != nil {
 		log.Printf("Speechmatics proxy not available: %v", err)
 	} else {
 		smProxyHandler.SetTrainingOptInLookup(trainingOptIn)
@@ -350,6 +400,7 @@ func buildHandler() (http.Handler, func()) {
 			"email_verification_required": emailVerificationRequired,
 			"rag_enabled":                 ragHandler != nil,
 			"rag_stateless_supported":     true,
+			"edge_enabled":                os.Getenv("EDGE_SIGNING_SEED") != "" && pgStore != nil,
 			// The training program is offered only with a no-training
 			// provider account; joining earns this transcription discount.
 			"training_program_available": trainingProgram,
