@@ -385,7 +385,7 @@ mock_compose_pull() {
     local active_config="${DOCKER_CONFIG:-}"
     printf '%s\t%s\t%s\n' \
         "$active_config" "${DOCKER_AUTH_CONFIG-unset}" "$*" >> "$PULL_LOG_PATH"
-    test "$*" = "pull app" || return 96
+    test "$*" = "pull --policy always app" || return 96
 
     if [[ "$active_config" == "$PULL_DOCKER_CONFIG" ]]; then
         return 23

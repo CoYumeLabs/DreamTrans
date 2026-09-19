@@ -870,11 +870,13 @@ pull_app_image_anonymously() (
     # anonymous while leaving every caller setting and Docker config untouched.
     unset DOCKER_AUTH_CONFIG
     export DOCKER_CONFIG="$anonymous_docker_config"
-    $COMPOSE_CMD pull app
+    $COMPOSE_CMD pull --policy always app
 )
 
 pull_app_image() {
-    if $COMPOSE_CMD pull app; then
+    # Recovery overrides use pull_policy: missing for offline restarts. An
+    # explicit update must refresh even an already-cached mutable tag.
+    if $COMPOSE_CMD pull --policy always app; then
         return 0
     fi
 
@@ -1144,6 +1146,197 @@ remove_update_lock_file() {
     rm -f -- "$lock_path"
 }
 
+# Compose remains the YAML parser; Python only handles JSON and narrowly edits
+# image/pull_policy scalars. Keep this embedded for curl | bash installations.
+backup_update_compose_files() {
+    command_exists python3 || { error "python3 is required for safe Compose update validation"; return 1; }
+    local compose_environment file
+    compose_environment="$($COMPOSE_CMD config --environment)" || return 1
+    UPDATE_COMPOSE_FILES=()
+    local file_list
+    file_list="$(printf '%s\n' "$compose_environment" | python3 -c '
+import os, sys
+from pathlib import Path
+env = dict(line.rstrip("\n").split("=", 1) for line in sys.stdin if "=" in line)
+root = Path(sys.argv[1]).resolve()
+files = env.get("COMPOSE_FILE", "")
+if files:
+    files = files.split(env.get("COMPOSE_PATH_SEPARATOR", os.pathsep))
+else:
+    if any((root / name).exists() for name in ("compose.yaml", "compose.yml")):
+        sys.exit("Set COMPOSE_FILE explicitly when multiple default Compose files exist")
+    files = ["docker-compose.yml"]
+    if (root / "docker-compose.override.yml").exists():
+        files.append("docker-compose.override.yml")
+for name in dict.fromkeys(["docker-compose.yml"] + files):
+    path = Path(name)
+    if not path.is_absolute():
+        path = root / path
+    if (not path.is_file() or path.is_symlink() or path.resolve().parent != root
+            or path.stat().st_uid != os.geteuid() or "\n" in str(path)):
+        sys.exit("Unsafe or unsupported Compose file: " + str(path))
+    print(path)
+' "$INSTALL_DIR")" || return 1
+    while IFS= read -r file; do
+        cp -p -- "$file" "$UPDATE_BACKUP_DIR/compose.${#UPDATE_COMPOSE_FILES[@]}" || return 1
+        UPDATE_COMPOSE_FILES+=("$file")
+    done <<< "$file_list"
+    printf '%s\n' "${UPDATE_COMPOSE_FILES[@]}" > "$UPDATE_BACKUP_DIR/compose-files.txt" || return 1
+    if [[ -e "$INSTALL_DIR/backup.sh" ]]; then
+        [[ -f "$INSTALL_DIR/backup.sh" && ! -L "$INSTALL_DIR/backup.sh" ]] || return 1
+        cp -p -- "$INSTALL_DIR/backup.sh" "$UPDATE_BACKUP_DIR/backup.sh" || return 1
+    fi
+    $COMPOSE_CMD config --format json > "$UPDATE_BACKUP_DIR/compose-before.json"
+}
+
+normalize_restored_images_for_update() {
+    local before="$UPDATE_BACKUP_DIR/before-image-conversion.json"
+    local after="$UPDATE_BACKUP_DIR/after-image-conversion.json"
+    $COMPOSE_CMD config --format json > "$before" || return 1
+    python3 - "$POSTGRES_IMAGE" "${UPDATE_COMPOSE_FILES[@]}" <<'PY' || return 1
+import re, sys
+from pathlib import Path
+paths = [Path(p) for p in sys.argv[2:]]
+# The backup namespace is deliberately narrow. Unrelated services and custom
+# production settings are never rewritten. Fail final validation on unsupported
+# YAML layouts rather than guessing how to edit them.
+recovery = any(re.search(r'dreamtrans-migration/', p.read_text()) for p in paths)
+if not recovery:
+    sys.exit(0)
+for path in paths:
+    lines = path.read_text().splitlines(keepends=True)
+    services_indent = service_indent = None
+    service = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith('#'):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if re.fullmatch(r'''["']?services["']?:\s*(?:#.*)?''', stripped):
+            services_indent = indent
+            service_indent = None
+            continue
+        if services_indent is None:
+            continue
+        if indent <= services_indent:
+            services_indent = None
+            service = None
+            continue
+        key = re.fullmatch(r'''["']?([\w.-]+)["']?:\s*(?:#.*)?''', stripped)
+        if service_indent is None and key:
+            service_indent = indent
+        if indent == service_indent:
+            service = key.group(1) if key else None
+            continue
+        if service not in ('app', 'db', 'migrate'):
+            continue
+        match = re.fullmatch(r'''(\s*)(image|pull_policy):\s*(["']?)([^\s"'#]+)\3\s*(#.*)?\n?''', line)
+        if not match:
+            continue
+        space, field, quote, value, comment = match.groups()
+        if field == 'image' and value.startswith('dreamtrans-migration/'):
+            value = 'ghcr.io/coyumelabs/dreamtrans:${IMAGE_TAG:-latest}' if service == 'app' else sys.argv[1]
+        elif field == 'pull_policy' and value == 'never':
+            # Pull explicitly before touching containers, then use local images
+            # for restart. In particular rollback must never contact a registry.
+            value = 'missing'
+        else:
+            continue
+        lines[i] = f'{space}{field}: {quote}{value}{quote}' + (f' {comment}' if comment else '') + '\n'
+    updated = ''.join(lines)
+    if updated != path.read_text():
+        path.write_text(updated)
+PY
+    $COMPOSE_CMD config --format json > "$after" || return 1
+    python3 - "$before" "$after" "$IMAGE_TAG" "$POSTGRES_IMAGE" <<'PY'
+import json, sys
+before, after = (json.load(open(p)) for p in sys.argv[1:3])
+for service in ('app', 'db', 'migrate'):
+    old = before['services'].get(service, {})
+    new = after['services'].get(service, {})
+    if old.get('image', '').startswith('dreamtrans-migration/'):
+        expected = 'ghcr.io/coyumelabs/dreamtrans:' + sys.argv[3] if service == 'app' else sys.argv[4]
+        if new.get('image') != expected or new.get('pull_policy') == 'never':
+            sys.exit('Could not safely convert recovery image for ' + service)
+    for key in ('image', 'pull_policy'):
+        old.pop(key, None)
+        new.pop(key, None)
+if before != after:
+    sys.exit('Recovery conversion changed settings other than DreamTrans images/pull policies')
+PY
+}
+
+# Resolve the final merged mount, then corroborate it against the actual
+# container and Docker volume. External volumes need no Compose ownership label.
+confirmed_service_volume() {
+    local service="$1" destination="$2" container="$3"
+    local config
+    config="$($COMPOSE_CMD config --format json)" || return 1
+    printf '%s\n' "$config" | python3 -c '
+import json, subprocess, sys
+config = json.load(sys.stdin)
+service, target, container, require_managed = sys.argv[1:]
+def fail(message):
+    sys.exit("Unsafe " + service + " data mount: " + message)
+def inspect(kind, name):
+    return json.loads(subprocess.check_output(["docker", kind, "inspect", name], stderr=subprocess.DEVNULL))[0]
+try:
+    current = inspect("container", container)
+    labels = current.get("Config", {}).get("Labels") or {}
+    if labels.get("com.docker.compose.project") != config.get("name") or labels.get("com.docker.compose.service") != service:
+        fail("container does not belong to the selected Compose project/service")
+    mounts = [m for m in config["services"][service].get("volumes", []) if m.get("target") == target]
+    actual = [m for m in current.get("Mounts", []) if m.get("Destination") == target]
+    if len(mounts) != 1 or len(actual) != 1:
+        fail("expected exactly one mount")
+    planned, mounted = mounts[0], actual[0]
+    if planned.get("type") != "volume" or mounted.get("Type") != "volume" or planned.get("read_only") or not mounted.get("RW"):
+        fail("expected a writable named volume")
+    if planned.get("volume", {}).get("subpath"):
+        fail("volume subpaths cannot be migrated recursively")
+    key = planned["source"]
+    definition = config["volumes"][key]
+    name = definition["name"]
+    if definition.get("external") and require_managed == "true":
+        fail("external volumes require an existing production container, not a discovery container")
+    if name != mounted.get("Name"):
+        fail("merged Compose volume differs from the existing container")
+    volume = inspect("volume", name)
+    if volume["Name"] != name or volume.get("Driver") != "local" or volume.get("Options"):
+        fail("expected an existing local volume without driver mount options")
+    if not definition.get("external"):
+        owner = volume.get("Labels") or {}
+        if owner.get("com.docker.compose.project") != config["name"] or owner.get("com.docker.compose.volume") != key:
+            fail("managed volume ownership does not match")
+    print(name)
+except (KeyError, ValueError, subprocess.CalledProcessError):
+    fail("unable to resolve configuration, container or existing volume")
+' "$service" "$destination" "$container" "${4:-false}"
+}
+
+validate_update_data_volumes() {
+    local db_container="${PREVIOUS_DB_CONTAINER_ID:-}" db_volume
+    APP_DATA_VOLUME_NAME="$(confirmed_service_volume app /app/data "$PREVIOUS_APP_CONTAINER_ID" \
+        "${PREVIOUS_APP_CONTAINER_CREATED_FOR_DISCOVERY:-false}")" || return 1
+    if [[ -n "${UPDATE_APP_VOLUME_NAME:-}" && "$APP_DATA_VOLUME_NAME" != "$UPDATE_APP_VOLUME_NAME" ]]; then
+        error "Application volume changed during update"
+        return 1
+    fi
+    UPDATE_APP_VOLUME_NAME="$APP_DATA_VOLUME_NAME"
+    if [[ "${UPDATE_DB_RUNTIME_TOUCHED:-false}" == "true" ]]; then
+        db_container="$(compose_service_container_id_any_state db)" || return 1
+    fi
+    if [[ -n "$db_container" ]]; then
+        db_volume="$(confirmed_service_volume db /var/lib/postgresql/data "$db_container")" || return 1
+        if [[ -n "${UPDATE_DB_VOLUME_NAME:-}" && "$db_volume" != "$UPDATE_DB_VOLUME_NAME" ]]; then
+            error "Database volume changed during update"
+            return 1
+        fi
+        UPDATE_DB_VOLUME_NAME="$db_volume"
+        [[ "$APP_DATA_VOLUME_NAME" != "$UPDATE_DB_VOLUME_NAME" ]] || return 1
+    fi
+}
+
 begin_update_transaction() {
     local previous_app_state
     local previous_db_state
@@ -1151,10 +1344,14 @@ begin_update_transaction() {
         error "Unable to create update backup directory"
         return 1
     fi
+    UPDATE_COMPOSE_FILES=()
+    UPDATE_EXTRA_FILES_BACKED_UP="false"
     UPDATE_HAD_MIGRATIONS="false"
     UPDATE_HAD_RUNNER="false"
     UPDATE_APP_RECREATE_ATTEMPTED="false"
     UPDATE_DB_RUNTIME_TOUCHED="false"
+    UPDATE_APP_VOLUME_NAME=""
+    UPDATE_DB_VOLUME_NAME=""
     UPDATE_DATABASE_MIGRATION_ATTEMPTED="false"
     APP_DATA_PERMISSION_MIGRATION_ATTEMPTED="false"
     APP_DATA_VOLUME_NAME=""
@@ -1172,6 +1369,7 @@ begin_update_transaction() {
     PREVIOUS_DB_CONTAINER_ID=""
     PREVIOUS_DB_CONTAINER_PRESENT="false"
     PREVIOUS_DB_IMAGE_ID=""
+    PREVIOUS_DB_IMAGE_REF=""
     PREVIOUS_DB_WAS_RUNNING="false"
     PREVIOUS_IMAGE_TAG_ENV="$(read_env_value "IMAGE_TAG")"
     if ! cp -p -- "$INSTALL_DIR/.env" "$UPDATE_BACKUP_DIR/.env" ||
@@ -1201,6 +1399,15 @@ begin_update_transaction() {
         fi
         UPDATE_HAD_RUNNER="true"
     fi
+
+    if ! (unset IMAGE_TAG; backup_update_compose_files); then
+        chmod -R u+w "$UPDATE_BACKUP_DIR" 2>/dev/null || true
+        rm -rf -- "$UPDATE_BACKUP_DIR"
+        UPDATE_BACKUP_DIR=""
+        return 1
+    fi
+    mapfile -t UPDATE_COMPOSE_FILES < "$UPDATE_BACKUP_DIR/compose-files.txt"
+    UPDATE_EXTRA_FILES_BACKED_UP="true"
 
     # Ignore an inherited/CLI IMAGE_TAG while resolving the deployment that is
     # currently configured in its own .env file.
@@ -1233,6 +1440,7 @@ begin_update_transaction() {
     fi
     if [[ -n "$PREVIOUS_DB_CONTAINER_ID" ]]; then
         PREVIOUS_DB_CONTAINER_PRESENT="true"
+        PREVIOUS_DB_IMAGE_REF="$(docker inspect --format '{{.Config.Image}}' "$PREVIOUS_DB_CONTAINER_ID")" || return 1
         PREVIOUS_DB_IMAGE_ID="$(docker inspect --format '{{.Image}}' \
             "$PREVIOUS_DB_CONTAINER_ID" 2>/dev/null || true)"
         previous_db_state="$(docker inspect --format '{{.State.Status}}' \
@@ -1255,6 +1463,10 @@ begin_update_transaction() {
                 ;;
         esac
     fi
+    printf 'app_image_id=%s\napp_image_ref=%s\ndb_image_id=%s\ndb_image_ref=%s\n' \
+        "$PREVIOUS_APP_IMAGE_ID" "$PREVIOUS_APP_IMAGE_REF" \
+        "$PREVIOUS_DB_IMAGE_ID" "$PREVIOUS_DB_IMAGE_REF" \
+        > "$UPDATE_BACKUP_DIR/previous-images.txt" || return 1
 }
 
 ensure_app_container_for_update_discovery() {
@@ -1295,25 +1507,40 @@ ensure_app_container_for_update_discovery() {
 rollback_update_files() {
     trap - ERR INT TERM
     local restore_failed="false"
+    local index
     if [[ -n "${UPDATE_BACKUP_DIR:-}" && -d "$UPDATE_BACKUP_DIR" ]]; then
         cp -p -- "$UPDATE_BACKUP_DIR/.env" "$INSTALL_DIR/.env" 2>/dev/null ||
             restore_failed="true"
         cp -p -- "$UPDATE_BACKUP_DIR/docker-compose.yml" \
             "$INSTALL_DIR/docker-compose.yml" 2>/dev/null || restore_failed="true"
+        if [[ "${UPDATE_EXTRA_FILES_BACKED_UP:-false}" == "true" ]]; then
+            for index in "${!UPDATE_COMPOSE_FILES[@]}"; do
+                cp -p -- "$UPDATE_BACKUP_DIR/compose.$index" "${UPDATE_COMPOSE_FILES[$index]}" || restore_failed="true"
+            done
+            if [[ -f "$UPDATE_BACKUP_DIR/backup.sh" ]]; then
+                cp -p --remove-destination -- "$UPDATE_BACKUP_DIR/backup.sh" "$INSTALL_DIR/backup.sh" || restore_failed="true"
+            else
+                rm -f -- "$INSTALL_DIR/backup.sh" || restore_failed="true"
+            fi
+        fi
         rm -rf -- "$INSTALL_DIR/migrations" 2>/dev/null || restore_failed="true"
         rm -f -- "$INSTALL_DIR/migrate.sh" 2>/dev/null || restore_failed="true"
         if [[ "${UPDATE_HAD_MIGRATIONS:-false}" == "true" ]]; then
-            mv -- "$UPDATE_BACKUP_DIR/migrations" "$INSTALL_DIR/migrations" \
+            cp -a -- "$UPDATE_BACKUP_DIR/migrations" "$INSTALL_DIR/migrations" \
                 2>/dev/null || restore_failed="true"
         fi
         if [[ "${UPDATE_HAD_RUNNER:-false}" == "true" ]]; then
-            mv -- "$UPDATE_BACKUP_DIR/migrate.sh" "$INSTALL_DIR/migrate.sh" \
+            cp -p -- "$UPDATE_BACKUP_DIR/migrate.sh" "$INSTALL_DIR/migrate.sh" \
                 2>/dev/null || restore_failed="true"
         fi
         if [[ "$restore_failed" == "true" ]]; then
             error "Automatic update rollback was incomplete"
             echo "  Recovery backup preserved at: $UPDATE_BACKUP_DIR"
             return 1
+        fi
+        if [[ "${UPDATE_DATABASE_MIGRATION_ATTEMPTED:-false}" == "true" ]]; then
+            warn "Recovery configuration retained at $UPDATE_BACKUP_DIR (contains secrets)"
+            return 0
         fi
         chmod -R u+w "$UPDATE_BACKUP_DIR" 2>/dev/null || true
         rm -rf -- "$UPDATE_BACKUP_DIR" 2>/dev/null || {
@@ -1376,6 +1603,9 @@ restore_previous_db_runtime_state() {
     fi
 
     info "Restoring the previous database container runtime state..."
+    if [[ -n "${PREVIOUS_DB_IMAGE_REF:-}" && "$PREVIOUS_DB_IMAGE_REF" != *@* && "$PREVIOUS_DB_IMAGE_REF" != sha256:* ]]; then
+        docker tag "$PREVIOUS_DB_IMAGE_ID" "$PREVIOUS_DB_IMAGE_REF" || return 1
+    fi
     if [[ "${PREVIOUS_DB_CONTAINER_PRESENT:-false}" != "true" ]]; then
         if ! $COMPOSE_CMD rm -f -s db >/dev/null 2>&1; then
             error "Temporary database container could not be removed"
@@ -1391,7 +1621,7 @@ restore_previous_db_runtime_state() {
     fi
 
     if [[ "${PREVIOUS_DB_WAS_RUNNING:-false}" == "true" ]]; then
-        if ! $COMPOSE_CMD up -d db >/dev/null; then
+        if ! $COMPOSE_CMD up -d --no-deps --pull never db >/dev/null; then
             error "Previous running database container could not be restored"
             return 1
         fi
@@ -1402,11 +1632,11 @@ restore_previous_db_runtime_state() {
             return 1
         fi
         if [[ -z "$restored_db_container_id" ]]; then
-            if ! $COMPOSE_CMD up --no-start --no-deps db >/dev/null; then
+            if ! $COMPOSE_CMD up --no-start --no-deps --pull never --force-recreate db >/dev/null; then
                 error "Previous stopped database container could not be recreated"
                 return 1
             fi
-        elif ! $COMPOSE_CMD stop db >/dev/null; then
+        elif ! $COMPOSE_CMD up --no-start --no-deps --pull never --force-recreate db >/dev/null; then
             error "Previous stopped database container could not be stopped"
             return 1
         fi
@@ -1467,6 +1697,13 @@ rollback_update_deployment() {
         unset IMAGE_TAG
     fi
     restore_previous_app_image || rollback_failed="true"
+    if [[ "$files_restored" == "true" ]]; then
+        restore_previous_db_runtime_state || rollback_failed="true"
+    fi
+    if [[ "${UPDATE_DATABASE_MIGRATION_ATTEMPTED:-false}" == "true" ]]; then
+        warn "Database migrations are forward-only: committed schema/data changes have NOT been reverted"
+        warn "Old-image recovery requires backward-compatible migrations; never restore an old database backup over new production writes"
+    fi
 
     if [[ "${APP_DATA_PERMISSION_MIGRATION_ATTEMPTED:-false}" == "true" ]]; then
         if ! $COMPOSE_CMD stop app >/dev/null 2>&1; then
@@ -1493,11 +1730,11 @@ rollback_update_deployment() {
         elif [[ "$rollback_failed" == "false" ]]; then
             APP_IMAGE_ID="$PREVIOUS_APP_IMAGE_ID"
             if [[ "${PREVIOUS_APP_WAS_RUNNING:-false}" == "true" ]]; then
-                if ! $COMPOSE_CMD up -d --force-recreate app; then
+                if ! $COMPOSE_CMD up -d --no-deps --pull never --force-recreate app; then
                     error "Previous running application could not be restored automatically"
                     rollback_failed="true"
                 fi
-            elif ! $COMPOSE_CMD up --no-start --no-deps --force-recreate app; then
+            elif ! $COMPOSE_CMD up --no-start --no-deps --pull never --force-recreate app; then
                 error "Previous stopped application could not be restored automatically"
                 rollback_failed="true"
             fi
@@ -1528,7 +1765,16 @@ rollback_update_deployment() {
         fi
     fi
 
-    restore_previous_db_runtime_state || rollback_failed="true"
+    if [[ "$rollback_failed" == "false" && "${PREVIOUS_APP_WAS_RUNNING:-false}" == "true" &&
+          ( "${UPDATE_APP_RECREATE_ATTEMPTED:-false}" == "true" ||
+            "${UPDATE_DATABASE_MIGRATION_ATTEMPTED:-false}" == "true" ) ]]; then
+        APP_IMAGE_ID="$PREVIOUS_APP_IMAGE_ID"
+        if ! wait_for_app_ready; then
+            $COMPOSE_CMD stop app || true
+            error "Previous image is not healthy against the current database; application stopped for manual forward recovery"
+            rollback_failed="true"
+        fi
+    fi
     release_update_lock || rollback_failed="true"
 
     if [[ "$rollback_failed" == "true" ]]; then
@@ -2093,81 +2339,9 @@ run_app_data_permission_helper() {
 }
 
 repair_app_data_permissions_for_update() {
-    local compose_file="$INSTALL_DIR/docker-compose.yml"
-    local app_service
-    local app_data_mount_count
-    local managed_app_data_mount_count
-    local mount_record
-    local mount_type
-    local compose_project
-    local volume_project
-    local volume_key
     local owners
     local owner_count
-
-    # Legacy images used a different numeric runtime identity. Named-volume
-    # ownership survives an image upgrade, so the fixed UID used by current
-    # releases cannot read legacy 0600 files until the volume is migrated.
-    #
-    # Only operate on the exact named-volume mount generated by this installer.
-    # Refuse custom/bind-mounted layouts instead of recursively changing an
-    # arbitrary host path through /app/data.
-    app_service="$(sed -n '/^  app:$/,/^[^[:space:]]/p' "$compose_file")"
-    app_data_mount_count="$(
-        printf '%s\n' "$app_service" |
-            grep -Ec '^[[:space:]]*-[[:space:]]*[^[:space:]#]+:/app/data(:[^[:space:]]+)?[[:space:]]*$' ||
-            true
-    )"
-    managed_app_data_mount_count="$(
-        printf '%s\n' "$app_service" |
-            grep -Ec '^[[:space:]]*-[[:space:]]*appdata:/app/data[[:space:]]*$' ||
-            true
-    )"
-    if [[ "$app_data_mount_count" != "1" ||
-          "$managed_app_data_mount_count" != "1" ]]; then
-        error "Cannot safely migrate application data permissions"
-        echo "  Expected exactly one installer-managed appdata:/app/data volume."
-        echo "  Custom volume layouts must be migrated manually to UID:GID"
-        echo "  $APP_RUNTIME_UID:$APP_RUNTIME_GID."
-        return 1
-    fi
-
-    if [[ -z "${PREVIOUS_APP_CONTAINER_ID:-}" ]]; then
-        error "Cannot safely locate the existing application's data volume"
-        echo "  The previous app container is missing. Recreate or start the"
-        echo "  existing installation before updating."
-        return 1
-    fi
-    mount_record="$(docker inspect --format \
-        '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{printf "%s|%s\n" .Type .Name}}{{end}}{{end}}' \
-        "$PREVIOUS_APP_CONTAINER_ID" 2>/dev/null || true)"
-    if [[ "$mount_record" == *$'\n'* ]]; then
-        error "Multiple /app/data mounts were found on the existing app container"
-        return 1
-    fi
-    mount_type="${mount_record%%|*}"
-    APP_DATA_VOLUME_NAME="${mount_record#*|}"
-    if [[ "$mount_type" != "volume" ||
-          ! "$APP_DATA_VOLUME_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] ||
-       [[ "$(docker volume inspect --format '{{.Name}}' \
-            "$APP_DATA_VOLUME_NAME" 2>/dev/null || true)" != "$APP_DATA_VOLUME_NAME" ]]; then
-        error "The existing /app/data mount is not a valid Docker named volume"
-        return 1
-    fi
-    compose_project="$(docker inspect --format \
-        '{{index .Config.Labels "com.docker.compose.project"}}' \
-        "$PREVIOUS_APP_CONTAINER_ID" 2>/dev/null || true)"
-    volume_project="$(docker volume inspect --format \
-        '{{index .Labels "com.docker.compose.project"}}' \
-        "$APP_DATA_VOLUME_NAME" 2>/dev/null || true)"
-    volume_key="$(docker volume inspect --format \
-        '{{index .Labels "com.docker.compose.volume"}}' \
-        "$APP_DATA_VOLUME_NAME" 2>/dev/null || true)"
-    if [[ -z "$compose_project" || "$volume_project" != "$compose_project" ||
-          "$volume_key" != "appdata" ]]; then
-        error "The /app/data volume is not owned by this Compose installation"
-        return 1
-    fi
+    validate_update_data_volumes || return 1
 
     UPDATE_APP_RECREATE_ATTEMPTED="true"
     info "Stopping the previous application before data migration..."
@@ -2802,7 +2976,7 @@ start_services() {
     # services, while isolating the public application-image retry from any
     # stale GHCR login in the operator's Docker configuration.
     info "Pulling database images..."
-    $COMPOSE_CMD pull db migrate || return 1
+    $COMPOSE_CMD pull --policy always db migrate || return 1
     info "Pulling latest application image..."
     pull_app_image || return 1
     prepare_release_migrations || return 1
@@ -2856,7 +3030,10 @@ update_installation() {
     # installer environments before Compose evaluates required variables.
     ensure_jwt_secrets_for_update || { rollback_update_deployment; return 1; }
     sync_image_tag_for_update || { rollback_update_deployment; return 1; }
+    validate_update_data_volumes || { rollback_update_deployment; return 1; }
     harden_existing_compose || { rollback_update_deployment; return 1; }
+    normalize_restored_images_for_update || { rollback_update_deployment; return 1; }
+    validate_update_data_volumes || { rollback_update_deployment; return 1; }
 
     # Pull only the application release by default. When harden_existing_compose
     # switches the database to the pinned pgvector PG16 image (required by
@@ -2866,7 +3043,7 @@ update_installation() {
     pull_app_image || { rollback_update_deployment; return 1; }
     if grep -Fq "image: ${POSTGRES_IMAGE}" "$INSTALL_DIR/docker-compose.yml"; then
         info "Pulling pinned PostgreSQL/pgvector image..."
-        if ! $COMPOSE_CMD pull db migrate; then
+        if ! $COMPOSE_CMD pull --policy always db migrate; then
             error "Unable to pull ${POSTGRES_IMAGE}"
             rollback_update_deployment
             return 1

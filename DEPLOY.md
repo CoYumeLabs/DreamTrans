@@ -310,6 +310,53 @@ Anonymous provider access and self-registration are disabled by default. Do
 not expose `ALLOW_ANONYMOUS_API=true` outside a trusted loopback development
 environment.
 
+## Updating a deployment restored from backup
+
+Restored installer deployments can use the standard command without removing
+their production overrides:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/soaringjerry/DreamTrans/main/scripts/install.sh | \
+  sudo bash -s -- --update --dir /root/dreamtrans --tag latest
+```
+
+Updates require Python 3 and Docker Compose v2 with `config --environment` and
+`config --format json`. The installer reads the effective `COMPOSE_FILE` chain
+and backs up `.env`, the base file, all selected overrides, migration assets and
+the existing `backup.sh` before changing them. Selected Compose files must be
+regular, installer-user-owned files directly inside the installation directory.
+
+For `dreamtrans-migration/*` recovery images, the installer changes only the
+`app`, `db` and `migrate` image/pull-policy fields in their existing YAML service
+blocks: the app uses `ghcr.io/coyumelabs/dreamtrans:${IMAGE_TAG:-latest}`, and both
+database services use the pinned PostgreSQL 16/pgvector release. `never` becomes
+`missing`; the updater explicitly pulls before changing containers. Unsupported
+YAML layouts fail validation and restore the configuration. The override chain,
+production volume declarations, CORS and other override settings remain in
+place. A `start-production.sh` that explicitly selects those same files with
+`-f` therefore uses the new release too. Subsequent updates use the same command.
+
+Before replacing containers or changing permissions, the final merged Compose
+volume names must match the existing app's `/app/data` and database's
+`/var/lib/postgresql/data` mounts. Existing external local volumes do not require
+Compose ownership labels. Managed volumes still require matching labels; bind
+mounts, volume subpaths, driver mount options and mismatched targets are refused.
+Keep the restored production containers present for this first update. No data
+volume is deleted or replaced. Existing backup cron entries and unrelated
+applications are not removed; the backup helper keeps the same path and Compose
+configuration.
+
+On failure, the installer restores configuration and the previous local images
+without pulling or rerunning dependency migrations. **This is not a database
+rollback:** each committed migration, including any before a later failed
+migration, remains applied. After migration was attempted, the private
+`.update-backup.*` configuration directory is retained for recovery (it contains
+secrets, not a database dump). Restarting the previous app requires schema
+compatibility; if it fails readiness, the installer stops it and reports manual
+forward recovery is needed. Even a healthy old app does not prove all schema
+changes are backward compatible. Do not overwrite new production writes with
+an older database dump to undo an image update.
+
 ## Local source development
 
 Backend-only Classic UI development:

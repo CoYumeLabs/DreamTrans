@@ -424,7 +424,7 @@ test "$FRESH_PREPARE_CALLS" = "1"
 test "$FRESH_MIGRATION_CALLS" = "1"
 test "$RETIRE_WAIT_CALLS" = "2"
 test "$FRESH_COMPOSE_LOG" = \
-    "|pull db migrate|pull app|up -d db|up -d app|up -d --no-deps --force-recreate app"
+    "|pull --policy always db migrate|pull --policy always app|up -d db|up -d app|up -d --no-deps --force-recreate app"
 test "$ADMIN_BOOTSTRAP_PENDING_THIS_RUN" = "false"
 test "$ADMIN_BOOTSTRAP_SECURED_THIS_RUN" = "true"
 test "$ADMIN_DISPLAY_EMAIL" = "fresh@example.test"
@@ -445,7 +445,7 @@ if start_services; then
 fi
 test "$RETIRE_WAIT_CALLS" = "3"
 test "$FRESH_COMPOSE_LOG" = \
-    "|pull db migrate|pull app|up -d db|up -d app|up -d --no-deps --force-recreate app|up -d --no-deps --force-recreate app"
+    "|pull --policy always db migrate|pull --policy always app|up -d db|up -d app|up -d --no-deps --force-recreate app|up -d --no-deps --force-recreate app"
 test "$ADMIN_BOOTSTRAP_PENDING_THIS_RUN" = "true"
 test "$ADMIN_EMAIL" = "fresh@example.test"
 test "$ADMIN_PASSWORD" = "fresh-password-123"

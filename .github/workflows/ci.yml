@@ -378,6 +378,11 @@ jobs:
           scripts/tests/install_appdata_permissions_test.sh \
             "dreamtrans-ci:${GITHUB_SHA}"
 
+      - name: Verify restored deployment updates and recovery
+        run: |
+          scripts/tests/install_restored_update_test.sh \
+            "dreamtrans-ci:${GITHUB_SHA}"
+
       - name: Verify Compose migrations and readiness
         run: |
           project="dreamtrans-ci-${GITHUB_RUN_ID}"
