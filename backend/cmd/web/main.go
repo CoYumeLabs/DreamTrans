@@ -238,9 +238,7 @@ func run() error {
 	}
 
 	if deployment.Default.Enabled() {
-		if err := deployment.Default.SetMode("draining"); err != nil {
-			return err
-		}
+		deployment.Default.BeginShutdown()
 		// No deadline: deployment tooling reports a pending drain and never kills live audio.
 		for !deployment.Default.Status().Drained {
 			time.Sleep(250 * time.Millisecond)

@@ -337,6 +337,9 @@ jobs:
             --mount "type=bind,src=${artifact_dir}/edge-runtime.test,dst=/tmp/edge-runtime.test,readonly" \
             "dreamtrans-edge-ci:${GITHUB_SHA}" -test.v -test.count=1 -test.timeout=2m
 
+      - name: Verify Edge admission state survives process restart
+        run: python3 scripts/tests/edge_restart_test.py "dreamtrans-edge-ci:${GITHUB_SHA}"
+
       - name: Verify final image contents and runtime identity
         run: |
           image="dreamtrans-ci:${GITHUB_SHA}"

@@ -21,6 +21,7 @@ const socketPath = "/tmp/dreamtrans-deployment.sock"
 type Runtime struct {
 	mu                       sync.Mutex
 	mode                     string
+	stopping                 bool
 	path                     string
 	requests, sockets, tasks int
 	pending                  func() int
@@ -85,6 +86,9 @@ func (r *Runtime) SetMode(mode string) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.stopping && mode != "draining" {
+		return errors.New("process is shutting down")
+	}
 	if r.path != "" {
 		tmp := r.path + ".tmp"
 		//nolint:gosec // G703: path is the operator-owned per-instance deployment state, never request input.
@@ -97,6 +101,16 @@ func (r *Runtime) SetMode(mode string) error {
 	}
 	r.mode = mode
 	return nil
+}
+
+// BeginShutdown drains this process without changing the operator's persisted
+// admission mode. A host reboot must restore an active instance as active, while
+// an explicitly drained or standby instance must retain that persisted state.
+func (r *Runtime) BeginShutdown() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stopping = true
+	r.mode = "draining"
 }
 
 // BeginTask covers the claim itself as well as execution, closing the drain/claim race.

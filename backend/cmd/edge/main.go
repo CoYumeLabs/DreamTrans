@@ -116,9 +116,7 @@ func run() error {
 	case <-signalCtx.Done():
 	}
 	if deployment.Default.Enabled() {
-		if err := deployment.Default.SetMode("draining"); err != nil {
-			return err
-		}
+		deployment.Default.BeginShutdown()
 		for !deployment.Default.Status().Drained {
 			time.Sleep(time.Second)
 		}

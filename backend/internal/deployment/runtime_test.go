@@ -3,10 +3,63 @@ package deployment
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
+
+func TestShutdownPreservesRestartModeAndRejectsNewWork(t *testing.T) {
+	for _, mode := range []string{"active", "standby", "canary", "draining"} {
+		t.Run(mode, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "mode")
+			r := &Runtime{path: path}
+			if err := r.SetMode(mode); err != nil {
+				t.Fatal(err)
+			}
+			finish, accepted := r.BeginTask()
+			r.BeginShutdown()
+			if _, ok := r.BeginTask(); ok {
+				t.Fatal("new task accepted during process shutdown")
+			}
+			response := httptest.NewRecorder()
+			r.Middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Fatal("new request accepted during process shutdown")
+			})).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/auth/login", nil))
+			if response.Code != http.StatusServiceUnavailable {
+				t.Fatalf("shutdown response: %d", response.Code)
+			}
+			if accepted {
+				if r.Status().Drained {
+					t.Fatal("accepted task was forgotten during shutdown")
+				}
+				finish()
+			}
+			if !r.Status().Drained {
+				t.Fatal("completed work did not drain")
+			}
+			if err := r.SetMode("active"); err == nil {
+				t.Fatal("shutdown process was reactivated")
+			}
+			data, err := os.ReadFile(path)
+			if err != nil || strings.TrimSpace(string(data)) != mode {
+				t.Fatalf("persisted admission mode changed: %q, %v", data, err)
+			}
+			previous := Default
+			t.Cleanup(func() { Default = previous })
+			t.Setenv("DREAMTRANS_ROLE", "edge")
+			t.Setenv("DREAMTRANS_DEPLOYMENT_MODE", "standby")
+			t.Setenv("DREAMTRANS_DEPLOYMENT_STATE", path)
+			if err := Configure(); err != nil {
+				t.Fatal(err)
+			}
+			if got := Default.Status().Mode; got != mode {
+				t.Fatalf("restarted mode = %s, want %s", got, mode)
+			}
+		})
+	}
+}
 
 func TestDrainPreservesAcceptedWorkAndRejectsNewWork(t *testing.T) {
 	r := &Runtime{path: filepath.Join(t.TempDir(), "mode")}
