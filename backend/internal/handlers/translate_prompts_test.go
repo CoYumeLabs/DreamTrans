@@ -22,6 +22,7 @@ func TestDefaultTranslatePromptNamesBothLanguagesForOtherPairs(t *testing.T) {
 		wantStyle      string
 	}{
 		{"cmn", "en", "Simplified Chinese", "English", "Use standard English punctuation"},
+		{"cmn_en", "en", "Mandarin Chinese and English (possibly mixed)", "English", "Use standard English punctuation"},
 		{"ja", "cmn", "Japanese", "Simplified Chinese", "full-width Chinese punctuation"},
 		{"en", "ja", "English", "Japanese", "です・ます"},
 		{"en", "ko", "English", "Korean", "해요체"},

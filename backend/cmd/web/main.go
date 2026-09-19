@@ -349,6 +349,7 @@ func buildHandler() (http.Handler, func()) {
 			"registration_enabled":        strings.EqualFold(strings.TrimSpace(os.Getenv("REGISTRATION_ENABLED")), "true"),
 			"email_verification_required": emailVerificationRequired,
 			"rag_enabled":                 ragHandler != nil,
+			"rag_stateless_supported":     true,
 			// The training program is offered only with a no-training
 			// provider account; joining earns this transcription discount.
 			"training_program_available": trainingProgram,

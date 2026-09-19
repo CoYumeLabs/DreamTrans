@@ -474,6 +474,13 @@ func (h *RAGHandler) handleKnowledgeSources(
 			http.Error(w, "failed to list knowledge sources", http.StatusInternalServerError)
 			return
 		}
+		// Workspaces poll metadata frequently; do not repeatedly transfer the
+		// complete extracted contents of every document for a status refresh.
+		if r.URL.Query().Get("metadata_only") == "true" {
+			for index := range sources {
+				sources[index].Content = ""
+			}
+		}
 		WriteJSON(w, map[string]any{"sources": sources})
 		return
 	}

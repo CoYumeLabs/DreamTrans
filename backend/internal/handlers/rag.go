@@ -143,6 +143,7 @@ type askRequest struct {
 	Query               string                        `json:"query,omitempty"` // legacy
 	Question            string                        `json:"question,omitempty"`
 	History             []chatMessageDTO              `json:"history,omitempty"`
+	Stateless           bool                          `json:"stateless,omitempty"`
 	ClientTranscript    []aicontext.TranscriptSegment `json:"client_transcript,omitempty"`
 	ContextPolicy       aicontext.ContextPolicy       `json:"context_policy,omitempty"`
 	RetrievalPreference string                        `json:"retrieval_preference,omitempty"`
@@ -236,6 +237,11 @@ func (h *RAGHandler) HandleAsk(w http.ResponseWriter, r *http.Request) {
 	rawSessionID := strings.TrimSpace(req.SessionID)
 	req.SessionID = scopedRAGSessionID(r, rawSessionID)
 	req.ClientRequestID = strings.TrimSpace(req.ClientRequestID)
+	// A stateless request without a recording must not retrieve paragraphs
+	// previously ingested into this user's shared "default" session either.
+	if req.Stateless && rawSessionID == "" {
+		req.SessionID = scopedRAGSessionID(r, "stateless/"+req.ClientRequestID)
+	}
 	if len(req.ClientRequestID) > 128 {
 		http.Error(w, "client_request_id must be at most 128 characters", http.StatusBadRequest)
 		return
@@ -336,7 +342,7 @@ func (h *RAGHandler) HandleAsk(w http.ResponseWriter, r *http.Request) {
 		dur   time.Duration
 	)
 	history := formatClientHistory(req.History)
-	if history == "" {
+	if history == "" && !req.Stateless {
 		history = getSessionHistory(req.SessionID)
 	}
 	normalizedPolicy, err := aicontext.NormalizePolicy(req.ContextPolicy)
@@ -380,6 +386,7 @@ func (h *RAGHandler) HandleAsk(w http.ResponseWriter, r *http.Request) {
 		Project:         projectIdentity,
 		Question:        req.Question,
 		History:         history,
+		Stateless:       req.Stateless,
 		ReasoningEffort: req.ReasoningEffort,
 		SystemPrompt: chatSystemPrompt(
 			req.Config,
@@ -551,8 +558,10 @@ func (h *RAGHandler) HandleAsk(w http.ResponseWriter, r *http.Request) {
 	generationCompleted = true
 	// Update in-memory chat history only once the durable idempotency response
 	// is ready, so a replay cannot duplicate history entries.
-	appendHistory(req.SessionID, "user", req.Question)
-	appendHistory(req.SessionID, "assistant", ans)
+	if !req.Stateless {
+		appendHistory(req.SessionID, "user", req.Question)
+		appendHistory(req.SessionID, "assistant", ans)
+	}
 	WriteJSON(w, response)
 }
 
@@ -666,6 +675,7 @@ type effectiveAIGenerationIdentity struct {
 	Project                 *aiGenerationProjectContextIdentity `json:"project,omitempty"`
 	Question                string                              `json:"question"`
 	History                 string                              `json:"history,omitempty"`
+	Stateless               bool                                `json:"stateless,omitempty"`
 	ReasoningEffort         string                              `json:"reasoning_effort,omitempty"`
 	SystemPrompt            string                              `json:"system_prompt"`
 	Segments                []aicontext.TranscriptSegment       `json:"segments,omitempty"`

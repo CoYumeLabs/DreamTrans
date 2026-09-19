@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -173,5 +175,44 @@ func TestRetrieveKnowledgeRanksMatchingMultilingualChunk(t *testing.T) {
 	result := retrieveKnowledge("新加坡语言文化", chunks, 1)
 	if len(result) != 1 || result[0].ID != "matching" {
 		t.Fatalf("unexpected retrieval result: %#v", result)
+	}
+}
+
+func TestKnowledgeMetadataPollingOmitsContentWithoutErasingIt(t *testing.T) {
+	admin, claims := consoleTestAdmin(t)
+	project := &models.AIProject{TenantID: claims.TenantID, UserID: claims.UserID, Name: "Metadata test", ContextMode: "retrieval", MaxContextTokens: 16000}
+	if err := admin.store.CreateAIProject(t.Context(), project); err != nil {
+		t.Fatal(err)
+	}
+	source := &models.KnowledgeSource{TenantID: claims.TenantID, UserID: claims.UserID, ProjectID: project.ID, SourceType: "memory", Name: "Private material", MediaType: "text/plain", Status: "ready", Content: "DO_NOT_REPEAT_WHOLE_DOCUMENT"}
+	if err := admin.store.CreateKnowledgeSource(t.Context(), source); err != nil {
+		t.Fatal(err)
+	}
+	handler := &RAGHandler{store: admin.store}
+	for _, metadata := range []bool{true, false} {
+		path := "/api/ai/projects/" + project.ID + "/sources"
+		if metadata {
+			path += "?metadata_only=true"
+		}
+		res := httptest.NewRecorder()
+		handler.handleKnowledgeSources(res, httptest.NewRequest(http.MethodGet, path, nil), project)
+		if res.Code != http.StatusOK {
+			t.Fatalf("list: %d %s", res.Code, res.Body.String())
+		}
+		var result struct {
+			Sources []models.KnowledgeSource `json:"sources"`
+		}
+		if err := json.Unmarshal(res.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Sources) != 1 || result.Sources[0].Name != source.Name {
+			t.Fatalf("lost metadata: %+v", result)
+		}
+		if metadata && result.Sources[0].Content != "" {
+			t.Fatal("poll returned full document")
+		}
+		if !metadata && result.Sources[0].Content != source.Content {
+			t.Fatal("poll erased stored content")
+		}
 	}
 }
