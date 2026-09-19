@@ -23,7 +23,9 @@ from release import Controller, ReleaseError, atomic, check_contract, check_memo
 
 def call(config, path, payload):
     url = config['main_url'].rstrip('/') + '/api/edge-control/' + path
-    req = urllib.request.Request(url, json.dumps(payload).encode(), {'Content-Type':'application/json', 'Authorization':'Edge '+config.get('identity','')})
+    # Identify the lifecycle client instead of urllib's generic default, which
+    # Cloudflare Browser Integrity Check can reject before the main site sees it.
+    req = urllib.request.Request(url, json.dumps(payload).encode(), {'Content-Type':'application/json', 'Authorization':'Edge '+config.get('identity',''), 'User-Agent':'DreamTrans-Edge/1.0'})
     # Never follow an identity-bearing request to another origin.
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, req, fp, code, msg, headers, newurl):

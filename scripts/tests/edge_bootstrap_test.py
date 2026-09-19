@@ -1,15 +1,52 @@
 #!/usr/bin/env python3
 """Run the actual bootstrap against disposable OS/engine/package-manager fixtures."""
 import os
+import importlib.util
+import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
+import threading
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT/'scripts'))
+spec = importlib.util.spec_from_file_location('edge_install', ROOT/'scripts/edge-install.py')
+edge_install = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(edge_install)
 
 
 class EdgeBootstrapTest(unittest.TestCase):
+    def test_registration_crosses_client_filter_with_identity_and_body_intact(self):
+        requests = []
+        class Gateway(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                requests.append((self.path, self.headers.get('Authorization'), body))
+                if self.headers.get('User-Agent', '').startswith('Python-urllib/'):
+                    self.send_response(403)
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"node_id":"registered-node"}')
+            def log_message(self, *args):
+                pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Gateway)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            config = {'main_url': f'http://127.0.0.1:{server.server_port}', 'identity': 'fixture-identity'}
+            result = edge_install.call(config, 'register', {'token': 'fixture-registration'})
+            self.assertEqual(result, {'node_id': 'registered-node'})
+            self.assertEqual(requests, [('/api/edge-control/register', 'Edge fixture-identity', {'token': 'fixture-registration'})])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
     def run_bootstrap(self, version, image=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
