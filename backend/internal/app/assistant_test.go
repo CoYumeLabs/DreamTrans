@@ -287,3 +287,13 @@ func TestDeletedQuestionCannotBeResurrectedByAI(t *testing.T) {
 		t.Fatal("worker recreated deleted answer")
 	}
 }
+
+func TestParticipantTranslationPollingDoesNotThrottleQuestions(t *testing.T) {
+	s := New(storage.NewMemory(), Config{Demo: true})
+	h := s.Handler()
+	room := createRoom(t, h, "Shared classroom NAT")
+	for i := 0; i < 150; i++ {
+		request(t, h, "POST", "/api/rooms/"+room.Room.Code+"/translations", "", map[string]string{"language": "en"}, 409)
+	}
+	addQuestion(t, h, room.Room.Code, "A participant can still ask a question")
+}

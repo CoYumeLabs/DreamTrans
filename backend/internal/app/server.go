@@ -123,6 +123,13 @@ func (s *Server) Handler() http.Handler {
 				key = ip + ":write"
 				max = 120
 			}
+			// A classroom may share one NAT address. Idempotent caption polls
+			// must not exhaust the write budget used to submit questions.
+			// Paid work still has per-room throttling and job deduplication.
+			if r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/api/rooms/") && strings.HasSuffix(r.URL.Path, "/translations") {
+				key = ip + ":translation-poll"
+				max = 6000
+			}
 			if r.URL.Path == "/api/rooms" && r.Method == "POST" {
 				key = ip + ":create"
 				max = 10
