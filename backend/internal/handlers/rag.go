@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/dreamtrans/backend/internal/deployment"
 	"log"
 	"net/http"
 	"net/url"
@@ -107,6 +108,11 @@ func (h *RAGHandler) startGenerationRequestJanitor() {
 	ctx, cancel := context.WithCancel(context.Background())
 	h.generationJanitorCancel = cancel
 	prune := func() {
+		done, allowed := deployment.Default.BeginTask()
+		if !allowed {
+			return
+		}
+		defer done()
 		pruneCtx, pruneCancel := context.WithTimeout(ctx, 10*time.Second)
 		defer pruneCancel()
 		if _, err := h.store.PruneExpiredAIGenerationRequests(pruneCtx); err != nil &&

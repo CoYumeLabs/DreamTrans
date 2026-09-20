@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/dreamtrans/backend/internal/deployment"
 	"log"
 	"net/http"
 	"strings"
@@ -613,11 +614,17 @@ func (h *RAGHandler) refillStudyBankAsync(
 	if h.svc == nil || h.store == nil {
 		return
 	}
+	done, allowed := deployment.Default.BeginTask()
+	if !allowed {
+		return
+	}
 	key := project.UserID + "|" + project.ID + "|" + skillKey + "|" + version
 	if _, loaded := studyRefillInFlight.LoadOrStore(key, struct{}{}); loaded {
+		done()
 		return
 	}
 	go func() {
+		defer done()
 		defer studyRefillInFlight.Delete(key)
 		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
 		defer cancel()

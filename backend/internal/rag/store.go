@@ -21,6 +21,7 @@ import (
 
 // Store manages on-disk storage of documents, summaries and embeddings.
 type Store struct {
+	postgres               bool
 	db                     *sql.DB
 	path                   string
 	totalBudgetBytes       int64
@@ -122,6 +123,9 @@ func NewStore(path string) (*Store, error) {
 }
 
 func (s *Store) checkpointWAL() error {
+	if s.postgres {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(
 		context.Background(),
 		time.Duration(sqliteBusyTimeoutMS)*time.Millisecond,
@@ -197,6 +201,7 @@ func (s *Store) enforceSQLiteStorageBudget(checkpointAtWALLimit bool) error {
 func (s *Store) sqliteDiskUsage() (totalBytes, walBytes int64, err error) {
 	paths := []string{s.path, s.path + "-wal", s.path + "-shm"}
 	for index, path := range paths {
+		//nolint:gosec // G703: path is the normalized operator-owned SQLite path plus fixed WAL suffixes.
 		info, statErr := os.Stat(path)
 		if errors.Is(statErr, os.ErrNotExist) {
 			continue
@@ -309,7 +314,7 @@ func legacyHashKey(sessionID, text string, start, end float64) string {
 // already persisted paragraph.
 func (s *Store) HasDocument(sessionID, text string, start, end float64) (bool, error) {
 	var exists int
-	err := s.db.QueryRow(`SELECT 1 FROM documents WHERE hash IN (?, ?) LIMIT 1`,
+	err := s.db.QueryRow(s.query(`SELECT 1 FROM documents WHERE hash IN (?, ?) LIMIT 1`),
 		hashKey(sessionID, text, start, end),
 		legacyHashKey(sessionID, text, start, end),
 	).Scan(&exists)
@@ -363,10 +368,17 @@ func (s *Store) InsertDocumentWithEmbedding(doc *Document, vec []float32) (int64
 	h := hashKey(doc.SessionID, doc.Original, doc.StartTime, doc.EndTime)
 	legacyHash := legacyHashKey(doc.SessionID, doc.Original, doc.StartTime, doc.EndTime)
 	var id int64
-	err = tx.QueryRow(`SELECT id FROM documents WHERE hash IN (?, ?) LIMIT 1`, h, legacyHash).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		res, insertErr := tx.Exec(`INSERT OR IGNORE INTO documents(session_id, speaker, start_time, end_time, original_text, summary, hash, created_at)
-			VALUES(?,?,?,?,?,?,?,?)`,
+	//nolint:gosec // G701: query only rewrites static SQL identifiers/placeholders; all input values remain bound parameters.
+	err = tx.QueryRow(s.query(`SELECT id FROM documents WHERE hash IN (?, ?) LIMIT 1`), h, legacyHash).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) && s.postgres {
+		id, err = s.insertPostgresDocument(tx, doc, h)
+		if err != nil {
+			return 0, err
+		}
+	} else if errors.Is(err, sql.ErrNoRows) {
+		//nolint:gosec // G701: query only rewrites static SQL identifiers/placeholders; all input values remain bound parameters.
+		res, insertErr := tx.Exec(s.query(`INSERT OR IGNORE INTO documents(session_id, speaker, start_time, end_time, original_text, summary, hash, created_at)
+			VALUES(?,?,?,?,?,?,?,?)`),
 			doc.SessionID, doc.Speaker, doc.StartTime, doc.EndTime, doc.Original, doc.Summary, h, time.Now().UTC(),
 		)
 		if insertErr != nil {
@@ -381,7 +393,8 @@ func (s *Store) InsertDocumentWithEmbedding(doc *Document, vec []float32) (int64
 		} else {
 			// Another process may have inserted the SHA-256 key after the
 			// compatibility lookup but before INSERT OR IGNORE.
-			err = tx.QueryRow(`SELECT id FROM documents WHERE hash=?`, h).Scan(&id)
+			//nolint:gosec // G701: query only rewrites static SQL identifiers/placeholders; all input values remain bound parameters.
+			err = tx.QueryRow(s.query(`SELECT id FROM documents WHERE hash=?`), h).Scan(&id)
 		}
 		if err != nil {
 			return 0, err
@@ -396,14 +409,15 @@ func (s *Store) InsertDocumentWithEmbedding(doc *Document, vec []float32) (int64
 	for _, v := range vec {
 		norm += float64(v * v)
 	}
-	if _, err := tx.Exec(`
+	//nolint:gosec // G701: query only rewrites static SQL identifiers/placeholders; all input values remain bound parameters.
+	if _, err := tx.Exec(s.query(`
 		INSERT INTO embeddings(doc_id, dim, norm, vector_json)
 		VALUES(?,?,?,?)
 		ON CONFLICT(doc_id) DO UPDATE SET
 			dim=excluded.dim,
 			norm=excluded.norm,
 			vector_json=excluded.vector_json
-	`, id, len(vec), norm, string(jb)); err != nil {
+	`), id, len(vec), norm, string(jb)); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -425,8 +439,8 @@ func (s *Store) UpdateSessionSummary(sessionID, summary string) error {
 	if err := s.prepareSQLiteWrite(); err != nil {
 		return err
 	}
-	_, err := s.db.Exec(`INSERT INTO session_summary(session_id, summary, updated_at) VALUES(?,?,?)
-        ON CONFLICT(session_id) DO UPDATE SET summary=excluded.summary, updated_at=excluded.updated_at`, sessionID, summary, time.Now().UTC())
+	_, err := s.db.Exec(s.query(`INSERT INTO session_summary(session_id, summary, updated_at) VALUES(?,?,?)
+        ON CONFLICT(session_id) DO UPDATE SET summary=excluded.summary, updated_at=excluded.updated_at`), sessionID, summary, time.Now().UTC())
 	if err != nil {
 		return err
 	}
@@ -435,7 +449,8 @@ func (s *Store) UpdateSessionSummary(sessionID, summary string) error {
 
 // GetSessionSummary returns the current summary for the session.
 func (s *Store) GetSessionSummary(sessionID string) (string, error) {
-	row := s.db.QueryRow(`SELECT summary FROM session_summary WHERE session_id=?`, sessionID)
+	//nolint:gosec // G701: query only rewrites static SQL identifiers/placeholders; all input values remain bound parameters.
+	row := s.db.QueryRow(s.query(`SELECT summary FROM session_summary WHERE session_id=?`), sessionID)
 	var summary string
 	if err := row.Scan(&summary); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -457,8 +472,8 @@ func (s *Store) UpdateSessionTitle(sessionID, title string) error {
 		return err
 	}
 	// ensure row exists; reuse UpdateSessionSummary path
-	_, err := s.db.Exec(`INSERT INTO session_summary(session_id, summary, updated_at, title) VALUES(?,?,?,?)
-        ON CONFLICT(session_id) DO UPDATE SET title=excluded.title, updated_at=excluded.updated_at`, sessionID, "", time.Now().UTC(), title)
+	_, err := s.db.Exec(s.query(`INSERT INTO session_summary(session_id, summary, updated_at, title) VALUES(?,?,?,?)
+        ON CONFLICT(session_id) DO UPDATE SET title=excluded.title, updated_at=excluded.updated_at`), sessionID, "", time.Now().UTC(), title)
 	if err != nil {
 		return err
 	}
@@ -482,7 +497,8 @@ func validateRAGWriteSize(sizes ...int) error {
 
 // GetSessionTitle returns the cached session title (may be empty).
 func (s *Store) GetSessionTitle(sessionID string) (string, error) {
-	row := s.db.QueryRow(`SELECT title FROM session_summary WHERE session_id=?`, sessionID)
+	//nolint:gosec // G701: query only rewrites static SQL identifiers/placeholders; all input values remain bound parameters.
+	row := s.db.QueryRow(s.query(`SELECT title FROM session_summary WHERE session_id=?`), sessionID)
 	var title sql.NullString
 	if err := row.Scan(&title); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -509,7 +525,8 @@ func (s *Store) RecentDocuments(sessionID string, limit int) ([]Document, error)
 		query += ` LIMIT ?`
 		args = append(args, limit)
 	}
-	rows, err := s.db.Query(query, args...)
+	//nolint:gosec // G701: query only rewrites static SQL identifiers/placeholders; all input values remain bound parameters.
+	rows, err := s.db.Query(s.query(query), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -547,10 +564,12 @@ func (s *Store) DeleteSession(sessionID string) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.Exec(`DELETE FROM documents WHERE session_id=?`, sessionID); err != nil {
+	//nolint:gosec // G701: query only rewrites static SQL identifiers/placeholders; all input values remain bound parameters.
+	if _, err := tx.Exec(s.query(`DELETE FROM documents WHERE session_id=?`), sessionID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM session_summary WHERE session_id=?`, sessionID); err != nil {
+	//nolint:gosec // G701: query only rewrites static SQL identifiers/placeholders; all input values remain bound parameters.
+	if _, err := tx.Exec(s.query(`DELETE FROM session_summary WHERE session_id=?`), sessionID); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -575,7 +594,8 @@ func (s *Store) LoadEmbeddingsForDocs(ids []int64) (map[int64][]float32, error) 
 		placeholders = append(placeholders, id)
 	}
 	q += ")"
-	rows, err := s.db.Query(q, placeholders...)
+	//nolint:gosec // G701: query only rewrites static SQL identifiers/placeholders; all input values remain bound parameters.
+	rows, err := s.db.Query(s.query(q), placeholders...)
 	if err != nil {
 		return nil, err
 	}

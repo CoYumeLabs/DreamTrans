@@ -99,6 +99,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             
       - name: Build and push Docker image
+        id: main-image
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -115,26 +116,53 @@ jobs:
             VITE_APP_COMMIT=${{ github.sha }}
             VITE_APP_BUILD_TIME=${{ inputs.build_time }}
           
-      - name: Generate deployment instructions
+      - name: Extract immutable Edge metadata
+        id: edge-meta
+        uses: docker/metadata-action@v5
+        with:
+          # Reuse the existing public package, with a separate immutable Edge tag.
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: latest=false
+          tags: type=raw,value=edge-${{ github.sha }}
+
+      - name: Build and push verified Edge image
+        id: edge-image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: backend/Dockerfile.edge
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.edge-meta.outputs.tags }}
+          labels: ${{ steps.edge-meta.outputs.labels }}
+          cache-from: type=gha,scope=dreamtrans-edge
+          cache-to: type=gha,mode=max,scope=dreamtrans-edge
+          platforms: linux/amd64,linux/arm64
+
+      - name: Record immutable release references
         if: github.event_name != 'pull_request'
+        env:
+          MAIN_DIGEST: ${{ steps.main-image.outputs.digest }}
+          EDGE_DIGEST: ${{ steps.edge-image.outputs.digest }}
         run: |
-          echo "## Deployment Instructions" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Your Docker image has been built and pushed to GitHub Container Registry." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Pull the image:" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Run the container:" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "docker run -d \\" >> $GITHUB_STEP_SUMMARY
-          echo "  --name dreamtrans \\" >> $GITHUB_STEP_SUMMARY
-          echo "  -p 127.0.0.1:8080:8080 \\" >> $GITHUB_STEP_SUMMARY
-          echo "  -e SM_API_KEY=your_speechmatics_api_key \\" >> $GITHUB_STEP_SUMMARY
-          echo "  -e ALLOW_ANONYMOUS_API=true \\" >> $GITHUB_STEP_SUMMARY
-          echo "  ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "This anonymous compatibility example is local-only. Use the PostgreSQL-backed Compose deployment with JWT login for network access." >> $GITHUB_STEP_SUMMARY
+          repository="${REGISTRY}/${IMAGE_NAME,,}"
+          python3 - "$repository" <<'PYTHON'
+          import json, os, sys
+          manifest = {
+              "commit": os.environ["GITHUB_SHA"],
+              "main_image": sys.argv[1] + "@" + os.environ["MAIN_DIGEST"],
+              "edge_image": sys.argv[1] + "@" + os.environ["EDGE_DIGEST"],
+          }
+          with open("release-images.json", "w") as output:
+              json.dump(manifest, output, indent=2)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("Verified release images (pin these digests):\n\n```json\n")
+              summary.write(json.dumps(manifest, indent=2) + "\n```\n")
+          PYTHON
+
+      - name: Upload release manifest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-images-${{ github.sha }}
+          path: release-images.json
+          retention-days: 30

@@ -34,7 +34,19 @@ case "$1" in
         cat >/dev/null
         printf 'encrypted-bytes'
         ;;
-    run) exit 0 ;;
+    exec) cat >/dev/null; printf 'encrypted-managed-bytes' ;;
+    run)
+        while [[ "$#" -gt 0 && "$1" != rclone/rclone:1.68 ]]; do shift; done
+        shift
+        if [[ "$1" == cat ]]; then
+            [[ "${MOCK_DOWNLOAD_FAIL:-}" != true ]] || exit 1
+            if [[ "${MOCK_REMOTE_CORRUPT:-}" == true ]]; then
+                printf corrupted
+            else
+                cat "$INSTALL_DIR/backups/${2##*/}"
+            fi
+        fi
+        ;;
 esac
 MOCK
 chmod +x "$FIXTURE/docker"
@@ -193,3 +205,51 @@ if [[ "$count" -ne 2 ]]; then
 fi
 
 echo "Backup script checks passed"
+
+# Managed conversion keeps the recorded database identity even when the Compose
+# database service is named postgres instead of db. Local full snapshots rotate.
+mkdir -p "$INSTALL_DIR/.bluegreen"
+printf '%s\n' '{"database_id":"restored-postgres-id"}' > "$INSTALL_DIR/.bluegreen/state.json"
+cat > "$INSTALL_DIR/release.py" <<'PYTHON'
+import pathlib, sys
+pathlib.Path(sys.argv[sys.argv.index('--output')+1]).write_bytes(b'full snapshot fixture')
+PYTHON
+printf old > "$INSTALL_DIR/backups/dreamtrans-20000101-000000.full.tar.enc"
+BACKUP_LOCAL_KEEP=1 bash "$REPO_ROOT/scripts/backup.sh" > "$FIXTURE/managed.log"
+grep -q 'exec -i -e BACKUP_PASSPHRASE restored-postgres-id openssl enc' "$DOCKER_LOG"
+grep -q 'full.tar.enc r2:bucket/dreamtrans/' "$DOCKER_LOG"
+test ! -e "$INSTALL_DIR/backups/dreamtrans-20000101-000000.full.tar.enc"
+test "$(find "$INSTALL_DIR/backups" -name '*.full.tar.enc' | wc -l)" -eq 1
+printf 'Managed backup identity and retention checks passed\n'
+
+bash "$REPO_ROOT/scripts/backup.sh" --dry-run > "$FIXTURE/managed-dry.log"
+grep -q 'complete application volume, main/YuAction' "$FIXTURE/managed-dry.log"
+grep -q 'download and verify encrypted bytes' "$FIXTURE/managed-dry.log"
+
+# A corrupt/missing remote object must fail before retention removes old backups.
+for failure in MOCK_REMOTE_CORRUPT MOCK_DOWNLOAD_FAIL; do
+    : > "$DOCKER_LOG"
+    printf old > "$INSTALL_DIR/backups/dreamtrans-20000101-000000.full.tar.enc"
+    if env "$failure=true" BACKUP_LOCAL_KEEP=1 bash "$REPO_ROOT/scripts/backup.sh" > "$FIXTURE/verify-failure.log" 2>&1; then
+        echo "backup succeeded despite $failure" >&2; exit 1
+    fi
+    grep -Eq 'remote backup (checksum mismatch|verification download failed)' "$FIXTURE/verify-failure.log"
+    test -e "$INSTALL_DIR/backups/dreamtrans-20000101-000000.full.tar.enc"
+    if grep -q 'delete r2:' "$DOCKER_LOG"; then
+        echo 'remote retention ran before successful verification' >&2; exit 1
+    fi
+done
+printf 'Remote download integrity and retention ordering checks passed\n'
+
+# A scheduled run and an operator-triggered run cannot race their artifacts.
+(
+    exec 9> "$INSTALL_DIR/backups/.backup.lock"
+    flock -n 9
+    : > "$DOCKER_LOG"
+    if bash "$REPO_ROOT/scripts/backup.sh" > "$FIXTURE/locked.log" 2>&1; then
+        echo 'concurrent backup bypassed the backup lock' >&2; exit 1
+    fi
+    grep -q 'another backup is already running' "$FIXTURE/locked.log"
+    test ! -s "$DOCKER_LOG"
+)
+printf 'Concurrent backup lock check passed\n'

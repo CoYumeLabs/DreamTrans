@@ -1,3 +1,4 @@
+import { EdgesPage } from './admin/EdgesPage'
 import { AgentsPage } from './admin/AgentsPage'
 import { RolesPage } from './admin/RolesPage'
 import { hasConsolePermission, type ConsoleAccess } from './admin/consoleAccess'
@@ -21,6 +22,7 @@ import { ErrorBanner } from './admin/ui'
 import './pro-admin.css'
 
 type Tab =
+ | 'edges'
   | 'agents'
   | 'agent-self'
   | 'routing'
@@ -52,6 +54,7 @@ const nav: Array<{ id: Tab; label: string; permission: string; scoped?: boolean 
   { id: 'plans', label: '会员与充值', permission: 'pricing.read' },
   { id: 'models', label: '模型与定价', permission: 'models.read' },
   { id: 'tenants', label: '组织', permission: 'routing.read' },
+  { id: 'edges', label: '地区转录节点', permission: 'edges.manage' },
   { id: 'settings', label: '系统设置', permission: 'settings.read' },
 ]
 
@@ -174,6 +177,7 @@ export default function ProAdmin() {
           </div>
         )}
         {tab === 'tenants' && <fieldset className="pa-permission-scope" disabled={!isSuper}><TenantsPage run={run} /></fieldset>}
+        {tab === 'edges' && isSuper && <EdgesPage />}
         {tab === 'settings' && <fieldset className="pa-permission-scope" disabled={!can('settings.write')}><SettingsPage run={run} /></fieldset>}
       </main>
     </div>

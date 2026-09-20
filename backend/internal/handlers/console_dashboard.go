@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -59,9 +60,9 @@ type dashboardInputError struct{}
 
 func (*dashboardInputError) Error() string { return "invalid date range or granularity" }
 
-func (h *AdminHandler) dashboardRows(ctx context.Context, sqlQuery string, args ...any) (json.RawMessage, error) {
+func dashboardRows(ctx context.Context, db dashboardQuerier, sqlQuery string, args ...any) (json.RawMessage, error) {
 	var data json.RawMessage
-	err := h.store.DB().QueryRowContext(ctx, dashboardScope+`SELECT COALESCE(jsonb_agg(to_jsonb(report)),'[]'::jsonb) FROM (`+sqlQuery+`) report`, args...).Scan(&data)
+	err := db.QueryRowContext(ctx, dashboardScope+`SELECT COALESCE(jsonb_agg(to_jsonb(report)),'[]'::jsonb) FROM (`+sqlQuery+`) report`, args...).Scan(&data)
 	return data, err
 }
 
@@ -79,6 +80,42 @@ func (h *AdminHandler) HandleConsoleDashboard(w http.ResponseWriter, r *http.Req
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 	result := map[string]any{"from": from, "to_exclusive": to, "granularity": grain, "attribution": "single_source_first_wins", "financial": consolePermission(r, "finance.read"), "metrics_available": consolePermission(r, "metrics.read"), "export_allowed": consolePermission(r, "export")}
+	// SET LOCAL is confined to this read-only request transaction. Pooled
+	// connections and transcription/billing queries keep their own settings.
+	tx, err := beginDashboardRead(ctx, h.store.DB())
+	if err != nil {
+		log.Printf("dashboard transaction failed: %v", err)
+		http.Error(w, "Dashboard data unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+	sections := dashboardSections(consolePermission(r, "finance.read"), consolePermission(r, "metrics.read"))
+	for name, query := range sections {
+		data, e := dashboardRows(ctx, tx, query, args...)
+		if e != nil {
+			log.Printf("dashboard query %s failed: %v", name, e)
+			http.Error(w, "Dashboard data unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		result[name] = data
+	}
+	if len(consoleChannels(r)) == 0 && (consolePermission(r, "finance.read") || consolePermission(r, "routing.read")) {
+		credit, e := speechmaticsCreditQuery(ctx, tx)
+		if e != nil {
+			http.Error(w, "Provider credit unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		result["credit"] = credit
+	}
+	if err := tx.Commit(); err != nil {
+		http.Error(w, "Dashboard data unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	WriteJSON(w, result)
+}
+
+// dashboardSections keeps authorization decisions at the handler boundary.
+func dashboardSections(finance, metrics bool) map[string]string {
 	sections := map[string]string{
 		"activity": `SELECT date_trunc($5,created_at AT TIME ZONE 'UTC') AS period,COUNT(DISTINCT user_id) AS active_users,COALESCE(SUM(quantity) FILTER(WHERE action='transcription'),0)/60 AS hours FROM usage GROUP BY 1 ORDER BY 1`,
 		"funnel": `SELECT s.channel,COUNT(*) AS registered,COUNT(*) FILTER(WHERE attributed_at IS NOT NULL AND attributed_at<$2) AS attributed,
@@ -90,48 +127,63 @@ func (h *AdminHandler) HandleConsoleDashboard(w http.ResponseWriter, r *http.Req
 		"retention": `SELECT s.source_name AS source,s.channel,w.week,COUNT(*) AS eligible,
  COUNT(*) FILTER(WHERE EXISTS(SELECT 1 FROM usage_logs l WHERE l.user_id=s.id AND l.action='transcription' AND l.refunded_at IS NULL AND l.quantity>0 AND l.created_at>=s.attributed_at+w.week*interval '7 days' AND l.created_at<s.attributed_at+(w.week+1)*interval '7 days')) AS retained
  FROM scoped s CROSS JOIN (VALUES(1),(2),(4)) w(week) WHERE s.attributed_at >= $1 AND s.attributed_at<$2 AND s.attributed_at+(w.week+1)*interval '7 days'<=LEAST($2,NOW()) GROUP BY s.source_id,s.source_name,s.channel,w.week ORDER BY s.source_name,w.week`,
-		"hours_histogram": `SELECT CASE WHEN hours=0 THEN '0' WHEN hours<1 THEN '0–1' WHEN hours<5 THEN '1–5' WHEN hours<10 THEN '5–10' ELSE '10+' END AS bucket,COUNT(*) AS user_weeks FROM (
- SELECT s.id,w.week,COALESCE(SUM(l.quantity) FILTER(WHERE l.action='transcription'),0)/60 AS hours FROM scoped s
+		// Aggregate before joining the user/week grid, so it never expands
+		// into one row per usage event. Empty weeks still count as zero.
+		"hours_histogram": `WITH weekly AS (
+ SELECT user_id,date_trunc('week',created_at) AS week,COALESCE(SUM(quantity) FILTER(WHERE action='transcription'),0)/60 AS hours
+ FROM usage GROUP BY 1,2
+) SELECT CASE WHEN COALESCE(l.hours,0)=0 THEN '0' WHEN l.hours<1 THEN '0–1' WHEN l.hours<5 THEN '1–5' WHEN l.hours<10 THEN '5–10' ELSE '10+' END AS bucket,COUNT(*) AS user_weeks
+ FROM scoped s
  CROSS JOIN generate_series(date_trunc('week',$1::timestamptz),$2::timestamptz-interval '1 microsecond',interval '1 week') w(week)
- LEFT JOIN usage l ON l.user_id=s.id AND l.created_at>=w.week AND l.created_at<w.week+interval '7 days'
- WHERE s.created_at<w.week+interval '7 days' GROUP BY s.id,w.week) totals GROUP BY 1 ORDER BY 1`,
+ LEFT JOIN weekly l ON l.user_id=s.id AND l.week=w.week
+ WHERE s.created_at<w.week+interval '7 days' GROUP BY 1 ORDER BY 1`,
 		"routing": `SELECT COALESCE(training_route,'unknown') AS route,COALESCE(funding_route,'unknown') AS funding,tenant_kind,COUNT(DISTINCT user_id) AS users,SUM(quantity)/60 AS hours FROM usage WHERE action='transcription' GROUP BY 1,2,3 ORDER BY 1,2,3`,
 	}
-	if consolePermission(r, "finance.read") {
+	if finance {
 		sections["finance"] = `SELECT date_trunc($5,p.created_at AT TIME ZONE 'UTC') AS period,SUM(p.amount_usd) FILTER(WHERE p.kind='topup') AS topup_usd,SUM(p.amount_usd) FILTER(WHERE p.kind='membership') AS membership_usd,SUM(p.amount_usd) FILTER(WHERE p.kind='refund') AS refund_usd,SUM(p.fee_usd) AS known_fee_usd,COUNT(*) FILTER(WHERE p.kind<>'refund' AND p.fee_usd IS NULL) AS pending_fees FROM paid p GROUP BY 1 ORDER BY 1`
-		sections["costs"] = `SELECT date_trunc($5,created_at AT TIME ZONE 'UTC') AS period,SUM(charge_usd-route_refund_usd) AS consumed_usd,SUM(gift_usd) AS gift_usd,SUM(charge_usd-gift_usd-route_refund_usd) AS paid_consumed_usd,SUM(upstream_cost_usd) AS upstream_usd,SUM(charge_usd-gift_usd-route_refund_usd-upstream_cost_usd) AS paid_usage_margin_usd FROM usage GROUP BY 1 ORDER BY 1`
+		// Money columns are NOT NULL NUMERIC. Sum the allocated refund once
+		// per period instead of reevaluating its correlated subquery for
+		// consumed, paid-consumed and margin aggregates separately.
+		sections["costs"] = `SELECT period,charge_usd-route_refund_usd AS consumed_usd,gift_usd,charge_usd-gift_usd-route_refund_usd AS paid_consumed_usd,upstream_usd,charge_usd-gift_usd-route_refund_usd-upstream_usd AS paid_usage_margin_usd FROM (
+ SELECT date_trunc($5,created_at AT TIME ZONE 'UTC') AS period,SUM(charge_usd) AS charge_usd,SUM(gift_usd) AS gift_usd,SUM(upstream_cost_usd) AS upstream_usd,SUM(route_refund_usd) AS route_refund_usd FROM usage GROUP BY 1
+) totals ORDER BY period`
 		sections["paths"] = `SELECT p.plan,r.route,COALESCE(SUM(u.quantity),0)/60 AS hours,COALESCE(SUM(u.charge_usd-u.gift_usd-u.route_refund_usd),0) AS paid_consumed_usd,COALESCE(SUM(u.upstream_cost_usd),0) AS upstream_usd,SUM(u.charge_usd-u.gift_usd-u.route_refund_usd-u.upstream_cost_usd)/NULLIF(SUM(u.quantity)/60,0) AS margin_per_hour_usd FROM (VALUES('free'),('pro')) p(plan) CROSS JOIN (VALUES('training'),('standard')) r(route) LEFT JOIN usage u ON u.plan=p.plan AND u.training_route=r.route AND u.action='transcription' GROUP BY p.plan,r.route ORDER BY p.plan,r.route`
 		sections["income_tiers"] = `SELECT date_trunc('week',created_at AT TIME ZONE 'UTC') AS week,kind,amount_usd AS tier_usd,COUNT(*) AS payments,SUM(amount_usd) AS revenue_usd FROM paid WHERE kind<>'refund' GROUP BY 1,2,3 ORDER BY 1,2,3`
 		sections["liabilities"] = `SELECT COALESCE(SUM(a.wallet_usd),0) AS wallet_usd,(SELECT COALESCE(SUM(g.remaining_usd),0) FROM grants g JOIN scoped s ON s.billing_account_id=g.account_id WHERE g.expires_at IS NULL OR g.expires_at>NOW()) AS grants_usd FROM billing_accounts a JOIN scoped s ON s.billing_account_id=a.id`
 	}
-	if consolePermission(r, "metrics.read") {
+	if metrics {
 		sections["latency"] = `SELECT date_trunc($5,m.created_at AT TIME ZONE 'UTC') AS period,m.route,COUNT(*) AS sessions,SUM(m.samples) AS samples,percentile_cont(.5) WITHIN GROUP(ORDER BY m.latency_p50_ms) AS median_session_p50_ms,percentile_cont(.9) WITHIN GROUP(ORDER BY m.latency_p90_ms) AS p90_session_p90_ms FROM session_metrics m JOIN scoped s ON s.id=m.user_id WHERE m.created_at >= $1 AND m.created_at<$2 GROUP BY 1,2 ORDER BY 1,2`
 		sections["edits"] = `SELECT s.source_language,COUNT(*) FILTER(WHERE NOT t.is_partial) AS final_segments,COUNT(*) FILTER(WHERE t.edit_count>0) AS edited_segments,SUM(t.edit_count) AS edits FROM transcripts t JOIN sessions s ON s.id=t.session_id JOIN scoped u ON u.id=s.user_id WHERE t.created_at >= $1 AND t.created_at<$2 GROUP BY 1 ORDER BY 1`
 		sections["languages"] = `SELECT COALESCE(s.target_language,'unknown') AS language,COALESCE(u.model,'unknown') AS model,SUM(u.input_tokens) AS input_tokens,SUM(u.output_tokens) AS output_tokens,SUM(u.upstream_cost_usd) AS upstream_usd FROM usage u LEFT JOIN sessions s ON s.id=u.session_id WHERE u.action='translation' GROUP BY 1,2 ORDER BY 1,2`
 	}
-	for name, query := range sections {
-		data, e := h.dashboardRows(ctx, query, args...)
-		if e != nil {
-			log.Printf("dashboard query failed: %v", e)
-			http.Error(w, "Dashboard data unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		result[name] = data
+	return sections
+}
+
+type dashboardQuerier interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func beginDashboardRead(ctx context.Context, db *sql.DB) (*sql.Tx, error) {
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
 	}
-	if len(consoleChannels(r)) == 0 && (consolePermission(r, "finance.read") || consolePermission(r, "routing.read")) {
-		credit, e := h.speechmaticsCredit(ctx)
-		if e != nil {
-			http.Error(w, "Provider credit unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		result["credit"] = credit
+	// These interactive aggregates cost more to JIT-compile than to execute.
+	if _, err := tx.ExecContext(ctx, `SET LOCAL jit=off`); err != nil {
+		_ = tx.Rollback()
+		return nil, err
 	}
-	WriteJSON(w, result)
+	return tx, nil
 }
 
 func (h *AdminHandler) speechmaticsCredit(ctx context.Context) (map[string]any, error) {
+	return speechmaticsCreditQuery(ctx, h.store.DB())
+}
+
+func speechmaticsCreditQuery(ctx context.Context, db dashboardQuerier) (map[string]any, error) {
 	values := map[string]string{}
-	rows, err := h.store.DB().QueryContext(ctx, `SELECT key,value#>>'{}' FROM system_settings WHERE key IN ('speechmatics_credit_usd','speechmatics_credit_started_at','speechmatics_credit_route')`)
+	rows, err := db.QueryContext(ctx, `SELECT key,value#>>'{}' FROM system_settings WHERE key IN ('speechmatics_credit_usd','speechmatics_credit_started_at','speechmatics_credit_route')`)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +211,7 @@ func (h *AdminHandler) speechmaticsCredit(ctx context.Context) (map[string]any, 
 		return result, nil
 	}
 	var used, recent float64
-	err = h.store.DB().QueryRowContext(ctx, `SELECT COALESCE(SUM(upstream_cost_usd),0),COALESCE(SUM(upstream_cost_usd) FILTER(WHERE created_at>=GREATEST($1,NOW()-interval '7 days')),0) FROM usage_logs WHERE action='transcription' AND training_route=$2 AND created_at >= $1 AND refunded_at IS NULL`, start, values["speechmatics_credit_route"]).Scan(&used, &recent)
+	err = db.QueryRowContext(ctx, `SELECT COALESCE(SUM(upstream_cost_usd),0),COALESCE(SUM(upstream_cost_usd) FILTER(WHERE created_at>=GREATEST($1,NOW()-interval '7 days')),0) FROM usage_logs WHERE action='transcription' AND training_route=$2 AND created_at >= $1 AND refunded_at IS NULL`, start, values["speechmatics_credit_route"]).Scan(&used, &recent)
 	if err != nil {
 		return nil, err
 	}

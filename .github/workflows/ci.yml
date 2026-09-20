@@ -208,6 +208,13 @@ jobs:
       - name: Backup script checks (mocked docker)
         run: bash scripts/tests/backup_test.sh
 
+      - name: Verify blue-green controller failure recovery
+        run: |
+          python3 -m py_compile scripts/release.py scripts/edge-install.py scripts/diagnose-performance.py
+          bash -n scripts/edge-install.sh
+          python3 scripts/tests/release_controller_test.py
+          python3 scripts/tests/edge_bootstrap_test.py
+
       - name: Upload backend coverage
         uses: codecov/codecov-action@v4
         with:
@@ -285,6 +292,53 @@ jobs:
           tags: dreamtrans-frontend-ci:${{ github.sha }}
           cache-from: type=gha,scope=dreamtrans-frontend
           cache-to: type=gha,mode=max,scope=dreamtrans-frontend
+
+      - name: Build isolated regional Edge image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: backend/Dockerfile.edge
+          load: true
+          push: false
+          tags: dreamtrans-edge-ci:${{ github.sha }}
+          cache-from: type=gha,scope=dreamtrans-edge
+          cache-to: type=gha,mode=max,scope=dreamtrans-edge
+
+      - name: Verify Edge runtime identity and credential boundary
+        run: |
+          image="dreamtrans-edge-ci:${GITHUB_SHA}"
+          test "$(docker image inspect --format '{{.Config.User}}' "$image")" = dreamtrans
+          docker run --rm --entrypoint /bin/sh "$image" -ec '
+            test "$(id -u)" -eq 10001
+            test -x /app/server
+            test -w /spool
+            test -r /usr/share/dreamtrans/release.json
+            test -r /usr/share/dreamtrans/edge-install.py
+            test ! -e /app/data/rag.db
+            ! command -v psql
+            ! command -v docker
+          '
+          if output="$(docker run --rm -e DATABASE_URL=forbidden-on-edge "$image" 2>&1)"; then
+            echo 'Edge accepted a forbidden production database credential'
+            exit 1
+          fi
+          [[ "$output" == *'Edge refuses main-site secrets: DATABASE_URL'* ]]
+
+      - name: Verify Edge audio and durable return under a small memory limit
+        run: |
+          artifact_dir="${RUNNER_TEMP}/dreamtrans-edge-runtime-${GITHUB_RUN_ID}"
+          mkdir -p "$artifact_dir"
+          docker buildx build -f backend/Dockerfile.edge \
+            --target edge-runtime-test-binary \
+            --cache-from type=gha,scope=dreamtrans-edge \
+            --output "type=local,dest=${artifact_dir}" .
+          docker run --rm --memory=256m --memory-swap=256m --cpus=1 \
+            --entrypoint /tmp/edge-runtime.test \
+            --mount "type=bind,src=${artifact_dir}/edge-runtime.test,dst=/tmp/edge-runtime.test,readonly" \
+            "dreamtrans-edge-ci:${GITHUB_SHA}" -test.v -test.count=1 -test.timeout=2m
+
+      - name: Verify Edge admission state survives process restart
+        run: python3 scripts/tests/edge_restart_test.py "dreamtrans-edge-ci:${GITHUB_SHA}"
 
       - name: Verify final image contents and runtime identity
         run: |
@@ -382,6 +436,12 @@ jobs:
         run: |
           scripts/tests/install_restored_update_test.sh \
             "dreamtrans-ci:${GITHUB_SHA}"
+
+      - name: Verify full backup restoration with production Docker tooling
+        run: python3 scripts/tests/backup_snapshot_runtime_test.py "dreamtrans-ci:${GITHUB_SHA}"
+
+      - name: Verify stable companion routing after recreation
+        run: python3 scripts/tests/proxy_network_runtime_test.py "dreamtrans-ci:${GITHUB_SHA}"
 
       - name: Verify Compose migrations and readiness
         run: |

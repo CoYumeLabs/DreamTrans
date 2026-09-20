@@ -142,6 +142,9 @@ func Save() error {
 }
 
 func saveLocked() error {
+	if sharedDB != nil {
+		return saveSharedLocked()
+	}
 	if path == "" {
 		return errors.New("config path empty")
 	}
@@ -179,8 +182,11 @@ func saveLocked() error {
 
 // Get returns a copy of the current config for read-only usage.
 func Get() Config {
-	mu.RLock()
-	defer mu.RUnlock()
+	mu.Lock()
+	defer mu.Unlock()
+	if sharedDB != nil {
+		_ = loadSharedLocked()
+	}
 	return current
 }
 
@@ -191,6 +197,14 @@ func Update(partial *Config) error {
 	if partial == nil {
 		return nil
 	}
+	if sharedDB != nil {
+		return updateSharedLocked(partial)
+	}
+	mergeLocked(partial)
+	return saveLocked()
+}
+
+func mergeLocked(partial *Config) {
 	// prompts
 	if partial.Prompts.Chat != "" {
 		current.Prompts.Chat = partial.Prompts.Chat
@@ -237,5 +251,4 @@ func Update(partial *Config) error {
 	if partial.Summary.ParMinChars > 0 {
 		current.Summary.ParMinChars = partial.Summary.ParMinChars
 	}
-	return saveLocked()
 }

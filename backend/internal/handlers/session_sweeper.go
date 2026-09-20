@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"github.com/dreamtrans/backend/internal/deployment"
 	"log"
 	"time"
 
@@ -22,7 +23,7 @@ const (
 // sweep runs at startup, which also retires historical zombies without a
 // manual cleanup.
 func StartStaleSessionSweeper(ctx context.Context, postgresStore *store.PostgresStore) {
-	if postgresStore == nil {
+	if postgresStore == nil || deployment.Default.Enabled() {
 		return
 	}
 	registry := getSharedLiveTranscriptionRegistry()

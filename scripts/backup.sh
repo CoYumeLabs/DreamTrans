@@ -137,6 +137,41 @@ rclone() {
         "$RCLONE_IMAGE" "$@"
 }
 
+verify_remote() {
+    local file="$1" remote_digest local_digest
+    # Download the encrypted object rather than trusting a multipart ETag.
+    remote_digest="$(rclone cat "r2:${R2_BUCKET}/${REMOTE_PREFIX}/$(basename "$file")" | sha256sum)" \
+        || fail "remote backup verification download failed"
+    local_digest="$(sha256sum "$file")" || fail "local backup checksum failed"
+    [[ "${remote_digest%% *}" == "${local_digest%% *}" ]] || fail "remote backup checksum mismatch"
+    log "remote download checksum verified: $(basename "$file")"
+}
+
+# The managed deployment may have been converted using a checkout or extracted
+# release bundle; never assume a controller was copied to the installation root.
+managed_snapshot() (
+    local output="$1" controller="$INSTALL_DIR/release.py" work="" extraction=""
+    if [[ ! -f "$controller" ]]; then
+        controller="$(dirname -- "${BASH_SOURCE[0]}")/release.py"
+    fi
+    if [[ ! -f "$controller" ]]; then
+        work="$(mktemp -d /tmp/dreamtrans-backup-controller.XXXXXX)"
+        trap '[[ -z "$extraction" ]] || "$DOCKER" rm -v "$extraction" >/dev/null 2>&1; [[ -z "$work" ]] || rm -rf -- "$work"' EXIT
+        local image
+        image="$(python3 - "$INSTALL_DIR/.bluegreen/state.json" <<'PYTHON'
+import json, sys
+with open(sys.argv[1]) as source:
+    state = json.load(source)
+print(state['colors'][state['active']]['image'])
+PYTHON
+)"
+        extraction="$("$DOCKER" create "$image")"
+        "$DOCKER" cp "$extraction:/usr/share/dreamtrans/release.py" "$work/release.py"
+        controller="$work/release.py"
+    fi
+    python3 "$controller" --dir "$INSTALL_DIR" snapshot --output "$output"
+)
+
 run_backup() {
     load_env
     mkdir -p "$BACKUP_DIR"
@@ -148,11 +183,48 @@ run_backup() {
     conf="$BACKUP_DIR/${name}.config.tar.enc"
 
     if [[ "$MODE" == "dry-run" ]]; then
-        log "would dump ${POSTGRES_DB:-dreamtrans} as ${POSTGRES_USER:-dreamtrans} to $dump"
-        log "would archive .env and docker-compose.yml to $conf"
-        log "would upload both to r2:${R2_BUCKET}/${REMOTE_PREFIX}/ and delete remote files older than ${RETENTION_DAYS} days"
+        if [[ -f "$INSTALL_DIR/.bluegreen/state.json" ]]; then
+            log "would snapshot the recorded production database, complete application volume, main/YuAction deployment configuration and blue-green state"
+            log "would encrypt and upload ${name}.full.tar.enc to r2:${R2_BUCKET}/${REMOTE_PREFIX}/"
+        else
+            log "would dump ${POSTGRES_DB:-dreamtrans} as ${POSTGRES_USER:-dreamtrans} to $dump"
+            log "would archive .env and docker-compose.yml to $conf"
+            log "would upload both to r2:${R2_BUCKET}/${REMOTE_PREFIX}/"
+            log "legacy mode does not include the application volume; complete blue-green conversion before relying on full automatic backups"
+        fi
+        log "would download and verify encrypted bytes before deleting remote files older than ${RETENTION_DAYS} days"
         log "would keep the newest ${LOCAL_KEEP} local backups"
         return 0
+    fi
+
+    # Manual verification and cron must not overwrite the same timestamped
+    # artifact or prune while the other invocation is still uploading.
+    exec 9> "$BACKUP_DIR/.backup.lock"
+    flock -n 9 || fail "another backup is already running"
+
+    if [[ -f "$INSTALL_DIR/.bluegreen/state.json" ]]; then
+        local full="$BACKUP_DIR/${name}.full.tar" encrypted="$BACKUP_DIR/${name}.full.tar.enc"
+        managed_snapshot "$full" || fail "full deployment snapshot failed"
+        local database_id
+        database_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["database_id"])' "$INSTALL_DIR/.bluegreen/state.json")"
+        "$DOCKER" exec -i -e BACKUP_PASSPHRASE "$database_id" openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:BACKUP_PASSPHRASE \
+            < "$full" > "$encrypted" || fail "full snapshot encryption failed"
+        rm -f -- "$full"
+        rclone copyto "/backups/$(basename "$encrypted")" "r2:${R2_BUCKET}/${REMOTE_PREFIX}/$(basename "$encrypted")" || fail "full snapshot upload failed"
+        verify_remote "$encrypted"
+        rclone delete "r2:${R2_BUCKET}/${REMOTE_PREFIX}" --min-age "${RETENTION_DAYS}d" || log "remote prune failed (ignored)"
+        python3 - "$BACKUP_DIR" "$LOCAL_KEEP" <<'PYTHON'
+from pathlib import Path
+import sys
+keep = int(sys.argv[2])
+if keep < 1:
+    raise ValueError('BACKUP_LOCAL_KEEP must be positive')
+for old in sorted(Path(sys.argv[1]).glob('dreamtrans-*.full.tar.enc'), key=lambda p: p.stat().st_mtime, reverse=True)[keep:]:
+    old.unlink()
+PYTHON
+        log "full deployment backup complete"
+        ping_healthcheck ok
+        return
     fi
 
     log "dumping database"
@@ -174,6 +246,8 @@ run_backup() {
     log "uploading to r2:${R2_BUCKET}/${REMOTE_PREFIX}/"
     rclone copyto "/backups/$(basename "$dump")" "r2:${R2_BUCKET}/${REMOTE_PREFIX}/$(basename "$dump")" || fail "upload of dump failed"
     rclone copyto "/backups/$(basename "$conf")" "r2:${R2_BUCKET}/${REMOTE_PREFIX}/$(basename "$conf")" || fail "upload of config failed"
+    verify_remote "$dump"
+    verify_remote "$conf"
 
     log "pruning remote backups older than ${RETENTION_DAYS} days"
     rclone delete "r2:${R2_BUCKET}/${REMOTE_PREFIX}" --min-age "${RETENTION_DAYS}d" || log "remote prune failed (ignored)"

@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"github.com/dreamtrans/backend/internal/deployment"
 	"log"
 	"sync"
 	"time"
@@ -116,6 +117,11 @@ func (p *skillMapJobPool) worker() {
 }
 
 func (p *skillMapJobPool) claimAndRun() bool {
+	done, allowed := deployment.Default.BeginTask()
+	if !allowed {
+		return false
+	}
+	defer done()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	leaseOwner := p.workerID + "-" + uuid.NewString()
 	jobs, err := p.handler.store.ClaimSkillMapJobs(ctx, leaseOwner, 1, skillMapJobLease)

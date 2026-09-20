@@ -610,8 +610,27 @@ func (s *Service) RecordUsageBatch(ctx context.Context, records []*UsageRecord) 
 	return costs, err
 }
 
-//nolint:gocyclo // One transaction owns pricing, idempotency, and debit.
 func (s *Service) recordUsageBatchOnce(ctx context.Context, records []*UsageRecord) ([]float64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	costs, err := s.ReserveUsageTx(ctx, tx, records)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return costs, nil
+}
+
+// ReserveUsageTx atomically reserves usage inside a caller-owned authorization transaction.
+// The caller must commit before granting upstream work. Automatic top-up is not attempted.
+//
+//nolint:gocyclo // One transaction owns pricing, idempotency, and debit.
+func (s *Service) ReserveUsageTx(ctx context.Context, tx *sql.Tx, records []*UsageRecord) ([]float64, error) {
 	if len(records) == 0 {
 		return []float64{}, nil
 	}
@@ -647,12 +666,6 @@ func (s *Service) recordUsageBatchOnce(ctx context.Context, records []*UsageReco
 	now := time.Now().UTC()
 	monthKey := now.Format("2006-01")
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
 	acct, err := lockAccountForUserTx(ctx, tx, userID)
 	if err != nil {
 		return nil, err
@@ -667,6 +680,11 @@ func (s *Service) recordUsageBatchOnce(ctx context.Context, records []*UsageReco
 	allowNegative, err := boolSettingTx(ctx, tx, "allow_negative_balance", false)
 	if err != nil {
 		return nil, err
+	}
+	for _, rec := range records {
+		if rec.StrictBudget {
+			allowNegative = false
+		}
 	}
 	policy := &snapshotPolicy{BillingEnabled: enabled, AllowNegativeBalance: allowNegative}
 	basePricing := acct.pricing()
@@ -823,9 +841,6 @@ func (s *Service) recordUsageBatchOnce(ctx context.Context, records []*UsageReco
 		`, split.Grant, split.Wallet, split.Gift, usage.id); err != nil {
 			return nil, err
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
 	}
 	return costs, nil
 }
@@ -1158,4 +1173,9 @@ func (s *Service) CanUsePaidFeatures(ctx context.Context, userID string) (bool, 
 		return false, err
 	}
 	return balance.AvailableUSD > 0 || balance.AutoTopupEnabled, nil
+}
+
+// SettleUsageTx settles a previously reserved operation in the caller's transaction.
+func (s *Service) SettleUsageTx(ctx context.Context, tx *sql.Tx, key string, actual *UsageRecord) (float64, error) {
+	return settleUsageTx(ctx, tx, key, actual)
 }

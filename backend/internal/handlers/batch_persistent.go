@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/dreamtrans/backend/internal/deployment"
 	"io"
 	"log"
 	"math"
@@ -261,6 +262,11 @@ func (h *BatchTranscribeHandler) StartWorker() func() {
 	return func() { cancel(); <-done }
 }
 func (h *BatchTranscribeHandler) workBatch(parent context.Context) {
+	done, allowed := deployment.Default.BeginTask()
+	if !allowed {
+		return
+	}
+	defer done()
 	ctx, cancel := context.WithTimeout(parent, 60*time.Second)
 	defer cancel()
 	j, err := scanPersistentBatch(h.store.DB().QueryRowContext(ctx, `UPDATE batch_submissions SET lease_until=NOW()+INTERVAL '90 seconds' WHERE id=(SELECT id FROM batch_submissions WHERE status NOT IN ('done','error') AND next_attempt_at<=NOW() AND lease_until<NOW() ORDER BY next_attempt_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING `+batchColumns))

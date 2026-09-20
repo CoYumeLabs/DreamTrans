@@ -119,7 +119,12 @@ func NewServiceFromEnv() (*Service, error) {
 	if dbPath == "" {
 		dbPath = "./rag.db"
 	}
-	st, err := NewStore(dbPath)
+	var st *Store
+	if os.Getenv("RAG_STORAGE") == "postgres" {
+		st, err = NewPostgresStore(os.Getenv("DATABASE_URL"))
+	} else {
+		st, err = NewStore(dbPath)
+	}
 	if err != nil {
 		return nil, err
 	}
