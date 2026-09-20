@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Verify companion DNS survives recreation using only disposable Docker resources."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -8,7 +9,7 @@ import tempfile
 import time
 import uuid
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent/'legacy'))
 import release
 
 
@@ -47,7 +48,7 @@ def main():
         database_id = release.inspect(database)['Id']
         with tempfile.TemporaryDirectory(prefix='dt-entry-runtime-') as directory:
             c = release.Controller(directory)
-            c.state = {'prefix': prefix, 'network': entry, 'database_network': network,
+            c.state = {'format': 1, 'prefix': prefix, 'network': entry, 'database_network': network,
                        'database_id': database_id, 'database_volume': volumes[0],
                        'database_env': {'PGUSER': 'fixture', 'PGDATABASE': 'fixture'},
                        'application_volume': volumes[1], 'proxy_image': proxy_image,
@@ -88,15 +89,13 @@ def main():
             before = release.inspect(c.name('proxy'))['State']['StartedAt']
             c.state.update(active='blue', phase='ready')
             c.persist()
-            release.command(sys.executable, str(Path(release.__file__)), '--dir', directory, 'sync-entry')
+            release.command(os.environ['DREAMTRANS_CTL'], '--dir', directory, 'sync-entry')
             assert release.inspect(c.name('proxy'))['State']['StartedAt'] == before
             docker('restart', c.name('proxy'))
             companion_request('blue')
             # Exercise the diagnostic on the actual isolated database. Port zero
             # requests fail harmlessly; no public entrance is contacted.
-            diagnostics = release.command(sys.executable,
-                str(Path(release.__file__).with_name('diagnose-performance.py')),
-                '--dir', directory)
+            diagnostics = release.command(os.environ['DREAMTRANS_CTL'], '--dir', directory, 'diagnose')
             assert 'Read-only PostgreSQL statistics' in diagnostics
             assert 'No index changes' in diagnostics
             c.ensure_proxy('green')

@@ -5,7 +5,8 @@ RUN go mod download
 COPY backend/ ./
 ARG TARGETOS
 ARG TARGETARCH
-RUN test -n "$TARGETOS" && test -n "$TARGETARCH" && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -o /edge ./cmd/edge
+RUN test -n "$TARGETOS" && test -n "$TARGETARCH" && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -o /edge ./cmd/edge && \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /dreamtransctl ./cmd/dreamtransctl
 FROM build AS edge-runtime-test-builder
 RUN CGO_ENABLED=0 go test -c -o /edge-runtime.test ./internal/edgeruntime
 FROM scratch AS edge-runtime-test-binary
@@ -20,6 +21,5 @@ ENV DREAMTRANS_ROLE=edge
 HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD wget -qO /dev/null http://127.0.0.1:8080/readyz || exit 1
 CMD ["/app/server"]
 
-COPY scripts/edge-install.py /usr/share/dreamtrans/edge-install.py
+COPY --from=build /dreamtransctl /usr/share/dreamtrans/dreamtransctl
 COPY scripts/edge-install.sh /usr/share/dreamtrans/edge-install.sh
-COPY scripts/release.py /usr/share/dreamtrans/release.py

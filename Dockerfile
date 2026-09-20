@@ -61,7 +61,9 @@ ARG TARGETOS
 ARG TARGETARCH
 RUN test -n "$TARGETOS" && test -n "$TARGETARCH" && \
     CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build \
-      -buildvcs=false -trimpath -ldflags="-s -w" -o /app/server ./cmd/web
+      -buildvcs=false -trimpath -ldflags="-s -w" -o /app/server ./cmd/web && \
+    CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build \
+      -buildvcs=false -trimpath -ldflags="-s -w" -o /app/dreamtransctl ./cmd/dreamtransctl
 
 # Compile the real knowledge extraction package into a disposable conformance
 # binary. The scratch export target is used only by CI; neither the test binary
@@ -110,7 +112,7 @@ COPY scripts/migrate.sh /usr/share/dreamtrans/migrate.sh
 # The backup helper ships with the release too, so the installer can drop it
 # next to migrate.sh and keep it current on every --update.
 COPY scripts/backup.sh /usr/share/dreamtrans/backup.sh
-COPY scripts/release.py /usr/share/dreamtrans/release.py
+COPY --from=backend-builder /app/dreamtransctl /usr/share/dreamtrans/dreamtransctl
 COPY deploy/release.json /usr/share/dreamtrans/release.json
 RUN chmod 0555 /usr/share/dreamtrans/migrations \
       /usr/share/dreamtrans/migrate.sh \
@@ -135,5 +137,4 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=12 \
   CMD wget -q -O /dev/null http://127.0.0.1:8080/readyz || exit 1
 CMD ["./server"]
 
-COPY scripts/edge-install.py /usr/share/dreamtrans/edge-install.py
 COPY scripts/edge-install.sh /usr/share/dreamtrans/edge-install.sh

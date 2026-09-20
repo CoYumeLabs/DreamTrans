@@ -210,10 +210,18 @@ echo "Backup script checks passed"
 # database service is named postgres instead of db. Local full snapshots rotate.
 mkdir -p "$INSTALL_DIR/.bluegreen"
 printf '%s\n' '{"database_id":"restored-postgres-id"}' > "$INSTALL_DIR/.bluegreen/state.json"
-cat > "$INSTALL_DIR/release.py" <<'PYTHON'
-import pathlib, sys
-pathlib.Path(sys.argv[sys.argv.index('--output')+1]).write_bytes(b'full snapshot fixture')
-PYTHON
+export DREAMTRANS_REAL_CTL="${DREAMTRANS_CTL:?build the Go CLI and set DREAMTRANS_CTL}"
+export DREAMTRANS_CTL="$INSTALL_DIR/dreamtransctl"
+cat > "$DREAMTRANS_CTL" <<'SH'
+#!/bin/bash
+set -eu
+case "$3" in
+  snapshot) printf 'full snapshot fixture' > "$5" ;;
+  state-field) printf '%s\n' restored-postgres-id ;;
+  *) exec "$DREAMTRANS_REAL_CTL" "$@" ;;
+esac
+SH
+chmod 0700 "$DREAMTRANS_CTL"
 printf old > "$INSTALL_DIR/backups/dreamtrans-20000101-000000.full.tar.enc"
 BACKUP_LOCAL_KEEP=1 bash "$REPO_ROOT/scripts/backup.sh" > "$FIXTURE/managed.log"
 grep -q 'exec -i -e BACKUP_PASSPHRASE restored-postgres-id openssl enc' "$DOCKER_LOG"

@@ -15,8 +15,8 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT/'scripts'))
-spec = importlib.util.spec_from_file_location('edge_install', ROOT/'scripts/edge-install.py')
+sys.path.insert(0, str(ROOT/'scripts/tests/legacy'))
+spec = importlib.util.spec_from_file_location('edge_install', ROOT/'scripts/tests/legacy/edge-install.py')
 edge_install = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(edge_install)
 
@@ -183,7 +183,7 @@ printf 'docker %s\\n' "$*" >> "$BOOTSTRAP_LOG"
 case "$1" in
 compose) exit 1;;
 create) echo isolated-extraction-container;;
-cp) printf 'pass\\n' > "$3";;
+cp) printf '#!/bin/sh\\nexit 0\\n' > "$3";;
 esac
 ''',
             }
@@ -201,7 +201,7 @@ esac
             with self.subTest(version=version):
                 code, operations, error = self.run_bootstrap(version)
                 self.assertEqual(code, 0, error)
-                self.assertIn('apt-get install -y docker.io docker-compose-v2 python3 ca-certificates', operations)
+                self.assertIn('apt-get install -y docker.io docker-compose-v2 ca-certificates', operations)
                 self.assertIn('docker rm -v isolated-extraction-container', operations)
                 self.assertNotIn('docker system prune', operations)
 
