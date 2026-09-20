@@ -437,6 +437,9 @@ jobs:
           scripts/tests/install_restored_update_test.sh \
             "dreamtrans-ci:${GITHUB_SHA}"
 
+      - name: Verify full backup restoration with production Docker tooling
+        run: python3 scripts/tests/backup_snapshot_runtime_test.py "dreamtrans-ci:${GITHUB_SHA}"
+
       - name: Verify Compose migrations and readiness
         run: |
           project="dreamtrans-ci-${GITHUB_RUN_ID}"

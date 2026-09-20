@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import tarfile
 import unittest
 from unittest.mock import patch
 
@@ -24,6 +25,50 @@ class ReleaseRecoveryTest(unittest.TestCase):
             'colors': {'blue': {'image': 'old', 'empty_spool': False},
                        'green': {'image': 'new'}},
         }
+
+    def test_configuration_snapshot_restores_companion_settings_and_linked_secrets(self):
+        root = Path(self.directory.name)
+        settings = {
+            '.env': 'main secrets', 'compose.restore.yml': 'restore image',
+            'compose.production.yml': 'external production volume',
+            'compose.extra.yaml': 'yaml override', 'release.py': 'controller',
+            'backup.sh': 'backup helper', 'yuaction/compose.ghcr.yml': 'companion image',
+            'yuaction/compose.bluegreen.yml': 'stable internal network',
+            'yuaction/.env.production': 'companion settings',
+        }
+        for name, data in settings.items():
+            path = root/name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(data)
+        secret = root/'operator-secret'
+        secret.write_text('linked companion secret')
+        (root/'yuaction/.env').symlink_to(secret)
+        (root/'yuaction/node_modules').mkdir()
+        (root/'yuaction/node_modules/ignored').write_text('cache')
+        self.controller.persist()
+        (self.controller.path/'lock').touch()
+        (self.controller.path/'migration').mkdir()
+        (self.controller.path/'migration/ignored.sql').write_text('derived schema')
+        destination = root/'configuration.tar'
+        release.archive_configuration(root, self.controller.path, destination)
+        with tarfile.open(destination) as archive:
+            for name, value in settings.items():
+                self.assertEqual(archive.extractfile(name).read().decode(), value)
+            self.assertTrue(archive.getmember('yuaction/.env').isfile())
+            self.assertEqual(archive.extractfile('yuaction/.env').read(), b'linked companion secret')
+            self.assertIn('.bluegreen/state.json', archive.getnames())
+            for excluded in ('operator-secret', 'yuaction/node_modules/ignored', '.bluegreen/lock', '.bluegreen/migration/ignored.sql'):
+                self.assertNotIn(excluded, archive.getnames())
+
+    def test_incomplete_conversion_cannot_publish_a_partial_snapshot(self):
+        c = self.controller
+        c.state.update(active=None, colors={}, phase='importing')
+        target = Path(self.directory.name)/'backup.tar'
+        with patch.object(c, 'assert_database'), patch.object(release, 'docker') as engine:
+            with self.assertRaisesRegex(release.ReleaseError, 'initial conversion is incomplete'):
+                c.snapshot(target)
+        engine.assert_not_called()
+        self.assertFalse(target.exists())
 
     def test_protocol_rollback_cannot_strand_authorized_sessions(self):
         legacy = {'protocol': 1, 'state_epoch': 1, 'expand_migrations': [], 'edge_protocol_min': 1, 'edge_protocol_max': 1}

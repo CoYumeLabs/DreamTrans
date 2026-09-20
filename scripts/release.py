@@ -79,6 +79,27 @@ def save(path, value):
     atomic(path, json.dumps(value, indent=2) + '\n')
 
 
+def archive_configuration(root, state_directory, destination):
+    """Include companion deployment settings without copying source trees or caches."""
+    import tarfile
+    patterns = ('.env', '.env.*', 'docker-compose.yml', 'docker-compose.yaml',
+                'docker-compose.*.yml', 'docker-compose.*.yaml',
+                'compose.yml', 'compose.yaml', 'compose.*.yml', 'compose.*.yaml')
+    files = set()
+    for directory in (root, root/'yuaction'):
+        for pattern in patterns:
+            files.update(p for p in directory.glob(pattern) if p.is_file())
+    for name in ('backup.sh', 'release.py'):
+        if (root/name).is_file():
+            files.add(root/name)
+    # Config symlinks must restore without depending on the original host.
+    with tarfile.open(destination, 'w', dereference=True) as archive:
+        for path in sorted(files):
+            archive.add(path, arcname=str(path.relative_to(root)))
+        archive.add(state_directory, arcname='.bluegreen', filter=lambda info:
+                    None if '/migration/' in info.name or info.name.endswith('/lock') else info)
+
+
 def read(path):
     return json.loads(Path(path).read_text())
 
@@ -590,6 +611,8 @@ http {{
     def snapshot(self, output):
         import tarfile
         self.assert_database()
+        if self.state.get('active') not in self.state.get('colors', {}):
+            raise ReleaseError('initial conversion is incomplete; keep the pre-conversion backup')
         destination=Path(output).resolve()
         if destination.exists():
             raise ReleaseError('snapshot output already exists')
@@ -620,17 +643,14 @@ http {{
                     '--mount',f'type=bind,src={stage},dst=/snapshot','--entrypoint','/bin/sh',self.state['database_image'],
                     '-ec','pg_dump -Fc > /snapshot/database.dump; tar -C /application -cf /snapshot/application.tar .; pg_restore --list /snapshot/database.dump >/dev/null; tar -tf /snapshot/application.tar >/dev/null')
                 if holder.poll() is not None:raise ReleaseError('backup lock connection was lost; snapshot not publishable')
-                files=['.env','docker-compose.yml']
-                files += [p.name for p in self.root.glob('compose.*.yml')]
-                with tarfile.open(stage/'configuration.tar','w') as archive:
-                    for name in files:
-                        if (self.root/name).is_file():archive.add(self.root/name,arcname=name)
-                    archive.add(self.path,arcname='.bluegreen',filter=lambda info: None if '/migration/' in info.name or info.name.endswith('/lock') else info)
+                archive_configuration(self.root, self.path, stage/'configuration.tar')
                 manifest={'format':1,'database_volume':self.state['database_volume'],'application_volume':self.state['application_volume'],'active_image':self.state['colors'][self.state['active']]['image'],'files':{name:file_sha256(stage/name) for name in ('database.dump','application.tar','configuration.tar')}}
                 save(stage/'manifest.json',manifest)
-                with tarfile.open(destination,'w') as archive:
+                snapshot=stage/'snapshot.tar'
+                with tarfile.open(snapshot,'w') as archive:
                     for name in ('database.dump','application.tar','configuration.tar','manifest.json'):archive.add(stage/name,arcname=name)
-                os.chmod(destination,0o600)
+                os.chmod(snapshot,0o600)
+                os.replace(snapshot,destination)
             finally:
                 if holder.poll() is None:
                     holder.stdin.close()

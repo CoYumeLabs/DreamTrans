@@ -137,6 +137,16 @@ rclone() {
         "$RCLONE_IMAGE" "$@"
 }
 
+verify_remote() {
+    local file="$1" remote_digest local_digest
+    # Download the encrypted object rather than trusting a multipart ETag.
+    remote_digest="$(rclone cat "r2:${R2_BUCKET}/${REMOTE_PREFIX}/$(basename "$file")" | sha256sum)" \
+        || fail "remote backup verification download failed"
+    local_digest="$(sha256sum "$file")" || fail "local backup checksum failed"
+    [[ "${remote_digest%% *}" == "${local_digest%% *}" ]] || fail "remote backup checksum mismatch"
+    log "remote download checksum verified: $(basename "$file")"
+}
+
 # The managed deployment may have been converted using a checkout or extracted
 # release bundle; never assume a controller was copied to the installation root.
 managed_snapshot() (
@@ -173,12 +183,24 @@ run_backup() {
     conf="$BACKUP_DIR/${name}.config.tar.enc"
 
     if [[ "$MODE" == "dry-run" ]]; then
-        log "would dump ${POSTGRES_DB:-dreamtrans} as ${POSTGRES_USER:-dreamtrans} to $dump"
-        log "would archive .env and docker-compose.yml to $conf"
-        log "would upload both to r2:${R2_BUCKET}/${REMOTE_PREFIX}/ and delete remote files older than ${RETENTION_DAYS} days"
+        if [[ -f "$INSTALL_DIR/.bluegreen/state.json" ]]; then
+            log "would snapshot the recorded production database, complete application volume, main/YuAction deployment configuration and blue-green state"
+            log "would encrypt and upload ${name}.full.tar.enc to r2:${R2_BUCKET}/${REMOTE_PREFIX}/"
+        else
+            log "would dump ${POSTGRES_DB:-dreamtrans} as ${POSTGRES_USER:-dreamtrans} to $dump"
+            log "would archive .env and docker-compose.yml to $conf"
+            log "would upload both to r2:${R2_BUCKET}/${REMOTE_PREFIX}/"
+            log "legacy mode does not include the application volume; complete blue-green conversion before relying on full automatic backups"
+        fi
+        log "would download and verify encrypted bytes before deleting remote files older than ${RETENTION_DAYS} days"
         log "would keep the newest ${LOCAL_KEEP} local backups"
         return 0
     fi
+
+    # Manual verification and cron must not overwrite the same timestamped
+    # artifact or prune while the other invocation is still uploading.
+    exec 9> "$BACKUP_DIR/.backup.lock"
+    flock -n 9 || fail "another backup is already running"
 
     if [[ -f "$INSTALL_DIR/.bluegreen/state.json" ]]; then
         local full="$BACKUP_DIR/${name}.full.tar" encrypted="$BACKUP_DIR/${name}.full.tar.enc"
@@ -189,6 +211,7 @@ run_backup() {
             < "$full" > "$encrypted" || fail "full snapshot encryption failed"
         rm -f -- "$full"
         rclone copyto "/backups/$(basename "$encrypted")" "r2:${R2_BUCKET}/${REMOTE_PREFIX}/$(basename "$encrypted")" || fail "full snapshot upload failed"
+        verify_remote "$encrypted"
         rclone delete "r2:${R2_BUCKET}/${REMOTE_PREFIX}" --min-age "${RETENTION_DAYS}d" || log "remote prune failed (ignored)"
         python3 - "$BACKUP_DIR" "$LOCAL_KEEP" <<'PYTHON'
 from pathlib import Path
@@ -223,6 +246,8 @@ PYTHON
     log "uploading to r2:${R2_BUCKET}/${REMOTE_PREFIX}/"
     rclone copyto "/backups/$(basename "$dump")" "r2:${R2_BUCKET}/${REMOTE_PREFIX}/$(basename "$dump")" || fail "upload of dump failed"
     rclone copyto "/backups/$(basename "$conf")" "r2:${R2_BUCKET}/${REMOTE_PREFIX}/$(basename "$conf")" || fail "upload of config failed"
+    verify_remote "$dump"
+    verify_remote "$conf"
 
     log "pruning remote backups older than ${RETENTION_DAYS} days"
     rclone delete "r2:${R2_BUCKET}/${REMOTE_PREFIX}" --min-age "${RETENTION_DAYS}d" || log "remote prune failed (ignored)"

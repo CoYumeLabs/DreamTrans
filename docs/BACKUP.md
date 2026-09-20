@@ -1,9 +1,55 @@
-# 数据库备份到 Cloudflare R2
+# 自动备份到 Cloudflare R2
 
-`scripts/backup.sh` 每天把 PostgreSQL 完整导出一份，连同 `.env` 和
-`docker-compose.yml`，用口令加密后上传到 R2，并按保留天数清理旧备份。
+完成蓝绿转换并安装新版 `backup.sh` 和 `release.py` 后，现有定时任务自动生成
+`dreamtrans-时间.full.tar.enc`。它包含控制器记录的生产数据库导出、完整正式应用卷
+（包括知识库文件及仍保留的 SQLite）、主站和 `yuaction/` 下的 `.env`/`.env.*`、
+Compose YAML 文件、备份/发布工具及 `.bluegreen` 状态。配置符号链接保存实际内容。
+原数据库容器和 external 应用卷从状态文件读取，不按默认卷名猜测，也不重建数据卷。
+
+数据库导出覆盖该数据库的全部 schema，包括与主站共库的 YuAction schema；
+**其他数据库、YuAction 的独立文件卷、配置引用的其他目录不在这份快照内**，必须
+在部署审核中单独确认并安排备份。当前生产交接应核对 YuAction 的 `dbname` 与主站一致。
+
+每次上传后都会从 R2 下载密文并比对 SHA-256；下载失败或内容不一致时，任务失败，
+保留旧备份，不执行远端或本地清理。这个检查证明上传内容一致，不能替代定期隔离恢复。
+完整快照在私有临时目录内生成，完成后才原子发布，避免留下看似成功的半份备份。
+手动与定时备份共用宿主机锁，已有任务运行时拒绝启动第二份，避免覆盖或提前清理。
+
+尚未转换蓝绿的旧模式只导出指定 PostgreSQL 数据库、`.env` 和 `docker-compose.yml`，
+**不包含应用卷**。`--dry-run` 会明确显示实际采用的模式；不能把旧模式当作完整应用备份。
 主机上不需要额外安装任何东西：pg_dump 和 openssl 在数据库容器里跑，上传用
 rclone 的容器镜像。
+
+## 已迁移生产环境的交接
+
+保留现有 `.env` 中的 R2 凭证和 `BACKUP_PASSPHRASE`，不要重新生成口令。
+把已验证的新版 `backup.sh` 与 `release.py` 安装到原定时任务所调用的安装目录。
+如果原任务已经调用 `/root/dreamtrans/backup.sh`，原位更新脚本即可保留执行时间，
+不需要新增第二条任务。仅转换应用容器不会自动更新宿主机旧脚本。
+
+转换完成后执行 `INSTALL_DIR=/root/dreamtrans /root/dreamtrans/backup.sh --dry-run`，
+确认输出包含 application volume 和 main/YuAction configuration，再手动运行一次。
+只有出现 `remote download checksum verified` 与 `full deployment backup complete`，
+才能确认本次完整备份已上传并通过回读校验。失败时现有 `BACKUP_HEALTHCHECK_URL`
+会收到失败通知；未配置监控地址时不会自动产生邮件告警。
+
+## 完整快照的恢复演练
+
+每次首次启用或存储布局变化后，以及日常运维安排的定期演练中，应执行：
+
+1. 从 R2 下载 `.full.tar.enc`，使用原口令和下文相同的 OpenSSL 参数解密。
+2. 解包到权限为 0700 的独立目录，按 `manifest.json` 的 `files` 校验三个内层文件：
+   `database.dump`、`application.tar`、`configuration.tar`。
+3. 在不连接生产网络、不开放公网端口的新 PostgreSQL 实例中，用
+   `pg_restore --exit-on-error --no-owner --no-privileges` 恢复 `database.dump`。
+4. 将 `application.tar` 恢复到全新的测试卷，保留所有者和权限；检查知识库文件。
+   将 `configuration.tar` 恢复到独立目录，核对正式卷名、Compose 叠加文件、
+   YuAction 网络配置及密钥文件是否齐全。不要直接启动其中保存的生产配置。
+5. 以替换为隔离数据库、测试卷和测试凭证的配置启动兼容版本，核对迁移、用户/账本
+   和历史记录、知识库及 YuAction。保存演练日期、镜像、校验结果和差异。
+
+灾难恢复时，旧 `.bluegreen/state.json` 中的容器 ID、网络和主机路径不能直接套用
+到新主机；须按恢复后的实际资源重建并验证映射。镜像回切不能恢复数据库旧快照覆盖新写入。
 
 ## 一次性准备
 
@@ -53,9 +99,9 @@ curl -fsSL https://raw.githubusercontent.com/CoYumeLabs/DreamTrans/main/scripts/
 按 `BACKUP_RETENTION_DAYS` 保留。`crontab -l` 能看到定时任务；手动管理可用
 `~/dreamtrans/backup.sh --install-cron`。
 
-## 恢复
+## 旧模式数据库恢复示例（仅在隔离环境演练）
 
-在一台装好 Docker 的机器上，先按安装文档拉起一个空实例（或者就在原机上），
+在一台装好 Docker 的隔离测试机器上，先按安装文档拉起一个空测试实例，
 然后：
 
 ```bash
