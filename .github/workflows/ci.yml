@@ -444,11 +444,6 @@ jobs:
             -test.timeout=5m \
             -test.run '^TestLinuxKnowledgeExtractionFixtures$'
 
-      - name: Verify legacy appdata permission migration
-        run: |
-          scripts/tests/install_appdata_permissions_test.sh \
-            "dreamtrans-ci:${GITHUB_SHA}"
-
       - name: Extract standalone Go operations CLI from the verified image
         run: |
           artifact="${RUNNER_TEMP}/dreamtransctl"
@@ -458,6 +453,11 @@ jobs:
           chmod 0700 "$artifact"
           "$artifact" help
           echo "DREAMTRANS_CTL=$artifact" >> "$GITHUB_ENV"
+
+      - name: Verify legacy appdata permission migration
+        run: |
+          scripts/tests/install_appdata_permissions_test.sh \
+            "dreamtrans-ci:${GITHUB_SHA}"
 
       - name: Verify restored deployment updates and recovery
         run: |
