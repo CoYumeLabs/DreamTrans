@@ -57,7 +57,20 @@ python3 scripts/release.py --dir /root/dreamtrans init \
 
 必须把占位符替换为实际资源；不能照抄测试卷名称。转换保留原 `.env`、`compose.restore.yml`、`compose.production.yml`、external 应用卷和生产数据库卷，不重建 Compose 项目。迁移 053/054 为新增表、055 为恢复协议扩展；运行旧版本时只执行兼容扩展。停止旧写入后，以只读方式最终导入旧 SQLite 内容和配置，导入标记保证重复执行不会覆盖迁移后新写入。蓝绿实例改用 PostgreSQL RAG 和配置；知识库文件继续保存在原卷，不进行递归改权限。
 
-首次交接 16002 会短暂中断。后续 Tunnel 始终连接固定代理。YuAction 必须接入控制器打印的稳定代理网络，并把内部 URL 配置为 `http://dreamtrans:8080`；自动交接及验证仍列为待完成验收。
+首次交接 16002 会短暂中断。后续 Tunnel 始终连接固定代理。主站代理同时接入原数据库网络，提供稳定别名 `dreamtrans`；YuAction 保持原共享网络和 `YUFOLO_URL=http://dreamtrans:8080`，无需添加颜色容器地址或修改其 Compose 文件。容器重建后仍通过原网络连接固定代理。若该别名被其他运行容器占用，控制器拒绝交接，避免旧写入实例与代理产生歧义。
+
+已用早期控制器完成转换的主站，先安装经过校验的新版宿主机 `release.py`，再执行以下命令补齐原网络入口。它仅连接代理网络，不重启主站、YuAction 或数据库，不更改现有路由和生产卷。原先手动为 YuAction 添加的入口网络可以保留，但后续重建不再依赖它。
+
+```bash
+python3 /root/dreamtrans/release.py --dir /root/dreamtrans sync-entry
+```
+
+新转换和后续发布会自动验证并补齐该连接；Docker 重启保留网络附件，控制器创建代理时也会重建附件。YuAction 安装器仍需按原顺序读取主站 `.env` 与其自身 `.env`，不要把数据库密码复制到子目录。现有 YuAction 更新器在找不到旧主站 Compose 应用容器时可能打印提示，但会保留已经配置的 `YUFOLO_URL`；入口继续由代理提供。
+
+后台性能排查可运行 `python3 scripts/diagnose-performance.py --dir /root/dreamtrans`。
+它只采集主机和容器资源、固定入口的本机延迟、数据库等待、表统计及现有索引，
+不输出运行中的 SQL 文本、账户内容或配置密钥，也不执行建索引、ANALYZE 或重启。
+本机健康接口延迟不能代表浏览器或后台业务接口耗时；EC2 积分历史仍需从监控中核对。
 
 ## 主站发布与回切
 

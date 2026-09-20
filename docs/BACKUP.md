@@ -3,7 +3,9 @@
 完成蓝绿转换并安装新版 `backup.sh` 和 `release.py` 后，现有定时任务自动生成
 `dreamtrans-时间.full.tar.enc`。它包含控制器记录的生产数据库导出、完整正式应用卷
 （包括知识库文件及仍保留的 SQLite）、主站和 `yuaction/` 下的 `.env`/`.env.*`、
-Compose YAML 文件、备份/发布工具及 `.bluegreen` 状态。配置符号链接保存实际内容。
+Compose YAML 文件、备份/发布工具及 `.bluegreen` 状态。还保留 YuAction 的
+`install.sh`、`.project`、`.dreamtrans-dir`，用于恢复原更新器和主站关联。
+配置符号链接保存实际内容。
 原数据库容器和 external 应用卷从状态文件读取，不按默认卷名猜测，也不重建数据卷。
 
 数据库导出覆盖该数据库的全部 schema，包括与主站共库的 YuAction schema；

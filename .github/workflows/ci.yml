@@ -210,7 +210,7 @@ jobs:
 
       - name: Verify blue-green controller failure recovery
         run: |
-          python3 -m py_compile scripts/release.py scripts/edge-install.py
+          python3 -m py_compile scripts/release.py scripts/edge-install.py scripts/diagnose-performance.py
           bash -n scripts/edge-install.sh
           python3 scripts/tests/release_controller_test.py
           python3 scripts/tests/edge_bootstrap_test.py
@@ -439,6 +439,9 @@ jobs:
 
       - name: Verify full backup restoration with production Docker tooling
         run: python3 scripts/tests/backup_snapshot_runtime_test.py "dreamtrans-ci:${GITHUB_SHA}"
+
+      - name: Verify stable companion routing after recreation
+        run: python3 scripts/tests/proxy_network_runtime_test.py "dreamtrans-ci:${GITHUB_SHA}"
 
       - name: Verify Compose migrations and readiness
         run: |

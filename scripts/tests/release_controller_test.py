@@ -33,6 +33,8 @@ class ReleaseRecoveryTest(unittest.TestCase):
             'compose.production.yml': 'external production volume',
             'compose.extra.yaml': 'yaml override', 'release.py': 'controller',
             'backup.sh': 'backup helper', 'yuaction/compose.ghcr.yml': 'companion image',
+            'yuaction/install.sh': 'companion updater', 'yuaction/.project': 'yuaction',
+            'yuaction/.dreamtrans-dir': '/root/dreamtrans',
             'yuaction/compose.bluegreen.yml': 'stable internal network',
             'yuaction/.env.production': 'companion settings',
         }
@@ -69,6 +71,47 @@ class ReleaseRecoveryTest(unittest.TestCase):
                 c.snapshot(target)
         engine.assert_not_called()
         self.assertFalse(target.exists())
+
+    def test_main_internal_entry_preserves_companions_original_network(self):
+        c = self.controller
+        c.state.update(role='main', database_network='original-network',
+                       database_id='database', proxy_image='proxy-image')
+        proxy = {'Id': 'proxy-id', 'Image': 'proxy-image',
+                 'Mounts': [{'Destination': '/release', 'Source': str(c.path/'proxy')}],
+                 'NetworkSettings': {'Networks': {'entry-test': {}}}}
+        objects = {'database': {'NetworkSettings': {'Networks': {'original-network': {}}}},
+                   c.name('proxy'): proxy, 'proxy-id': proxy,
+                   'original-network': {'Containers': {'legacy': {}, 'companion': {}}},
+                   'legacy': {'Name': '/dreamtrans', 'State': {'Running': False},
+                              'NetworkSettings': {'Networks': {'original-network': {}}}},
+                   'companion': {'Name': '/yuaction-backend-1', 'State': {'Running': True},
+                                 'NetworkSettings': {'Networks': {'original-network': {}}}}}
+        def engine(*args):
+            self.assertEqual(args, ('network', 'connect', '--alias', 'dreamtrans', 'original-network', 'proxy-id'))
+            proxy['NetworkSettings']['Networks']['original-network'] = {'Aliases': ['dreamtrans']}
+        with patch.object(c, 'assert_database'), patch.object(release, 'inspect', side_effect=lambda name, kind='container': objects[name]), patch.object(release, 'docker', side_effect=engine) as docker:
+            c.connect_internal_entry()
+            c.connect_internal_entry()
+            self.assertEqual(docker.call_count, 1)
+            objects['legacy']['State']['Running'] = True
+            with self.assertRaisesRegex(release.ReleaseError, 'another running container'):
+                c.connect_internal_entry()
+            self.assertEqual(docker.call_count, 1)
+            objects['legacy']['State']['Running'] = False
+            proxy['NetworkSettings']['Networks']['original-network']['Aliases'] = []
+            with self.assertRaisesRegex(release.ReleaseError, 'without its stable alias'):
+                c.connect_internal_entry()
+            self.assertEqual(docker.call_count, 1)
+            proxy['Image'] = 'unrelated-image'
+            with self.assertRaisesRegex(release.ReleaseError, 'differs from recorded'):
+                c.connect_internal_entry()
+            self.assertEqual(docker.call_count, 1)
+
+    def test_edge_internal_entry_never_accesses_a_database_network(self):
+        with patch.object(release, 'docker') as docker, patch.object(release, 'inspect') as inspect:
+            self.controller.connect_internal_entry()
+        docker.assert_not_called()
+        inspect.assert_not_called()
 
     def test_protocol_rollback_cannot_strand_authorized_sessions(self):
         legacy = {'protocol': 1, 'state_epoch': 1, 'expand_migrations': [], 'edge_protocol_min': 1, 'edge_protocol_max': 1}

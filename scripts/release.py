@@ -92,6 +92,9 @@ def archive_configuration(root, state_directory, destination):
     for name in ('backup.sh', 'release.py'):
         if (root/name).is_file():
             files.add(root/name)
+    for name in ('install.sh', '.project', '.dreamtrans-dir'):
+        if (root/'yuaction'/name).is_file():
+            files.add(root/'yuaction'/name)
     # Config symlinks must restore without depending on the original host.
     with tarfile.open(destination, 'w', dereference=True) as archive:
         for path in sorted(files):
@@ -229,6 +232,7 @@ class Controller:
                 '--mount', f'type=bind,src={self.path/"proxy"},dst=/release,readonly',
                 '--log-opt', 'max-size=10m', '--log-opt', 'max-file=3',
                 self.state['proxy_image'], 'nginx', '-g', 'daemon off;', '-c', '/release/nginx.conf')
+        self.connect_internal_entry()
         for _ in range(30):
             try:
                 if self.route_color() == color:
@@ -237,6 +241,41 @@ class Controller:
                 pass
             time.sleep(1)
         raise ReleaseError('initial proxy route did not become ready; rerun initial conversion to resume')
+
+    def connect_internal_entry(self):
+        """Keep existing companions reachable after their Compose containers are recreated."""
+        if self.state.get('role') == 'edge':
+            return
+        self.assert_database()
+        network = self.state['database_network']
+        database = inspect(self.state['database_id'])
+        if network not in database['NetworkSettings']['Networks']:
+            raise ReleaseError('recorded database network is no longer attached; stop and investigate')
+        proxy = inspect(self.name('proxy'))
+        if proxy['Image'] != self.state['proxy_image'] or not any(
+            m['Destination'] == '/release' and m['Source'] == str(self.path/'proxy')
+            for m in proxy['Mounts']
+        ) or self.state['network'] not in proxy['NetworkSettings']['Networks']:
+            raise ReleaseError('existing proxy differs from recorded installation')
+        # Do not publish an ambiguous DNS name alongside a running legacy writer.
+        members = inspect(network, 'network').get('Containers') or {}
+        for identity in members:
+            if identity == proxy['Id']:
+                continue
+            other = inspect(identity)
+            attached = other['NetworkSettings']['Networks'].get(network, {})
+            aliases = set(attached.get('Aliases') or []) | {other['Name'].lstrip('/')}
+            if other['State']['Running'] and 'dreamtrans' in aliases:
+                raise ReleaseError('dreamtrans alias is owned by another running container; no routing changes made')
+        attached = proxy['NetworkSettings']['Networks'].get(network)
+        if attached is not None:
+            if 'dreamtrans' not in (attached.get('Aliases') or []):
+                raise ReleaseError('proxy already uses the database network without its stable alias; review before reconnecting')
+            return
+        docker('network', 'connect', '--alias', 'dreamtrans', network, proxy['Id'])
+        attached = inspect(proxy['Id'])['NetworkSettings']['Networks'].get(network, {})
+        if 'dreamtrans' not in (attached.get('Aliases') or []):
+            raise ReleaseError('stable internal alias was not attached; rerun sync-entry after investigating')
 
     def control(self, color, action='status'):
         return json.loads(docker('exec', self.name(color), '/app/server', 'deploy-control', action))
@@ -486,6 +525,7 @@ http {{
         self.assert_database()
         if self.state['phase'] not in ('ready', 'draining'):
             raise ReleaseError('unfinished release; run resume, abort before cutover, or rollback after cutover')
+        self.connect_internal_entry()
         image = image_id(args.image)
         active = self.state['active']
         color = 'green' if active == 'blue' else 'blue'
@@ -695,6 +735,7 @@ def main():
     sub.add_parser('rollback')
     sub.add_parser('abort')
     sub.add_parser('status')
+    sub.add_parser('sync-entry', help='保持 YuAction 原网络上的稳定代理入口，不重启应用')
     backup=sub.add_parser('snapshot')
     backup.add_argument('--output',required=True)
     args = p.parse_args()
@@ -710,6 +751,11 @@ def main():
             controller.init(args)
         elif not controller.state:
             raise ReleaseError('run init in a maintenance window first')
+        elif args.action == 'sync-entry':
+            if controller.state.get('role') == 'edge' or not controller.state.get('active'):
+                raise ReleaseError('sync-entry requires a completed main-site conversion')
+            controller.connect_internal_entry()
+            progress('入口', '固定代理已接入原数据库网络；YuAction 可保留原 Compose 配置及 http://dreamtrans:8080')
         elif args.action == 'snapshot':
             controller.snapshot(args.output)
         elif args.action == 'abort':

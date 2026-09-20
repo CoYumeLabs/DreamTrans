@@ -62,6 +62,9 @@ def main():
             configs = {'.env': 'fixture-main-secret', 'compose.production.yml': 'external-production-volume',
                        'compose.restore.yml': 'fixed-restored-image',
                        'yuaction/.env': 'fixture-companion-secret',
+                       'yuaction/install.sh': 'fixture-companion-installer',
+                       'yuaction/.project': 'fixture-companion-project',
+                       'yuaction/.dreamtrans-dir': 'fixture-parent-directory',
                        'yuaction/compose.ghcr.yml': 'companion-compose',
                        'yuaction/compose.bluegreen.yml': 'stable-entry-network'}
             for name, value in configs.items():
