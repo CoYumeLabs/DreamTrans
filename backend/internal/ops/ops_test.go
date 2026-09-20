@@ -119,6 +119,85 @@ func TestDrainRetainsLongRunningWork(t *testing.T) {
 		t.Fatal("acknowledged instance not retired")
 	}
 }
+
+func TestBackgroundDrainDeadlineRecoveryAndCompatibility(t *testing.T) {
+	c := testController(t)
+	calls, _, control := testEngine(c)
+	(*control)["drained"] = false
+	(*control)["websockets"] = 1
+	c.state["phase"] = "draining"
+	save(filepath.Join(c.path, "drain-policy.json"), object{"enabled": true, "handoff_after_seconds": 600})
+	c.drainTick() // Adopt a release whose old CLI did not record its deadline.
+	started := str(c.state["drain_started_at"])
+	if started == "" {
+		t.Fatal("deadline not persisted")
+	}
+	c.drainTick()
+	if strings.Contains(strings.Join(*calls, "\n"), "deploy-control handoff") {
+		t.Fatal("premature handoff")
+	}
+	c.state["drain_started_at"] = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+	c.persist()
+	restarted := newController(t.Context(), c.root, io.Discard, io.Discard)
+	restarted.run, restarted.sleep = c.run, c.sleep
+	restarted.drainTick()
+	if restarted.state["handoff_status"] != "old_version_requires_natural_drain" {
+		t.Fatal(restarted.state)
+	}
+	(*control)["handoff_supported"] = true
+	restarted.drainTick()
+	if !strings.Contains(strings.Join(*calls, "\n"), "deploy-control handoff") {
+		t.Fatal("deadline did not offer handoff")
+	}
+	if strings.Contains(strings.Join(*calls, "\n"), "docker stop") {
+		t.Fatal("handoff forcibly killed a live user")
+	}
+	(*control)["drained"] = true
+	restarted.drainTick()
+	if restarted.state["phase"] != "ready" {
+		t.Fatal("automatic retirement failed")
+	}
+}
+
+func TestBackgroundDrainDoesNotMigrateToBrokenRoute(t *testing.T) {
+	c := testController(t)
+	calls, route, control := testEngine(c)
+	(*control)["drained"], (*control)["handoff_supported"] = false, true
+	c.state["phase"] = "draining"
+	c.state["drain_started_at"] = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+	save(filepath.Join(c.path, "drain-policy.json"), object{"enabled": true, "handoff_after_seconds": 0})
+	*route = "green"
+	c.drainTick()
+	if c.state["handoff_status"] != "handoff_check_failed_retrying" {
+		t.Fatal(c.state)
+	}
+	if strings.Contains(strings.Join(*calls, "\n"), "deploy-control handoff") {
+		t.Fatal("offered broken replacement")
+	}
+	c.state["phase"] = "observing"
+	before := len(*calls)
+	c.drainTick()
+	if len(*calls) != before {
+		t.Fatal("timer interfered with foreground observation")
+	}
+}
+
+func TestDrainTimerIsRebootPersistentAndRoleSpecific(t *testing.T) {
+	for _, role := range []string{"main", "edge"} {
+		c := testController(t)
+		c.state["role"] = role
+		dir := t.TempDir()
+		c.writeDrainUnits(dir, "test-drain")
+		service, _ := os.ReadFile(filepath.Join(dir, "test-drain.service"))
+		timer, _ := os.ReadFile(filepath.Join(dir, "test-drain.timer"))
+		if !strings.Contains(string(timer), "OnBootSec=20") || !strings.Contains(string(timer), "WantedBy=timers.target") {
+			t.Fatal(string(timer))
+		}
+		if !strings.Contains(string(service), " drain-tick") || strings.Contains(string(service), " edge --dir") != (role == "edge") {
+			t.Fatal(string(service))
+		}
+	}
+}
 func TestSwitchFailurePreservesRouteAndResumes(t *testing.T) {
 	c := testController(t)
 	_, route, _ := testEngine(c)

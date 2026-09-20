@@ -25,6 +25,7 @@ function nextTurn(): Promise<void> {
 }
 
 class FakeSocket implements SpeechmaticsSocket {
+  autoEnd = true
   readyState = 0
   bufferedAmount = 0
   binaryType: BinaryType = 'blob'
@@ -65,7 +66,7 @@ class FakeSocket implements SpeechmaticsSocket {
             + `got ${String(payload.last_seq_no)}`,
           )
         }
-        globalThis.queueMicrotask(() => {
+        if (this.autoEnd) globalThis.queueMicrotask(() => {
           this.message({ message: 'EndOfTranscript' })
         })
       }
@@ -484,3 +485,80 @@ async function verifyStartupPaymentRejection(): Promise<void> {
 }
 
 await verifyStartupPaymentRejection()
+
+async function verifyDeploymentHandoff(): Promise<void> {
+  const sockets: FakeSocket[] = []
+  let reachable = true
+  const client = new SpeechmaticsProxyClient({
+    url: 'ws://dreamtrans.test/ws/speechmatics', tokenProvider: () => 'token',
+    beforeReconnect: async () => { if (!reachable) throw new Error('Main unavailable') },
+    socketFactory: () => { const socket = new FakeSocket(); sockets.push(socket); return socket },
+    reconnect: { baseDelayMs: 1, maxDelayMs: 1, jitterMs: 0 },
+    audio: { sampleRate: 48_000, frameDurationMs: 40 },
+  })
+  const started = client.start()
+  await nextTurn()
+  const old = sockets[0]
+  old.open(); old.message({ message: 'RecognitionStarted' })
+  await started
+  const frame = () => new Float32Array(1920).buffer
+  client.sendAudio(frame())
+  reachable = false
+  old.message({ message: 'DeploymentHandoff', version: 1 })
+  await nextTurn()
+  client.sendAudio(frame())
+  assert(old.readyState === 1 && sockets.length === 1, 'failed preflight must keep original socket')
+  assert(!old.sent.some(v => typeof v === 'string' && JSON.parse(v).message === 'EndOfStream'), 'failed preflight cannot finalize old provider')
+  reachable = true
+  old.autoEnd = false
+  old.message({ message: 'DeploymentHandoff', version: 1 })
+  old.message({ message: 'DeploymentHandoff', version: 1 })
+  await nextTurn()
+  client.sendAudio(frame())
+  assert(old.sent.filter(v => v instanceof ArrayBuffer).length === 2, 'capture during migration stays queued')
+  assert(old.sent.filter(v => typeof v === 'string' && JSON.parse(v).message === 'EndOfStream').length === 1, 'duplicate offers cannot finalize twice')
+  old.message({ message: 'AddTranscript', metadata: { transcript: 'Final before move.', start_time: 0, end_time: 0.08 }, results: [] })
+  old.message({ message: 'EndOfTranscript' })
+  old.close() // Exercise final-message parsing racing the WebSocket close event.
+  for (let i = 0; i < 20 && sockets.length < 2; i++) await nextTurn()
+  assert(Number(sockets.length) === 2, 'handoff must reconnect automatically')
+  sockets[1].open(); sockets[1].message({ message: 'RecognitionStarted' })
+  await nextTurn()
+  assert(sockets[1].sent.filter(v => v instanceof ArrayBuffer).length === 1, 'new provider receives buffered audio exactly once')
+  assert(client.getSnapshot().status === 'running', 'capture continues after deployment')
+  await client.stop()
+  client.destroy()
+}
+await verifyDeploymentHandoff()
+
+async function verifyStopDuringDeploymentHandoff(): Promise<void> {
+  const sockets: FakeSocket[] = []
+  const client = new SpeechmaticsProxyClient({
+    url: 'ws://dreamtrans.test/ws/speechmatics', tokenProvider: () => 'token',
+    socketFactory: () => { const socket = new FakeSocket(); sockets.push(socket); return socket },
+    reconnect: { baseDelayMs: 1, maxDelayMs: 1, jitterMs: 0 },
+    audio: { sampleRate: 48_000, frameDurationMs: 40 },
+  })
+  const start = client.start()
+  await nextTurn()
+  const old = sockets[0]
+  old.open(); old.message({ message: 'RecognitionStarted' })
+  await start
+  old.autoEnd = false
+  old.message({ message: 'DeploymentHandoff', version: 1 })
+  await nextTurn()
+  client.sendAudio(new Float32Array(1920))
+  const stopping = client.stop()
+  const stoppingAgain = client.stop()
+  old.message({ message: 'EndOfTranscript' })
+  for (let i = 0; i < 20 && sockets.length < 2; i++) await nextTurn()
+  assert(sockets.length === 2, 'stop during handoff must finish queued audio on replacement')
+  sockets[1].open(); sockets[1].message({ message: 'RecognitionStarted' })
+  await Promise.all([stopping, stoppingAgain])
+  assert(old.sent.filter(v => typeof v === 'string' && JSON.parse(v).message === 'EndOfStream').length === 1, 'stop must not finalize an old provider twice')
+  assert(sockets[1].sent.filter(v => v instanceof ArrayBuffer).length === 1, 'stop must not lose migration-buffered audio')
+  assert(sockets[1].sent.filter(v => typeof v === 'string' && JSON.parse(v).message === 'EndOfStream').length === 1, 'repeated stop during handoff must be idempotent')
+  assert(client.getSnapshot().status === 'stopped', 'explicit stop must win over automatic reconnect')
+  client.destroy()
+}
+await verifyStopDuringDeploymentHandoff()

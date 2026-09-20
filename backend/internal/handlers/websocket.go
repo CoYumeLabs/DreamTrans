@@ -25,6 +25,7 @@ import (
 	"github.com/dreamtrans/backend/internal/auth"
 	"github.com/dreamtrans/backend/internal/billing"
 	"github.com/dreamtrans/backend/internal/config"
+	"github.com/dreamtrans/backend/internal/deployment"
 	"github.com/dreamtrans/backend/internal/metrics"
 	"github.com/dreamtrans/backend/internal/modelcatalog"
 	"github.com/dreamtrans/backend/internal/rag"
@@ -2141,6 +2142,8 @@ func (h *WebSocketHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// deadlines below, while context values (auth/tracing) remain available.
 	ctx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
 	defer cancel()
+	stopHandoff := deployment.Default.NotifyHandoff(safeConn.WriteJSON)
+	defer stopHandoff()
 	deliveryWaitCtx, stopDeliveryWait := context.WithCancel(ctx)
 	defer stopDeliveryWait()
 	paidCtx, stopPaidFlow := context.WithCancel(ctx)

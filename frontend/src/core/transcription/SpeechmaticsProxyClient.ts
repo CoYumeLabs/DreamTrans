@@ -369,6 +369,9 @@ export class SpeechmaticsProxyClient {
   private context: SocketContext | null = null
   private socketSerial = 0
   private reconnectTimer: TimerHandle | null = null
+  private handoffContext: SocketContext | null = null
+  private handoffPromise: Promise<void> | null = null
+  private handoffFinishing = false
   private drainTimer: TimerHandle | null = null
   private frameTimer: TimerHandle | null = null
   private transcriptPartialTimer: TimerHandle | null = null
@@ -709,6 +712,10 @@ export class SpeechmaticsProxyClient {
 
   async reconnect(): Promise<void> {
     this.assertUsable()
+    if (this.handoffFinishing && this.handoffPromise) {
+      await this.handoffPromise
+      return
+    }
     if (!this.desiredSession || this.stopping) {
       throw new Error('No active transcription session to reconnect')
     }
@@ -734,6 +741,11 @@ export class SpeechmaticsProxyClient {
   async stop(timeoutMs = this.stopTimeoutMs): Promise<void> {
     this.assertUsable()
     if (this.stopPromise) return this.stopPromise
+    if (this.handoffFinishing && this.handoffPromise) {
+      this.capturePaused = true
+      await this.handoffPromise
+      if (this.stopPromise) return this.stopPromise
+    }
     this.connectionGeneration += 1
     if (this.paymentBlocked || this.paymentResumeInProgress) {
       this.desiredSession = false
@@ -1075,6 +1087,17 @@ export class SpeechmaticsProxyClient {
     event: { readonly code: number; readonly reason: string },
   ): void {
     if (this.context !== context) return
+    if (this.handoffContext === context && this.handoffFinishing) {
+      // Drain parsed final messages before detaching this context.
+      void context.messageChain.then(() => {
+        if (this.context === context) {
+          this.context = null
+          this.recognitionReady = false
+          this.settleEnd(new Error('Connection closed before handoff finalization'))
+        }
+      })
+      return
+    }
     this.context = null
     this.recognitionReady = false
     const reason = event.reason || `WebSocket closed with code ${event.code}`
@@ -1107,6 +1130,11 @@ export class SpeechmaticsProxyClient {
     const messageType = asString(message.message)
 
     switch (messageType) {
+      case 'DeploymentHandoff':
+        if (message.version === 1 && !this.handoffContext) {
+          this.handoffPromise = this.handoff(context)
+        }
+        break
       case 'RecognitionStarted':
         this.handleRecognitionStarted(context)
         break
@@ -1190,6 +1218,51 @@ export class SpeechmaticsProxyClient {
       })
     }
     this.drainAudioQueue()
+  }
+
+  private async handoff(context: SocketContext): Promise<void> {
+    if (this.handoffContext || this.stopping || !this.recognitionReady
+      || this.context !== context || !this.desiredSession) return
+    this.handoffContext = context
+    const generation = this.connectionGeneration
+    let finishing = false
+    try {
+      // A failed main-site preflight leaves the original provider connection
+      // running. No audio is paused until this check succeeds.
+      await this.beforeReconnect?.()
+      if (this.context !== context || this.stopping || !this.desiredSession) return
+      this.flushPendingAudioFrame()
+      this.recognitionReady = false
+      finishing = true
+      this.handoffFinishing = true
+      this.setStatus('reconnecting')
+      const ended = this.createEndWaiter(15_000)
+      try {
+        context.socket.send(JSON.stringify({
+          message: 'EndOfStream', last_seq_no: context.sentAudioChunks,
+        }))
+      } catch (error) {
+        this.settleEnd(error instanceof Error ? error : new Error('Handoff send failed'))
+      }
+      // Capture continues into the existing bounded audio queue. The old
+      // provider finishes all forwarded audio before a new provider starts.
+      await ended
+    } catch (error) {
+      if (!this.destroyed && generation === this.connectionGeneration
+        && (this.context === context || (finishing && this.context === null))) {
+        this.reportError(socketMessage(error, 'Deployment handoff could not complete'), false)
+      }
+    } finally {
+      if (this.handoffContext === context) {
+        this.handoffContext = null
+        this.handoffFinishing = false
+      }
+      if (finishing && generation === this.connectionGeneration
+        && !this.destroyed && this.desiredSession && !this.stopping) {
+        if (this.context === context) this.closeActiveSocket(1000, 'Deployment handoff')
+        this.scheduleReconnect('Deployment handoff', true)
+      }
+    }
   }
 
   private handleTranscript(
@@ -1810,6 +1883,8 @@ export class SpeechmaticsProxyClient {
 
   private resetRuntime(): void {
     this.connectionGeneration += 1
+    this.handoffContext = null
+    this.handoffFinishing = false
     this.paymentBlocked = false
     this.paymentResumeInProgress = false
     this.clearAllTimers()

@@ -14,7 +14,7 @@ import (
 
 type options struct {
 	root, action, image, proxyImage, app, database, databaseNetwork, output, mainURL, tunnelImage, registrationFile, providerKeyFile, tunnelTokenFile, origins, backupFile string
-	observe, drainTimeout, port, maximum                                                                                                                                   int
+	observe, drainTimeout, handoffAfter, port, maximum                                                                                                                     int
 	edge, maintenance, pause, training                                                                                                                                     bool
 	extra                                                                                                                                                                  []string
 }
@@ -45,6 +45,7 @@ func parse(args []string, errOut io.Writer) *options {
 	flags.StringVar(&o.backupFile, "backup-file", "", "verified backup helper to install alongside CLI")
 	flags.IntVar(&o.observe, "observe", 60, "observation seconds")
 	flags.IntVar(&o.drainTimeout, "drain-timeout", 60, "wait for drain; never forcibly end active sessions")
+	flags.IntVar(&o.handoffAfter, "handoff-after", 600, "background grace seconds before cooperative handoff; -1 only waits")
 	flags.IntVar(&o.port, "port", o.port, "local entrance port")
 	flags.IntVar(&o.maximum, "maximum", 8, "Edge session capacity")
 	flags.BoolVar(&o.maintenance, "maintenance", false, "initial conversion maintenance window")
@@ -90,7 +91,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	return attempt(func() {
 		o := parse(args, errOut)
 		if o.action == "help" {
-			_, _ = fmt.Fprintln(out, "DreamTrans Go 运维工具\n  dreamtransctl --dir /root/dreamtrans upgrade\n  dreamtransctl --dir DIR deploy --image REPOSITORY@sha256:DIGEST\n  dreamtransctl --dir DIR status|resume|drain|rollback|abort|sync-entry|diagnose\n  dreamtransctl --dir DIR snapshot --output FILE\n  dreamtransctl --dir DIR install-tools --backup-file FILE\n  dreamtransctl edge --dir DIR install|upgrade|status|drain|rollback|resume|abort|logs|diagnose|uninstall|converge|pause-releases|resume-releases|reconcile\n  首次主站转换：init --app NAME --database NAME --image DIGEST --proxy-image DIGEST --maintenance")
+			_, _ = fmt.Fprintln(out, "DreamTrans Go 运维工具\n  dreamtransctl --dir /root/dreamtrans upgrade\n  dreamtransctl --dir DIR deploy --image REPOSITORY@sha256:DIGEST\n  dreamtransctl --dir DIR status|resume|drain|rollback|abort|sync-entry|diagnose\n  dreamtransctl --dir DIR configure-drain --handoff-after 600\n  dreamtransctl --dir DIR snapshot --output FILE\n  dreamtransctl --dir DIR install-tools --backup-file FILE\n  dreamtransctl edge --dir DIR install|upgrade|status|drain|rollback|resume|abort|logs|diagnose|uninstall|converge|pause-releases|resume-releases|reconcile\n  首次主站转换：init --app NAME --database NAME --image DIGEST --proxy-image DIGEST --maintenance")
 			return
 		}
 		if strings.HasPrefix(o.action, "compose-") {
@@ -141,6 +142,10 @@ func (c *controller) dispatch(o *options) {
 		}
 	case "resume":
 		c.resume(o)
+	case "configure-drain":
+		c.configureDrain(o.handoffAfter)
+	case "drain-tick":
+		c.drainTick()
 	case "drain":
 		if c.edge() {
 			c.drainNode()

@@ -188,6 +188,17 @@ func testAudioPartitionAndDrain(t *testing.T, protocol int) {
 	if response.Body != nil {
 		_ = response.Body.Close()
 	}
+	if protocol >= 2 {
+		if err = deployment.Default.RequestHandoff(); err != nil {
+			t.Fatal(err)
+		}
+		if err = ws.ReadJSON(&message); err != nil || message["message"] != "DeploymentHandoff" {
+			t.Fatalf("cooperative deployment offer: %+v %v", message, err)
+		}
+		if deployment.Default.Status().Drained || queue.Pending() == 0 {
+			t.Fatal("offer discarded a live stream or unsaved results")
+		}
+	}
 	if err = ws.WriteJSON(map[string]string{"message": "EndOfStream"}); err != nil {
 		t.Fatal(err)
 	}

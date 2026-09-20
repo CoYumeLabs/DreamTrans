@@ -185,6 +185,8 @@ func (c *controller) switchColor(color string) {
 	c.state["active"] = color
 	c.state["previous"] = nullable(old)
 	c.state["phase"] = "observing"
+	c.state["drain_started_at"] = time.Now().UTC().Format(time.RFC3339Nano)
+	delete(c.state, "handoff_status")
 	c.persist()
 	if old != "" && old != color {
 		c.control(old, "draining")
@@ -386,7 +388,7 @@ func (c *controller) deploy(o *options) {
 	if image == str(obj(colors[active])["image"]) {
 		c.progress("✓", "已是该固定版本")
 		if phase == "draining" {
-			c.drain(o.drainTimeout)
+			c.finishRelease(o)
 		}
 		return
 	}
@@ -410,7 +412,7 @@ func (c *controller) deploy(o *options) {
 	}
 	c.switchColor(color)
 	c.observe(o.observe)
-	c.drain(o.drainTimeout)
+	c.finishRelease(o)
 }
 func (c *controller) observe(seconds int) {
 	c.progress("6/8", fmt.Sprintf("新请求已切换；观察 %ds，旧连接继续运行", seconds))
@@ -434,6 +436,7 @@ func (c *controller) drain(seconds int) {
 	if old == "" {
 		return
 	}
+	need(old != str(c.state["active"]), "refusing to drain the active version")
 	release := obj(obj(c.state["colors"])[old])
 	if !yes(obj(c.inspect("container", c.name(old))["State"])["Running"]) {
 		need(!c.edge() || yes(release["empty_spool"]), "stopped Edge journal has not been acknowledged")
@@ -459,7 +462,11 @@ func (c *controller) drain(seconds int) {
 		if !time.Now().Before(until) {
 			c.state["phase"] = "draining"
 			c.persist()
-			c.progress("待排空", "超时保留旧实例；稍后运行 drain，不强制终止转录")
+			if yes(c.drainPolicy()["enabled"]) {
+				c.progress("待排空", "保留旧实例与现有转录；后台自动继续检查")
+			} else {
+				c.progress("待排空", "超时保留旧实例；稍后运行 drain，不强制终止转录")
+			}
 			return
 		}
 		c.sleep(3 * time.Second)
@@ -537,7 +544,7 @@ func (c *controller) resume(o *options) {
 		c.observe(o.observe)
 	}
 	if str(c.state["phase"]) == "draining" {
-		c.drain(o.drainTimeout)
+		c.finishRelease(o)
 	}
 }
 func (c *controller) recoverCandidate() {
@@ -571,7 +578,7 @@ func (c *controller) status() object {
 		return object{"initialized": false}
 	}
 	s := object{}
-	for _, k := range []string{"phase", "active", "previous", "target", "network", "port", "database_volume", "application_volume"} {
+	for _, k := range []string{"phase", "active", "previous", "target", "network", "port", "database_volume", "application_volume", "drain_started_at", "handoff_status"} {
 		s[k] = c.state[k]
 	}
 	colors := object{}
@@ -587,5 +594,6 @@ func (c *controller) status() object {
 		colors[color] = info
 	}
 	s["colors"] = colors
+	s["drain_policy"] = c.drainPolicy()
 	return s
 }

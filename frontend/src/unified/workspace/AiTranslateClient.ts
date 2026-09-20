@@ -200,6 +200,7 @@ export class AiTranslateClient {
   private socket: AiTranslateSocket | null = null
   private socketSerial = 0
   private connectInProgress = false
+  private deploymentHandoff = false
   private socketReady = false
   private protocolReady = false
   private supportsRequestIds = false
@@ -473,6 +474,7 @@ export class AiTranslateClient {
   private beginHandshake(socket: AiTranslateSocket): void {
     if (this.socket !== socket || !this.socketReady) return
     this.protocolReady = false
+    this.deploymentHandoff = false
     this.supportsRequestIds = false
     this.serverWorkers = 1
     this.inFlight.clear()
@@ -555,6 +557,13 @@ export class AiTranslateClient {
 
   private sendAvailable(): void {
     if (!this.protocolReady || !this.socketReady) return
+    if (this.deploymentHandoff) {
+      if (this.inFlight.size === 0 && this.socket) {
+        this.deploymentHandoff = false
+        this.abandonSocket(this.socket, 'Deployment handoff')
+      }
+      return
+    }
     const limit = this.supportsRequestIds
       ? Math.min(this.maxInFlightChunks, this.serverWorkers)
       : 1
@@ -576,6 +585,7 @@ export class AiTranslateClient {
     if (typeof data !== 'string') return
     let payload: {
       message?: string
+      version?: number
       type?: string
       reason?: string
       request_id?: string
@@ -607,6 +617,12 @@ export class AiTranslateClient {
     }
 
     switch (payload.message) {
+      case 'DeploymentHandoff':
+        if (payload.version === 1 && this.protocolReady && this.supportsRequestIds) {
+          this.deploymentHandoff = true
+          this.sendAvailable()
+        }
+        break
       case 'Info': {
         if (payload.reason !== 'translator initialized') break
         this.clearTimer('handshake')
@@ -838,6 +854,10 @@ export class AiTranslateClient {
   }
 
   private afterPendingChanged(): void {
+    if (this.deploymentHandoff && !this.draining) {
+      this.sendAvailable()
+      return
+    }
     if (this.pending.size === 0) {
       this.clearTimer('retry')
       if (this.draining) this.finishDrain(true)

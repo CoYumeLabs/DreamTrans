@@ -8,7 +8,47 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
+
+func TestCooperativeHandoffNeverCancelsWork(t *testing.T) {
+	r := &Runtime{mode: "active"}
+	offers := make(chan any, 4)
+	cleanup := r.NotifyHandoff(func(v any) error { offers <- v; return nil })
+	defer cleanup()
+	finish, _ := r.BeginTask()
+	if r.RequestHandoff() == nil {
+		t.Fatal("active instance offered migration")
+	}
+	if err := r.SetMode("draining"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.RequestHandoff(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case value := <-offers:
+		if value.(map[string]any)["message"] != "DeploymentHandoff" {
+			t.Fatal(value)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("offer not delivered")
+	}
+	if r.Status().Drained || r.Status().Tasks != 1 {
+		t.Fatal("handoff cancelled accepted work")
+	}
+	finish()
+	cleanup()
+	if r.Status().HandoffStreams != 0 || !r.Status().Drained {
+		t.Fatal(r.Status())
+	}
+	if err := r.SetMode("active"); err != nil {
+		t.Fatal(err)
+	}
+	if r.RequestHandoff() == nil {
+		t.Fatal("rollback still offers migration")
+	}
+}
 
 func TestShutdownPreservesRestartModeAndRejectsNewWork(t *testing.T) {
 	for _, mode := range []string{"active", "standby", "canary", "draining"} {

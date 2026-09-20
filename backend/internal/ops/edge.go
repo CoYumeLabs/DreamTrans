@@ -294,6 +294,9 @@ func (c *controller) uninstall() {
 	if exists("/etc/systemd/system/" + unit + ".timer") {
 		c.command("", "systemctl", "disable", "--now", unit+".timer")
 	}
+	if yes(c.drainPolicy()["enabled"]) {
+		c.command("", "systemctl", "disable", "--now", "dreamtrans-drain-"+str(c.state["prefix"])+".timer")
+	}
 	names := append(keys(colors), "proxy")
 	if yes(c.state["tunnel"]) {
 		names = append(names, "tunnel")
