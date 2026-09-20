@@ -1,6 +1,6 @@
 # 自动备份到 Cloudflare R2
 
-完成蓝绿转换并安装新版 `backup.sh` 和 `release.py` 后，现有定时任务自动生成
+完成蓝绿转换并安装新版 `backup.sh` 和 `dreamtransctl` 后，现有定时任务自动生成
 `dreamtrans-时间.full.tar.enc`。它包含控制器记录的生产数据库导出、完整正式应用卷
 （包括知识库文件及仍保留的 SQLite）、主站和 `yuaction/` 下的 `.env`/`.env.*`、
 Compose YAML 文件、备份/发布工具及 `.bluegreen` 状态。还保留 YuAction 的
@@ -19,13 +19,13 @@ Compose YAML 文件、备份/发布工具及 `.bluegreen` 状态。还保留 YuA
 
 尚未转换蓝绿的旧模式只导出指定 PostgreSQL 数据库、`.env` 和 `docker-compose.yml`，
 **不包含应用卷**。`--dry-run` 会明确显示实际采用的模式；不能把旧模式当作完整应用备份。
-主机上不需要额外安装任何东西：pg_dump 和 openssl 在数据库容器里跑，上传用
+宿主机使用随发行镜像提供的静态 Go `dreamtransctl`，不需要 Python；pg_dump 和 openssl 在数据库容器里跑，上传用
 rclone 的容器镜像。
 
 ## 已迁移生产环境的交接
 
 保留现有 `.env` 中的 R2 凭证和 `BACKUP_PASSPHRASE`，不要重新生成口令。
-把已验证的新版 `backup.sh` 与 `release.py` 安装到原定时任务所调用的安装目录。
+把已验证的新版 `backup.sh` 与 `dreamtransctl` 安装到原定时任务所调用的安装目录。
 如果原任务已经调用 `/root/dreamtrans/backup.sh`，原位更新脚本即可保留执行时间，
 不需要新增第二条任务。仅转换应用容器不会自动更新宿主机旧脚本。
 

@@ -42,12 +42,12 @@ v2 的恢复粒度为完整音频帧：供应商的词时间戳是近似值，�
 
 ## 首次主站转换
 
-`3763a83` 及当前 `--update` 为原地升级。新增蓝绿入口为 `scripts/release.py`，不会把旧 `--update` 自动改为蓝绿。首次转换需要维护窗口，因为旧程序没有排空控制，也不能与新程序并行写入 SQLite。
+`3763a83` 及当前 `--update` 为原地升级。新增蓝绿入口为 `dreamtransctl`，不会把旧 `--update` 自动改为蓝绿。首次转换需要维护窗口，因为旧程序没有排空控制，也不能与新程序并行写入 SQLite。
 
 发布控制器读取实际应用/数据库容器的环境、网络和挂载，保存到安装目录下权限为 0700 的 `.bluegreen`；状态和环境文件为 0600。要求原 `/app/data` 和 PostgreSQL 为现有普通本地命名卷。未知挂载或不匹配的数据标识会拒绝转换。
 
 ```bash
-python3 scripts/release.py --dir /root/dreamtrans init \
+/root/dreamtrans/dreamtransctl --dir /root/dreamtrans init \
   --app EXISTING_APP_CONTAINER --database EXISTING_POSTGRES_CONTAINER \
   --database-network EXISTING_SHARED_NETWORK \
   --image MAIN_REPOSITORY@sha256:RELEASE_DIGEST \
@@ -59,28 +59,36 @@ python3 scripts/release.py --dir /root/dreamtrans init \
 
 首次交接 16002 会短暂中断。后续 Tunnel 始终连接固定代理。主站代理同时接入原数据库网络，提供稳定别名 `dreamtrans`；YuAction 保持原共享网络和 `YUFOLO_URL=http://dreamtrans:8080`，无需添加颜色容器地址或修改其 Compose 文件。容器重建后仍通过原网络连接固定代理。若该别名被其他运行容器占用，控制器拒绝交接，避免旧写入实例与代理产生歧义。
 
-已用早期控制器完成转换的主站，先安装经过校验的新版宿主机 `release.py`，再执行以下命令补齐原网络入口。它仅连接代理网络，不重启主站、YuAction 或数据库，不更改现有路由和生产卷。原先手动为 YuAction 添加的入口网络可以保留，但后续重建不再依赖它。
+已用早期控制器完成转换的主站，先安装经过校验的新版宿主机 `dreamtransctl`，再执行以下命令补齐原网络入口。它仅连接代理网络，不重启主站、YuAction 或数据库，不更改现有路由和生产卷。原先手动为 YuAction 添加的入口网络可以保留，但后续重建不再依赖它。
 
 ```bash
-python3 /root/dreamtrans/release.py --dir /root/dreamtrans sync-entry
+/root/dreamtrans/dreamtransctl --dir /root/dreamtrans sync-entry
 ```
 
 新转换和后续发布会自动验证并补齐该连接；Docker 重启保留网络附件，控制器创建代理时也会重建附件。YuAction 安装器仍需按原顺序读取主站 `.env` 与其自身 `.env`，不要把数据库密码复制到子目录。现有 YuAction 更新器在找不到旧主站 Compose 应用容器时可能打印提示，但会保留已经配置的 `YUFOLO_URL`；入口继续由代理提供。
 
-后台性能排查可运行 `python3 scripts/diagnose-performance.py --dir /root/dreamtrans`。
+后台性能排查可运行 `/root/dreamtrans/dreamtransctl --dir /root/dreamtrans diagnose`。
 它只采集主机和容器资源、固定入口的本机延迟、数据库等待、表统计及现有索引，
 不输出运行中的 SQL 文本、账户内容或配置密钥，也不执行建索引、ANALYZE 或重启。
 本机健康接口延迟不能代表浏览器或后台业务接口耗时；EC2 积分历史仍需从监控中核对。
 
 ## 主站发布与回切
 
+生产运维现在使用静态 Go 程序，安装、发布、Edge 调度定时器、备份辅助与诊断不依赖 Python。首次从旧控制器接管请按 [Go 运维工具交接](go-operations.md) 操作；旧状态格式和锁保持兼容。
+
+`upgrade` 自动拉取 main 已通过 CI 发布的 `latest`，核对来源/提交元数据后固定为 digest，再执行蓝绿发布。它是手动触发的一条命令，不会自动定时更新主站。非 main 分支发布不改变 `latest`。
+
 ```bash
-python3 scripts/release.py --dir /root/dreamtrans status
-python3 scripts/release.py --dir /root/dreamtrans deploy --image MAIN_REPOSITORY@sha256:RELEASE_DIGEST
-python3 scripts/release.py --dir /root/dreamtrans drain
-python3 scripts/release.py --dir /root/dreamtrans resume
-python3 scripts/release.py --dir /root/dreamtrans abort # 仅切流前中止候选
-python3 scripts/release.py --dir /root/dreamtrans rollback
+/root/dreamtrans/dreamtransctl --dir /root/dreamtrans upgrade
+```
+
+```bash
+/root/dreamtrans/dreamtransctl --dir /root/dreamtrans status
+/root/dreamtrans/dreamtransctl --dir /root/dreamtrans deploy --image MAIN_REPOSITORY@sha256:RELEASE_DIGEST
+/root/dreamtrans/dreamtransctl --dir /root/dreamtrans drain
+/root/dreamtrans/dreamtransctl --dir /root/dreamtrans resume
+/root/dreamtrans/dreamtransctl --dir /root/dreamtrans abort # 仅切流前中止候选
+/root/dreamtrans/dreamtransctl --dir /root/dreamtrans rollback
 ```
 
 发布检查不可变镜像、内存余量、兼容性清单、已应用迁移校验和，再启动候选实例。候选默认不接业务和后台任务；通过就绪/功能检查后切代理。进度显示各阶段、内存和排空计数。`--pause` 可停在候选阶段；`abort` 可中止尚未切流的失败候选。候选已崩溃时，Edge 以独占锁和只读查询检查回传队列；非空、损坏或被占用时拒绝复用。排空超时保留旧实例，不强制结束转录。
@@ -98,16 +106,16 @@ Nginx 平滑重载让旧 worker 继续处理已有连接，见 [Nginx 官方控�
 管理员节点页面创建节点，获得 15 分钟注册凭证与安装命令。注册凭证、供应商独立密钥通过隐藏输入或受保护文件传入。命令验证下载脚本 SHA-256，再从不可变镜像提取控制器。Edge 自动安装依赖支持 Ubuntu 24.04/26.04，以兼容 Lightsail 官方 Ubuntu 24 蓝图；主站仍须完成 Ubuntu 26.04 EC2 实机验证。
 
 ```bash
-python3 /opt/dreamtrans-edge/edge-install.py status
-python3 /opt/dreamtrans-edge/edge-install.py logs
-python3 /opt/dreamtrans-edge/edge-install.py diagnose
-python3 /opt/dreamtrans-edge/edge-install.py drain
-python3 /opt/dreamtrans-edge/edge-install.py --image EDGE_REPOSITORY@sha256:RELEASE_DIGEST upgrade
-python3 /opt/dreamtrans-edge/edge-install.py rollback
-python3 /opt/dreamtrans-edge/edge-install.py abort # 仅切流前中止候选
-python3 /opt/dreamtrans-edge/edge-install.py pause-releases
-python3 /opt/dreamtrans-edge/edge-install.py resume-releases
-python3 /opt/dreamtrans-edge/edge-install.py uninstall
+/opt/dreamtrans-edge/dreamtransctl edge status
+/opt/dreamtrans-edge/dreamtransctl edge logs
+/opt/dreamtrans-edge/dreamtransctl edge diagnose
+/opt/dreamtrans-edge/dreamtransctl edge drain
+/opt/dreamtrans-edge/dreamtransctl edge --image EDGE_REPOSITORY@sha256:RELEASE_DIGEST upgrade
+/opt/dreamtrans-edge/dreamtransctl edge rollback
+/opt/dreamtrans-edge/dreamtransctl edge abort # 仅切流前中止候选
+/opt/dreamtrans-edge/dreamtransctl edge pause-releases
+/opt/dreamtrans-edge/dreamtransctl edge resume-releases
+/opt/dreamtrans-edge/dreamtransctl edge uninstall
 ```
 
 非默认目录需加 `--dir`。卸载先停止调度，确认连接和回传队列排空，撤销身份后移除容器；保留配置和审计目录。未知或冲突队列不会自动删除，需先完成对账处置。
@@ -129,8 +137,8 @@ python3 /opt/dreamtrans-edge/edge-install.py uninstall
 已经运行旧 Edge、因被拒绝事件无法排空的节点，可安装同一已校验发行包中的新版生命周期脚本后执行：
 
 ```bash
-sudo python3 /opt/dreamtrans-edge/edge-install.py reconcile
-sudo python3 /opt/dreamtrans-edge/edge-install.py status
+sudo /opt/dreamtrans-edge/dreamtransctl edge reconcile
+sudo /opt/dreamtrans-edge/dreamtransctl edge status
 ```
 
 命令先持久化关闭调度和新连接；存在活跃连接、HTTP 请求或任务时拒绝继续，不按固定时间强杀转录。仅在工作计数为零后关闭旧版空闲进程，独占其 `owner.lock`，校验 SQLite 并创建权限为 0600 的一致性备份。每条记录必须收到匹配的主站归档确认才删除。进程重启策略和需恢复的容器在操作前写入发布状态；中断后再次执行 `reconcile` 可继续，已确认记录不会重复入账。自动发布在待恢复期间暂停。完成后恢复原来运行的实例，节点保持排空，管理员检查后重新启用调度。不要手动删除 `outbox.db`；`reconciliation-audit` 备份按含转录数据的敏感备份管理，确认主站恢复副本可用后再按保留策略安全删除。

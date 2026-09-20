@@ -2,6 +2,7 @@
 """Exercise full snapshots against disposable PostgreSQL containers and volumes."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -10,7 +11,7 @@ import tempfile
 import time
 import uuid
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent/'legacy'))
 import release
 
 
@@ -51,7 +52,7 @@ def main():
             controller = release.Controller(root)
             current = release.inspect(database)
             controller.state = {
-                'database_id': current['Id'], 'database_volume': volumes[0],
+                'format': 1, 'database_id': current['Id'], 'database_volume': volumes[0],
                 'database_image': current['Image'], 'database_network': network,
                 'application_volume': volumes[1], 'active': 'blue',
                 'colors': {'blue': {'image': application_image}},
@@ -72,7 +73,7 @@ def main():
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(value)
             output = root/'backup.tar'
-            controller.snapshot(output)
+            subprocess.run([os.environ['DREAMTRANS_CTL'], '--dir', str(root), 'snapshot', '--output', str(output)], check=True)
             assert output.stat().st_mode & 0o777 == 0o600
             with tarfile.open(output) as archive:
                 manifest = json.load(archive.extractfile('manifest.json'))

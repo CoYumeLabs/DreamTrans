@@ -199,6 +199,12 @@ jobs:
         run: go test -v -race -tags=event_worker ./cmd/event-worker
         working-directory: ./backend
 
+      - name: Build standalone Go operations CLI
+        run: |
+          cd backend
+          go build -o "${RUNNER_TEMP}/dreamtransctl" ./cmd/dreamtransctl
+          echo "DREAMTRANS_CTL=${RUNNER_TEMP}/dreamtransctl" >> "$GITHUB_ENV"
+
       - name: Verify installer fresh lifecycle
         run: scripts/tests/install_fresh_lifecycle_test.sh
 
@@ -208,10 +214,15 @@ jobs:
       - name: Backup script checks (mocked docker)
         run: bash scripts/tests/backup_test.sh
 
+      - name: Verify Go operations bootstrap
+        run: bash scripts/tests/go_ops_bootstrap_test.sh
+
       - name: Verify blue-green controller failure recovery
         run: |
-          python3 -m py_compile scripts/release.py scripts/edge-install.py scripts/diagnose-performance.py
+          python3 -m py_compile scripts/tests/legacy/*.py
           bash -n scripts/edge-install.sh
+          bash -n scripts/install-ops.sh
+          python3 -m py_compile scripts/tests/go_ops_runtime_test.py
           python3 scripts/tests/release_controller_test.py
           python3 scripts/tests/edge_bootstrap_test.py
 
@@ -313,7 +324,9 @@ jobs:
             test -x /app/server
             test -w /spool
             test -r /usr/share/dreamtrans/release.json
-            test -r /usr/share/dreamtrans/edge-install.py
+            test -x /usr/share/dreamtrans/dreamtransctl
+            ! command -v python3
+            test ! -e /usr/share/dreamtrans/edge-install.py
             test ! -e /app/data/rag.db
             ! command -v psql
             ! command -v docker
@@ -350,6 +363,10 @@ jobs:
             test "$(id -u)" -eq 10001
             test -x /app/server
             test -f /app/public/index.html
+            test -x /usr/share/dreamtrans/dreamtransctl
+            ! command -v python3
+            test ! -e /usr/share/dreamtrans/release.py
+            test ! -e /usr/share/dreamtrans/edge-install.py
             command -v pdftotext
             command -v pdfinfo
             command -v pdftoppm
@@ -427,6 +444,16 @@ jobs:
             -test.timeout=5m \
             -test.run '^TestLinuxKnowledgeExtractionFixtures$'
 
+      - name: Extract standalone Go operations CLI from the verified image
+        run: |
+          artifact="${RUNNER_TEMP}/dreamtransctl"
+          container="$(docker create "dreamtrans-ci:${GITHUB_SHA}")"
+          docker cp "$container:/usr/share/dreamtrans/dreamtransctl" "$artifact"
+          docker rm -v "$container"
+          chmod 0700 "$artifact"
+          "$artifact" help
+          echo "DREAMTRANS_CTL=$artifact" >> "$GITHUB_ENV"
+
       - name: Verify legacy appdata permission migration
         run: |
           scripts/tests/install_appdata_permissions_test.sh \
@@ -436,6 +463,9 @@ jobs:
         run: |
           scripts/tests/install_restored_update_test.sh \
             "dreamtrans-ci:${GITHUB_SHA}"
+
+      - name: Verify Go lifecycle on existing production-shaped volumes
+        run: sudo env DREAMTRANS_CTL="$DREAMTRANS_CTL" python3 scripts/tests/go_ops_runtime_test.py "dreamtrans-ci:${GITHUB_SHA}"
 
       - name: Verify full backup restoration with production Docker tooling
         run: python3 scripts/tests/backup_snapshot_runtime_test.py "dreamtrans-ci:${GITHUB_SHA}"
