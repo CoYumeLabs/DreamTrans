@@ -3,6 +3,7 @@
 The application never receives Docker socket access; release control runs locally.
 """
 import argparse
+from contextlib import closing
 import fcntl
 import getpass
 import hashlib
@@ -217,7 +218,7 @@ class EdgeController(Controller):
             database=spool/'outbox.db'
             if not database.is_file():
                 raise ReleaseError('retained journal missing; reconciliation refused')
-            with sqlite3.connect(database.resolve().as_uri()+'?mode=rw',uri=True) as connection:
+            with closing(sqlite3.connect(database.resolve().as_uri()+'?mode=rw',uri=True)) as connection:
                 connection.execute('PRAGMA synchronous=FULL')
                 if connection.execute('PRAGMA integrity_check').fetchone()[0]!='ok':
                     raise ReleaseError('retained journal failed integrity check')
@@ -226,7 +227,7 @@ class EdgeController(Controller):
                 import tempfile
                 fd,backup_path=tempfile.mkstemp(prefix=color+'-',suffix='.db',dir=audit)
                 os.close(fd)
-                with sqlite3.connect(backup_path) as backup:connection.backup(backup)
+                with closing(sqlite3.connect(backup_path)) as backup:connection.backup(backup)
                 digest=hashlib.sha256(Path(backup_path).read_bytes()).hexdigest()
                 progress('对账',f'{color} 审计备份 SHA256={digest}')
                 count=0

@@ -28,10 +28,12 @@ class EdgeBootstrapTest(unittest.TestCase):
             spool=c.path/'blue'/'spool';spool.mkdir(parents=True)
             payload='{"session_id":"session","generation":1,"sequence":2,"event_id":"event","kind":"end"}'
             with sqlite3.connect(spool/'outbox.db') as db:
+                db.execute('PRAGMA journal_mode=WAL')
                 db.execute('CREATE TABLE events(session_id TEXT,generation INTEGER,sequence INTEGER,payload TEXT,blocked INTEGER)')
                 db.execute('CREATE TABLE counters(session_id TEXT,generation INTEGER)')
                 db.execute('INSERT INTO events VALUES(?,?,?,?,1)',('session',1,2,payload))
                 db.execute("INSERT INTO counters VALUES('session',1)")
+            db.close()
             ack={'session_id':'session','generation':1,'sequence':2,'event_id':'event','archived':True,'disposition':'fenced','payload_hash':edge_install.hashlib.sha256(payload.encode()).hexdigest()}
             with (spool/'owner.lock').open('a') as owner:
                 fcntl.flock(owner,fcntl.LOCK_EX|fcntl.LOCK_NB)
@@ -41,7 +43,9 @@ class EdgeBootstrapTest(unittest.TestCase):
                 with patch.object(edge_install,'call',return_value=ack|change):
                     with self.assertRaisesRegex(edge_install.ReleaseError,'mismatch'):
                         c.reconcile_spool('blue',{})
+                self.assertFalse((spool/'outbox.db-wal').exists(), 'writer survived release of owner.lock')
                 with sqlite3.connect(spool/'outbox.db') as db:self.assertEqual(db.execute('SELECT count(*) FROM events').fetchone()[0],1)
+                db.close()
             with patch.object(edge_install,'call',side_effect=edge_install.ReleaseError('offline')):
                 with self.assertRaisesRegex(edge_install.ReleaseError,'offline'):c.reconcile_spool('blue',{})
             with patch.object(edge_install,'call',return_value=ack) as server:
