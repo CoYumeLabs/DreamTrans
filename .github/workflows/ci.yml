@@ -217,6 +217,9 @@ jobs:
       - name: Verify Go operations bootstrap
         run: bash scripts/tests/go_ops_bootstrap_test.sh
 
+      - name: Verify background draining with real systemd timers
+        run: sudo env DREAMTRANS_CTL="$DREAMTRANS_CTL" python3 scripts/tests/drain_systemd_test.py
+
       - name: Verify blue-green controller failure recovery
         run: |
           python3 -m py_compile scripts/tests/legacy/*.py

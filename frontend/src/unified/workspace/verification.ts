@@ -1759,6 +1759,36 @@ await verifyAiTranslateTerminalReconnectAndBackoff()
 await verifyAiTranslateLegacyPoisonedConnections()
 await verifyAiTranslateTerminalAccountBlocks()
 
+async function verifyTranslationDeploymentHandoff(): Promise<void> {
+  const sockets: FakeTranslateSocket[] = []
+  const client = new AiTranslateClient({
+    url: 'ws://verify/ws/translate', tokenProvider: async () => 'token', protocolFactory: () => [],
+    socketFactory: () => { const socket = new FakeTranslateSocket(); sockets.push(socket); return socket },
+    onTranslation: () => {}, minChunkChars: 1, reconnectDelaysMs: [0],
+  })
+  const tick = () => new Promise(resolve => setTimeout(resolve, 0))
+  client.startSession({ sessionId: 'same-session' })
+  await tick()
+  const old = sockets[0]
+  old.open()
+  const message = (socket: FakeTranslateSocket, value: unknown) => socket.onmessage?.({ data: JSON.stringify(value) })
+  message(old, { message: 'Info', reason: 'translator initialized', capabilities: { request_ids: true, atomic_transcripts: true } })
+  client.addSegment({ id: 'old', speaker: 'S1', text: 'First sentence.', startTime: 0, endTime: 1 }, 'old')
+  const request = old.messages().find(v => v.type === 'transcript')?.payload as { request_id: string }
+  message(old, { message: 'DeploymentHandoff', version: 1 })
+  client.addSegment({ id: 'new', speaker: 'S1', text: 'Second sentence.', startTime: 1, endTime: 2 }, 'new')
+  assert(old.readyState === 1 && old.messages().filter(v => v.type === 'transcript').length === 1, 'translation handoff must wait for inflight results and queue new work')
+  message(old, { message: 'AddTranslation', results: [{ request_id: request.request_id, content: 'First result.' }] })
+  for (let i = 0; i < 20 && sockets.length < 2; i++) await tick()
+  assert(sockets.length === 2, 'translation connection should move automatically')
+  const fresh = sockets[1]
+  fresh.open()
+  message(fresh, { message: 'Info', reason: 'translator initialized', capabilities: { request_ids: true, atomic_transcripts: true } })
+  assert(fresh.messages().filter(v => v.type === 'transcript').length === 1, 'only queued work should be submitted on replacement')
+  client.destroy()
+}
+await verifyTranslationDeploymentHandoff()
+
 console.log(JSON.stringify({
   segments: SEGMENT_COUNT,
   appendElapsedMs: Math.round(appendElapsedMs),

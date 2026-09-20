@@ -235,6 +235,10 @@ func (s *Server) accept(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ended := make(chan struct{})
+	if st.grant.Protocol >= 2 {
+		stopHandoff := deployment.Default.NotifyHandoff(st.send)
+		defer stopHandoff()
+	}
 	go func() { defer close(ended); s.readProvider(st) }()
 	controlDone := make(chan struct{})
 	go func() { defer close(controlDone); s.controlStream(ctx, st) }()

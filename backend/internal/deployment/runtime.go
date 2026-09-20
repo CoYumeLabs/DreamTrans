@@ -25,6 +25,7 @@ type Runtime struct {
 	path                     string
 	requests, sockets, tasks int
 	pending                  func() int
+	handoffs                 map[chan struct{}]struct{}
 }
 
 // Default is disabled outside explicitly configured blue/green instances.
@@ -32,13 +33,15 @@ var Default = &Runtime{}
 
 // Snapshot is the local deployment control protocol, versioned independently of HTTP APIs.
 type Snapshot struct {
-	Protocol   int    `json:"protocol"`
-	Mode       string `json:"mode"`
-	Requests   int    `json:"requests"`
-	WebSockets int    `json:"websockets"`
-	Tasks      int    `json:"tasks"`
-	Drained    bool   `json:"drained"`
-	Pending    int    `json:"pending"`
+	Protocol         int    `json:"protocol"`
+	Mode             string `json:"mode"`
+	Requests         int    `json:"requests"`
+	WebSockets       int    `json:"websockets"`
+	Tasks            int    `json:"tasks"`
+	Drained          bool   `json:"drained"`
+	Pending          int    `json:"pending"`
+	HandoffSupported bool   `json:"handoff_supported"`
+	HandoffStreams   int    `json:"handoff_streams"`
 }
 
 // Configure fails closed: a restarted candidate cannot start production workers.
@@ -75,7 +78,7 @@ func (r *Runtime) Status() Snapshot {
 	if r.pending != nil {
 		pending = r.pending()
 	}
-	return Snapshot{Pending: pending, Protocol: 1, Mode: r.mode, Requests: r.requests, WebSockets: r.sockets, Tasks: r.tasks,
+	return Snapshot{HandoffSupported: true, HandoffStreams: len(r.handoffs), Pending: pending, Protocol: 1, Mode: r.mode, Requests: r.requests, WebSockets: r.sockets, Tasks: r.tasks,
 		Drained: r.mode == "draining" && r.requests == 0 && r.sockets == 0 && r.tasks == 0 && pending == 0}
 }
 
@@ -177,7 +180,14 @@ func (r *Runtime) ServeControl() (func(), error) {
 	}
 	server := &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.Method == http.MethodPost {
-			if err := r.SetMode(strings.TrimPrefix(req.URL.Path, "/")); err != nil {
+			action := strings.TrimPrefix(req.URL.Path, "/")
+			var err error
+			if action == "handoff" {
+				err = r.RequestHandoff()
+			} else {
+				err = r.SetMode(action)
+			}
+			if err != nil {
 				http.Error(w, err.Error(), 400)
 				return
 			}
@@ -221,3 +231,55 @@ func Control(action string, output io.Writer) error {
 
 // SetPending includes durable, unacknowledged events in drain completion.
 func (r *Runtime) SetPending(count func() int) { r.mu.Lock(); defer r.mu.Unlock(); r.pending = count }
+
+// RequestHandoff offers a cooperative reconnect. It never closes a connection:
+// clients without this protocol continue normally until they finish.
+func (r *Runtime) RequestHandoff() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.mode != "draining" {
+		return errors.New("handoff requires draining admission")
+	}
+	for ch := range r.handoffs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+	return nil
+}
+
+// NotifyHandoff serializes offers outside the runtime lock. The returned cleanup
+// waits for the writer, so a handler cannot leave a goroutine using a closed peer.
+func (r *Runtime) NotifyHandoff(send func(any) error) func() {
+	ch, done, finished := make(chan struct{}, 1), make(chan struct{}), make(chan struct{})
+	r.mu.Lock()
+	if r.handoffs == nil {
+		r.handoffs = make(map[chan struct{}]struct{})
+	}
+	r.handoffs[ch] = struct{}{}
+	r.mu.Unlock()
+	go func() {
+		defer close(finished)
+		for {
+			select {
+			case <-done:
+				return
+			case <-ch:
+				if r.Status().Mode == "draining" {
+					_ = send(map[string]any{"message": "DeploymentHandoff", "version": 1})
+				}
+			}
+		}
+	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			r.mu.Lock()
+			delete(r.handoffs, ch)
+			r.mu.Unlock()
+			close(done)
+			<-finished
+		})
+	}
+}

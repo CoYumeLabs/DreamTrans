@@ -16,6 +16,7 @@ import (
 
 	internalAuth "github.com/dreamtrans/backend/internal/auth"
 	"github.com/dreamtrans/backend/internal/billing"
+	"github.com/dreamtrans/backend/internal/deployment"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -638,6 +639,8 @@ func (h *SpeechmaticsProxyHandler) HandleProxy(w http.ResponseWriter, r *http.Re
 	// Create context for managing goroutines
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+	stopHandoff := deployment.Default.NotifyHandoff(safeClientConn.WriteJSON)
+	defer stopHandoff()
 
 	// From here on a session-management or admin request can cut this stream:
 	// the client learns why, then the proxy context collapses.

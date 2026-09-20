@@ -145,7 +145,12 @@ def main():
             assert entry in inspect(prefix + '-green')['NetworkSettings']['Networks']
             sql("INSERT INTO ops_marker VALUES('after-upgrade')")
             cli('rollback')
-            cli('drain', '--drain-timeout', '0')
+            # The short-lived background invocation also works after controller
+            # restart, without a terminal owning the previous release.
+            (root / '.bluegreen/drain-policy.json').write_text(json.dumps({
+                'enabled': True, 'handoff_after_seconds': 600,
+            }))
+            cli('drain-tick')
             assert state()['active'] == 'blue' and state()['phase'] == 'ready'
             assert sql('SELECT count(*) FROM ops_marker') == '2'
             assert run('docker', 'exec', prefix + '-blue', 'cat', '/app/data/marker') == 'retained'
