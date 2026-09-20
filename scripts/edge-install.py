@@ -209,6 +209,85 @@ class EdgeController(Controller):
         self.state['phase']='uninstalled';self.persist()
         progress('✓','节点身份已吊销，容器已卸载；配置与审计目录保留，未直接删除队列')
 
+    def reconcile_spool(self, color, config):
+        spool=self.path/color/'spool'
+        with (spool/'owner.lock').open('a') as owner:
+            try:fcntl.flock(owner,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            except BlockingIOError:raise ReleaseError('spool still has a writer; reconciliation refused') from None
+            database=spool/'outbox.db'
+            if not database.is_file():
+                raise ReleaseError('retained journal missing; reconciliation refused')
+            with sqlite3.connect(database.resolve().as_uri()+'?mode=rw',uri=True) as connection:
+                connection.execute('PRAGMA synchronous=FULL')
+                if connection.execute('PRAGMA integrity_check').fetchone()[0]!='ok':
+                    raise ReleaseError('retained journal failed integrity check')
+                audit=self.path/'reconciliation-audit'
+                audit.mkdir(mode=0o700,exist_ok=True)
+                import tempfile
+                fd,backup_path=tempfile.mkstemp(prefix=color+'-',suffix='.db',dir=audit)
+                os.close(fd)
+                with sqlite3.connect(backup_path) as backup:connection.backup(backup)
+                digest=hashlib.sha256(Path(backup_path).read_bytes()).hexdigest()
+                progress('对账',f'{color} 审计备份 SHA256={digest}')
+                count=0
+                # Preserve the original Go-encoded bytes; Python re-encoding can
+                # change floats, escaping or omitted fields and invalidate a receipt.
+                rows=connection.execute('SELECT session_id,generation,sequence,payload FROM events WHERE blocked=1 ORDER BY session_id,generation,sequence').fetchall()
+                for session,generation,sequence,payload in rows:
+                    event=json.loads(payload)
+                    ack=call(config,'archive',event)
+                    expected={'session_id':session,'generation':generation,'sequence':sequence,'event_id':event['event_id'],'payload_hash':hashlib.sha256(payload.encode()).hexdigest()}
+                    if ack.get('archived') is not True or ack.get('disposition') not in ('fenced','closed','already_committed') or any(ack.get(k)!=v for k,v in expected.items()):
+                        raise ReleaseError('archive receipt mismatch; unacknowledged records retained')
+                    with connection:
+                        deleted=connection.execute('DELETE FROM events WHERE session_id=? AND generation=? AND sequence=? AND payload=? AND blocked=1',(session,generation,sequence,payload)).rowcount
+                        if deleted!=1:raise ReleaseError('journal changed during reconciliation')
+                        connection.execute('DELETE FROM counters WHERE session_id=? AND generation=? AND NOT EXISTS(SELECT 1 FROM events WHERE session_id=? AND generation=?)',(session,generation,session,generation))
+                    count+=1
+                progress('对账',f'{color}: 主站已确认归档 {count} 条，剩余 {connection.execute("SELECT count(*) FROM events").fetchone()[0]} 条')
+
+    def reconcile(self):
+        if self.state.get('phase') not in ('ready','draining'):
+            raise ReleaseError('reconciliation requires a stable route: ready or draining phase')
+        config=read(self.root/'config'/'edge.json')
+        call(config,'self-mode',{'mode':'draining'})
+        running=[]
+        restore=dict(self.state.get('reconciliation_restore',{}))
+        for color in self.state['colors']:
+            info=inspect(self.name(color))
+            if info['State']['Running']:
+                status=self.control(color,'draining')
+                if status['requests'] or status['websockets'] or status['tasks']:
+                    raise ReleaseError('live sessions/tasks remain; retry after they finish, nothing was terminated')
+                policy=info['HostConfig']['RestartPolicy']
+                restart=policy['Name'] or 'no'
+                if restart=='on-failure' and policy.get('MaximumRetryCount'):
+                    restart+=':'+str(policy['MaximumRetryCount'])
+                running.append((color,restart))
+                restore.setdefault(color,restart)
+        self.state['reconciliation_restore']=restore
+        self.persist()
+        try:
+            for color,restart in running:
+                # Legacy processes wait forever for quarantined records on TERM.
+                # Admission is already persistently closed and all work is zero;
+                # close only this idle process to obtain the exclusive spool lock.
+                docker('update','--restart=no',self.name(color))
+                docker('kill','--signal=KILL',self.name(color))
+            for color in self.state['colors']:
+                self.reconcile_spool(color,config)
+        finally:
+            failures=[]
+            for color,restart in restore.items():
+                try:
+                    docker('update','--restart='+restart,self.name(color))
+                    docker('start',self.name(color))
+                except ReleaseError:failures.append(color)
+            if failures:raise ReleaseError('reconciliation retained data; retry reconcile to restore containers: '+','.join(failures))
+            self.state.pop('reconciliation_restore',None)
+            self.persist()
+        progress('✓','归档完成；节点保持排空，在主站重新启用调度前检查 status')
+
     def drain_node(self):
         call(read(self.root/'config'/'edge.json'),'self-mode',{'mode':'draining'})
         for color in self.state['colors']:
@@ -235,7 +314,7 @@ def main():
     parser.add_argument('--observe',type=int,default=60)
     parser.add_argument('--drain-timeout',type=int,default=60)
     parser.add_argument('--pause',action='store_true')
-    parser.add_argument('action',choices=['install','status','logs','diagnose','upgrade','drain','rollback','resume','abort','uninstall','converge','pause-releases','resume-releases'],nargs='?',default='install')
+    parser.add_argument('action',choices=['install','status','logs','diagnose','upgrade','drain','rollback','resume','abort','uninstall','converge','pause-releases','resume-releases','reconcile'],nargs='?',default='install')
     args=parser.parse_args()
     if os.geteuid()!=0:raise ReleaseError('root is required for host lifecycle operations')
     if args.action=='install':
@@ -262,6 +341,7 @@ def main():
         elif args.action=='logs':print(docker('logs','--tail','100',controller.name(controller.state['active'])))
         elif args.action=='upgrade':controller.deploy(args)
         elif args.action=='drain':controller.drain_node()
+        elif args.action=='reconcile':controller.reconcile()
         elif args.action=='resume':controller.resume(args)
         elif args.action=='rollback':controller.rollback()
         elif args.action=='abort':controller.abort()
@@ -269,7 +349,7 @@ def main():
         elif args.action=='pause-releases':controller.state['release_paused']=True;controller.persist();progress('暂停','地区自动发布已暂停，现有服务继续运行')
         elif args.action=='resume-releases':controller.state['release_paused']=False;controller.persist()
         elif args.action=='converge':
-            if controller.state.get('release_paused'):
+            if controller.state.get('release_paused') or controller.state.get('reconciliation_restore'):
                 return
             config=read(controller.root/'config'/'edge.json')
             desired=call(config,'deployment',{})

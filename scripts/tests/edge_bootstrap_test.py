@@ -22,6 +22,63 @@ spec.loader.exec_module(edge_install)
 
 
 class EdgeBootstrapTest(unittest.TestCase):
+    def test_reconciliation_releases_only_exact_main_archive_receipts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            c=edge_install.EdgeController(directory)
+            spool=c.path/'blue'/'spool';spool.mkdir(parents=True)
+            payload='{"session_id":"session","generation":1,"sequence":2,"event_id":"event","kind":"end"}'
+            with sqlite3.connect(spool/'outbox.db') as db:
+                db.execute('CREATE TABLE events(session_id TEXT,generation INTEGER,sequence INTEGER,payload TEXT,blocked INTEGER)')
+                db.execute('CREATE TABLE counters(session_id TEXT,generation INTEGER)')
+                db.execute('INSERT INTO events VALUES(?,?,?,?,1)',('session',1,2,payload))
+                db.execute("INSERT INTO counters VALUES('session',1)")
+            ack={'session_id':'session','generation':1,'sequence':2,'event_id':'event','archived':True,'disposition':'fenced','payload_hash':edge_install.hashlib.sha256(payload.encode()).hexdigest()}
+            with (spool/'owner.lock').open('a') as owner:
+                fcntl.flock(owner,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                with self.assertRaisesRegex(edge_install.ReleaseError,'writer'):
+                    c.reconcile_spool('blue',{})
+            for change in ({'payload_hash':'bad'},{'generation':2},{'archived':False},{'event_id':'wrong'}):
+                with patch.object(edge_install,'call',return_value=ack|change):
+                    with self.assertRaisesRegex(edge_install.ReleaseError,'mismatch'):
+                        c.reconcile_spool('blue',{})
+                with sqlite3.connect(spool/'outbox.db') as db:self.assertEqual(db.execute('SELECT count(*) FROM events').fetchone()[0],1)
+            with patch.object(edge_install,'call',side_effect=edge_install.ReleaseError('offline')):
+                with self.assertRaisesRegex(edge_install.ReleaseError,'offline'):c.reconcile_spool('blue',{})
+            with patch.object(edge_install,'call',return_value=ack) as server:
+                c.reconcile_spool('blue',{});c.reconcile_spool('blue',{})
+                server.assert_called_once()
+            with sqlite3.connect(spool/'outbox.db') as db:
+                self.assertEqual(db.execute('SELECT count(*) FROM events').fetchone()[0],0)
+                self.assertEqual(db.execute('SELECT count(*) FROM counters').fetchone()[0],0)
+            backups=list((c.path/'reconciliation-audit').glob('*.db'))
+            self.assertTrue(backups)
+            self.assertTrue(all(p.stat().st_mode & 0o777==0o600 for p in backups))
+
+    def test_reconcile_never_kills_busy_work_and_restarts_idle_writer_on_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            c=edge_install.EdgeController(directory)
+            c.state={'phase':'ready','prefix':'node','colors':{'blue':{}},'active':'blue'}
+            info={'State':{'Running':True},'HostConfig':{'RestartPolicy':{'Name':'unless-stopped'}}}
+            with patch.object(edge_install,'read',return_value={}),patch.object(edge_install,'call'),patch.object(edge_install,'inspect',return_value=info),patch.object(edge_install,'docker') as engine:
+                with patch.object(c,'control',return_value={'requests':0,'websockets':1,'tasks':0}):
+                    with self.assertRaisesRegex(edge_install.ReleaseError,'live sessions'):c.reconcile()
+                    engine.assert_not_called()
+                c.state['phase']='draining'  # A release waiting on the old queue must be repairable.
+                with patch.object(c,'control',return_value={'requests':0,'websockets':0,'tasks':0}),patch.object(c,'reconcile_spool',side_effect=edge_install.ReleaseError('main unavailable')):
+                    with self.assertRaisesRegex(edge_install.ReleaseError,'main unavailable'):c.reconcile()
+                    self.assertIn(unittest.mock.call('kill','--signal=KILL',c.name('blue')),engine.call_args_list)
+                    self.assertEqual(engine.call_args_list[-1],unittest.mock.call('start',c.name('blue')))
+                    self.assertIn(unittest.mock.call('update','--restart=unless-stopped',c.name('blue')),engine.call_args_list)
+                # Simulate CLI SIGKILL after the container stopped: recover the
+                # persisted restart intent even though Docker now reports stopped.
+                engine.reset_mock()
+                c.state['reconciliation_restore']={'blue':'unless-stopped'}
+                info['State']['Running']=False
+                with patch.object(c,'reconcile_spool'):
+                    c.reconcile()
+                self.assertEqual(engine.call_args_list[-1],unittest.mock.call('start',c.name('blue')))
+                self.assertNotIn('reconciliation_restore',c.state)
+
     def test_stopped_candidate_requires_an_empty_readable_exclusive_journal(self):
         with tempfile.TemporaryDirectory() as directory:
             c=edge_install.EdgeController(directory)

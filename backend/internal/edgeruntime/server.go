@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -41,7 +42,16 @@ type Server struct {
 	successes, failures atomic.Int64
 }
 type audioBoundary struct{ sequence, sampleEnd int64 }
+
+// streamExit contains only bounded classifications, never provider error text,
+// credentials, URLs, or transcript/audio contents.
+type streamExit struct {
+	Reason    string
+	CloseCode int
+	Timeout   bool
+}
 type stream struct {
+	exit                               atomic.Pointer[streamExit]
 	providerPending                    []audioBoundary
 	providerAckSamples                 int64
 	providerProgress                   chan struct{}
@@ -109,6 +119,29 @@ func (st *stream) send(value any) error {
 	_ = st.client.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	return st.client.WriteJSON(value)
 }
+
+// recordExit preserves the initiating failure rather than the socket-close
+// errors caused by canceling the other half of the connection.
+func (st *stream) recordExit(reason string, err error) {
+	detail := &streamExit{Reason: reason}
+	var closeError *websocket.CloseError
+	if errors.As(err, &closeError) {
+		detail.CloseCode = closeError.Code
+	}
+	var networkError net.Error
+	if errors.As(err, &networkError) {
+		detail.Timeout = networkError.Timeout()
+	}
+	st.exit.CompareAndSwap(nil, detail)
+}
+func (s *Server) logExit(st *stream) {
+	st.recordExit("handler_exit", nil)
+	detail := st.exit.Load()
+	st.mu.Lock()
+	id, generation, samples, sequence := st.grant.SessionID, st.grant.Generation, st.samples, st.audioSeq
+	st.mu.Unlock()
+	log.Printf("edge session=%s generation=%d exit=%s close_code=%d timeout=%t samples=%d audio_sequence=%d duration_ms=%d", id, generation, detail.Reason, detail.CloseCode, detail.Timeout, samples, sequence, time.Since(st.started).Milliseconds())
+}
 func (st *stream) stop() {
 	st.once.Do(func() {
 		close(st.done)
@@ -142,9 +175,11 @@ func (s *Server) accept(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st := &stream{client: client, grant: *grant, done: make(chan struct{}), providerProgress: make(chan struct{}, 1), started: time.Now(), audioSeq: grant.DurableAudioSequence, durableSeq: grant.DurableAudioSequence, durableSamples: grant.DurableSamples}
+	defer s.logExit(st)
 	s.mu.Lock()
 	if len(s.connections) >= s.config.Maximum || s.connections[grant.SessionID] != nil {
 		s.mu.Unlock()
+		st.recordExit("edge_capacity_or_duplicate", nil)
 		return
 	}
 	s.connections[grant.SessionID] = st
@@ -155,6 +190,7 @@ func (s *Server) accept(w http.ResponseWriter, r *http.Request) {
 	var confirmed edgeprotocol.Authorization
 	if err := s.main.Call(ctx, "connect", map[string]string{"token_id": grant.ID}, &confirmed); err != nil {
 		_ = st.send(map[string]string{"message": "Error", "reason": "Session authorization unavailable"})
+		st.recordExit("main_connect_failed", err)
 		return
 	}
 	// Verify the main response cryptographically too; a grant cannot grow in a JSON-only response.
@@ -162,7 +198,9 @@ func (s *Server) accept(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	st.mu.Lock()
 	st.grant = *authoritative
+	st.mu.Unlock()
 	start := time.Now()
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
 	provider, response, err := dialer.DialContext(ctx, s.config.ProviderURL, http.Header{"Authorization": []string{"Bearer " + s.config.ProviderKey}})
@@ -171,6 +209,7 @@ func (s *Server) accept(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		s.failures.Add(1)
+		st.recordExit("provider_connect_failed", err)
 		_ = s.event(st, "end")
 		return
 	}
@@ -180,15 +219,18 @@ func (s *Server) accept(w http.ResponseWriter, r *http.Request) {
 	defer st.stop()
 	var startMessage map[string]any
 	if err := client.ReadJSON(&startMessage); err != nil {
+		st.recordExit("client_start_read_failed", err)
 		_ = s.event(st, "end")
 		return
 	}
 	if !validateStart(startMessage, st.grant.SampleRate) {
+		st.recordExit("invalid_start", nil)
 		_ = s.event(st, "end")
 		return
 	}
 	delete(startMessage, "translation_config") // phase one: translations remain on the main AI WebSocket
 	if err := provider.WriteJSON(startMessage); err != nil {
+		st.recordExit("provider_start_write_failed", err)
 		_ = s.event(st, "end")
 		return
 	}
@@ -231,11 +273,13 @@ func (s *Server) readAudio(st *stream) {
 	for {
 		kind, data, err := st.client.ReadMessage()
 		if err != nil {
+			st.recordExit("client_read_failed", err)
 			return
 		}
 		if kind == websocket.TextMessage {
 			var msg map[string]any
 			if json.Unmarshal(data, &msg) != nil {
+				st.recordExit("invalid_client_json", nil)
 				return
 			}
 			if msg["message"] == "EndOfStream" {
@@ -247,16 +291,19 @@ func (s *Server) readAudio(st *stream) {
 				select {
 				case <-st.done:
 				case <-time.After(15 * time.Second):
+					st.recordExit("provider_finalization_timeout", nil)
 				}
 				return
 			}
 			continue
 		}
 		if kind != websocket.BinaryMessage || len(data) < 12 || len(data) > edgeprotocol.MaxAudioBytes+8 || (len(data)-8)%4 != 0 {
+			st.recordExit("invalid_audio_frame", nil)
 			return
 		}
 		wireSequence := binary.BigEndian.Uint64(data[:8])
 		if wireSequence > 1_000_000_000 {
+			st.recordExit("invalid_audio_sequence", nil)
 			return
 		}
 		sequence := int64(wireSequence)
@@ -268,15 +315,24 @@ func (s *Server) readAudio(st *stream) {
 		}
 		st.mu.Unlock()
 		if !s.waitProviderCapacity(st, samples) {
+			st.recordExit("provider_backpressure_or_expiry", nil)
 			return
 		}
 		st.mu.Lock()
 		if len(st.audioBounds) >= 4096 || (st.grant.Protocol >= 2 && st.grant.ResumeSamples+st.providerSamples+samples-st.durableSamples > int64(st.grant.SampleRate)*30) {
 			st.mu.Unlock()
+			st.recordExit("audio_replay_limit", nil)
 			_ = st.send(map[string]string{"message": "Error", "type": "edge_replay_limit", "reason": "Provider finalization exceeded the bounded audio replay window"})
 			return
 		}
 		if sequence != st.audioSeq+1 || time.Now().After(st.grant.ExpiresAt.Add(-2*time.Second)) || st.samples+samples > st.grant.ApprovedSamples {
+			reason := "budget_exhausted"
+			if sequence != st.audioSeq+1 {
+				reason = "audio_sequence_gap"
+			} else if time.Now().After(st.grant.ExpiresAt.Add(-2 * time.Second)) {
+				reason = "lease_expired"
+			}
+			st.recordExit(reason, nil)
 			st.mu.Unlock()
 			_ = st.send(map[string]string{"message": "Error", "type": "edge_authorization_limit", "reason": "Edge: 已批准的额度或连接授权已到期，录音已停止；请恢复连接后继续。"})
 			return
@@ -284,6 +340,7 @@ func (s *Server) readAudio(st *stream) {
 		// Serialize upstream audio writes. No main-site request occurs in this loop.
 		_ = st.provider.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		if err := st.provider.WriteMessage(websocket.BinaryMessage, data[8:]); err != nil {
+			st.recordExit("provider_audio_write_failed", err)
 			st.mu.Unlock()
 			return
 		}
@@ -298,6 +355,7 @@ func (s *Server) readAudio(st *stream) {
 		st.mu.Unlock()
 		// This only acknowledges receipt, never permanent transcript storage.
 		if err := st.send(map[string]any{"message": "EdgeReceived", "sequence": sequence}); err != nil {
+			st.recordExit("client_ack_write_failed", err)
 			return
 		}
 	}
@@ -386,11 +444,16 @@ func (s *Server) readProvider(st *stream) {
 	for {
 		_, raw, err := st.provider.ReadMessage()
 		if err != nil {
+			st.recordExit("provider_read_failed", err)
 			return
 		}
 		var msg map[string]any
 		if json.Unmarshal(raw, &msg) != nil {
+			st.recordExit("invalid_provider_json", nil)
 			return
+		}
+		if msg["message"] == "Error" {
+			st.recordExit("provider_error", nil)
 		}
 		if msg["message"] == "AudioAdded" {
 			sequence, _ := msg["seq_no"].(float64)
@@ -407,6 +470,7 @@ func (s *Server) readProvider(st *stream) {
 		if msg["message"] == "AddTranscript" {
 			metadata, ok := msg["metadata"].(map[string]any)
 			if !ok {
+				st.recordExit("invalid_provider_transcript", nil)
 				return
 			}
 			text, _ := metadata["transcript"].(string)
@@ -440,6 +504,7 @@ func (s *Server) readProvider(st *stream) {
 				kind, transcript = "checkpoint", nil
 			}
 			if err := s.checkpointEvent(st, kind, transcript, processedSamples); err != nil {
+				st.recordExit("outbox_checkpoint_failed", err)
 				return
 			}
 			msg["edge_segment_id"] = "edge:" + strconv.FormatInt(generation, 10) + ":" + id
@@ -450,13 +515,16 @@ func (s *Server) readProvider(st *stream) {
 			processed := st.providerSamples
 			st.mu.Unlock()
 			if err := s.checkpointEvent(st, "checkpoint", nil, processed); err != nil {
+				st.recordExit("outbox_checkpoint_failed", err)
 				return
 			}
 		}
 		if err := st.send(msg); err != nil {
+			st.recordExit("client_transcript_write_failed", err)
 			return
 		}
 		if msg["message"] == "EndOfTranscript" {
+			st.recordExit("completed", nil)
 			return
 		}
 	}
@@ -472,6 +540,7 @@ func (s *Server) controlStream(ctx context.Context, st *stream) {
 			return
 		case <-ticker.C:
 			if err := s.event(st, "usage"); err != nil {
+				st.recordExit("outbox_usage_failed", err)
 				st.stop()
 				return
 			}
@@ -480,6 +549,7 @@ func (s *Server) controlStream(ctx context.Context, st *stream) {
 			id, gen, origin := st.grant.SessionID, st.grant.Generation, st.grant.Origin
 			st.mu.Unlock()
 			if expired {
+				st.recordExit("lease_expired", nil)
 				st.stop()
 				return
 			}
@@ -531,6 +601,37 @@ func (s *Server) Run(ctx context.Context) {
 			}
 			if errors.Is(err, StatusError(409)) {
 				_ = s.queue.Block(event)
+			}
+		}
+		// Archive at most one quarantined event between normal delivery batches.
+		// An old main (404), unknown historic ownership, or a network partition keeps
+		// the record intact and backs off that generation without blocking others.
+		if err == nil && event == nil {
+			retired, archiveErr := s.queue.NextArchive()
+			if archiveErr == nil && retired != nil {
+				var ack edgeprotocol.ArchiveAck
+				archiveErr = s.main.Call(ctx, "archive", retired, &ack)
+				if archiveErr == nil {
+					archiveErr = s.queue.Archive(retired, &ack)
+				}
+				if archiveErr == nil {
+					s.mu.Lock()
+					writer := s.connections[retired.SessionID]
+					active := false
+					if writer != nil {
+						writer.mu.Lock()
+						active = writer.grant.Generation == retired.Generation
+						writer.mu.Unlock()
+					}
+					s.mu.Unlock()
+					if !active {
+						_ = s.queue.retireCounter(retired)
+					}
+					log.Printf("edge session=%s generation=%d archived_event=%s disposition=%s", retired.SessionID, retired.Generation, retired.EventID, ack.Disposition)
+					delay = time.Second
+					continue
+				}
+				_ = s.queue.RetryArchive(retired)
 			}
 		}
 		timer := time.NewTimer(delay)

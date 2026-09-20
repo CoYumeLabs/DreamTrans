@@ -89,6 +89,20 @@ func (s *Service) AdminHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/admin/edges")
+	if strings.HasSuffix(path, "/archive-owner") && r.Method == http.MethodPost {
+		var req struct {
+			SessionID  string `json:"session_id"`
+			Generation int64  `json:"generation"`
+			Reason     string `json:"reason"`
+		}
+		if !decode(w, r, &req) {
+			return
+		}
+		node := strings.TrimSuffix(strings.TrimPrefix(path, "/"), "/archive-owner")
+		err := s.AttestArchiveOwner(r.Context(), claims.UserID, node, req.SessionID, req.Generation, req.Reason)
+		respond(w, map[string]bool{"ok": err == nil}, err)
+		return
+	}
 	if strings.HasSuffix(path, "/tunnel") && r.Method == http.MethodPost {
 		var req struct {
 			Automatic bool   `json:"automatic"`
@@ -214,6 +228,13 @@ func (s *Service) NodeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		v, e := s.Renew(r.Context(), node, req.SessionID, req.Generation)
 		respond(w, v, e)
+	case "archive":
+		var event edgeprotocol.Event
+		if !decode(w, r, &event) {
+			return
+		}
+		value, err := s.Archive(r.Context(), node, &event)
+		respond(w, value, err)
 	case "events":
 		var event edgeprotocol.Event
 		if !decode(w, r, &event) {

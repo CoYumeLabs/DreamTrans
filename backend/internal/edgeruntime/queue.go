@@ -51,6 +51,16 @@ func OpenQueue(directory string, limit int64) (*Queue, error) {
 			return nil, err
 		}
 	}
+	// An additive Edge-local migration; older runtimes ignore this column.
+	var archiveColumn int
+	if err = db.QueryRow(`SELECT count(*) FROM pragma_table_info('events') WHERE name='archive_after'`).Scan(&archiveColumn); err == nil && archiveColumn == 0 {
+		_, err = db.Exec(`ALTER TABLE events ADD COLUMN archive_after INTEGER NOT NULL DEFAULT 0`)
+	}
+	if err != nil {
+		_ = db.Close()
+		_ = lock.Close()
+		return nil, err
+	}
 	return &Queue{db: db, lock: lock, limit: limit}, nil
 }
 func (q *Queue) Close() error { err := q.db.Close(); return errors.Join(err, q.lock.Close()) }
@@ -104,8 +114,26 @@ func (q *Queue) Next() (*edgeprotocol.Event, error) {
 	return &e, err
 }
 func (q *Queue) Ack(e *edgeprotocol.Event, sequence int64) error {
-	_, err := q.db.Exec(`DELETE FROM events WHERE session_id=? AND generation=? AND sequence<=?`, e.SessionID, e.Generation, sequence)
-	return err
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	tx, err := q.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var terminal bool
+	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM events WHERE session_id=? AND generation=? AND sequence<=? AND json_extract(payload,'$.kind')='end')`, e.SessionID, e.Generation, sequence).Scan(&terminal); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`DELETE FROM events WHERE session_id=? AND generation=? AND sequence<=?`, e.SessionID, e.Generation, sequence); err != nil {
+		return err
+	}
+	if terminal {
+		if _, err = tx.Exec(`DELETE FROM counters WHERE session_id=? AND generation=? AND NOT EXISTS(SELECT 1 FROM events WHERE session_id=? AND generation=?)`, e.SessionID, e.Generation, e.SessionID, e.Generation); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 func (q *Queue) Block(e *edgeprotocol.Event) error {
 	_, err := q.db.Exec(`UPDATE events SET blocked=1 WHERE session_id=? AND generation=?`, e.SessionID, e.Generation)
