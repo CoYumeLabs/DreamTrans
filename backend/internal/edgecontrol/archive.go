@@ -11,8 +11,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// Archive retains fenced data for reconciliation without resurrecting writes or
-// charging the user again. Ownership must be proved by main-site history.
+// Archive retains fenced data without resurrecting transcription writes. A late
+// terminal event can settle an unresolved prepayment once; an already settled
+// generation is never repriced. Ownership comes from main-site history.
 func (s *Service) Archive(ctx context.Context, node string, event *edgeprotocol.Event) (edgeprotocol.ArchiveAck, error) {
 	var ack edgeprotocol.ArchiveAck
 	if err := validateEvent(event); err != nil {
@@ -42,14 +43,7 @@ func (s *Service) Archive(ctx context.Context, node string, event *edgeprotocol.
 	if err := tx.QueryRowContext(ctx, `SELECT node_id,approved_samples,last_event_seq FROM edge_generation_owners WHERE session_id=$1 AND generation=$2`, event.SessionID, event.Generation).Scan(&owner, &approved, &last); err != nil || owner != node {
 		return ack, ErrUnauthorized
 	}
-	if event.Samples > approved || event.Sequence > last+1024 {
-		return ack, ErrConflict
-	}
-	var settled bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM edge_reconciliations WHERE session_id=$1 AND generation=$2) AND NOT EXISTS(SELECT 1 FROM edge_budgets WHERE session_id=$1 AND generation=$2 AND NOT settled)`, event.SessionID, event.Generation).Scan(&settled); err != nil {
-		return ack, err
-	}
-	if !settled {
+	if event.Samples > approved || event.ProviderSamples > approved || event.Sequence > last+1024 {
 		return ack, ErrConflict
 	}
 	hash := edgeprotocol.Hash(string(payload))
@@ -78,10 +72,36 @@ func (s *Service) Archive(ctx context.Context, node string, event *edgeprotocol.
 	if err != nil || storedID != event.EventID || storedNode != node || existing != hash {
 		return ack, ErrConflict
 	}
+	if event.Kind == "end" {
+		if err := s.settleArchivedEnd(ctx, tx, &current, event, approved, last); err != nil {
+			return ack, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return ack, err
 	}
 	return edgeprotocol.ArchiveAck{SessionID: event.SessionID, Generation: event.Generation, Sequence: event.Sequence, EventID: event.EventID, PayloadHash: hash, Disposition: disposition, Archived: true}, nil
+}
+
+func (s *Service) settleArchivedEnd(ctx context.Context, tx *sql.Tx, current *session, event *edgeprotocol.Event, approved, last int64) error {
+	var reconciled, pending bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM edge_reconciliations WHERE session_id=$1 AND generation=$2),EXISTS(SELECT 1 FROM edge_budgets WHERE session_id=$1 AND generation=$2 AND NOT settled)`, event.SessionID, event.Generation).Scan(&reconciled, &pending); err != nil {
+		return err
+	}
+	if reconciled || !pending {
+		return nil // Legacy completed settlements retain their original charge.
+	}
+	if err := validateTerminalUsage(ctx, tx, current, event, last); err != nil {
+		return err
+	}
+	// A session cannot change user, tenant or sample rate across generations
+	// (Authorize enforces the original rate); deleted lifecycles cannot restart.
+	// SettleUsageTx checks each old reservation's user/tenant and retained price
+	// snapshot, so a successor's route or present-day catalog cannot reprice it.
+	historic := *current
+	historic.Generation, historic.Approved = event.Generation, approved
+	historic.Consumed, historic.Provider = event.Samples, event.ProviderSamples
+	return s.settleGeneration(ctx, tx, &historic, "late_terminal_sent_audio")
 }
 
 // AttestArchiveOwner is for pre-migration generations whose ownership was never
@@ -111,6 +131,9 @@ func (s *Service) AttestArchiveOwner(ctx context.Context, actor, node, id string
 	}
 	var approved int64
 	if err := tx.QueryRowContext(ctx, `SELECT approved_samples FROM edge_reconciliations WHERE session_id=$1 AND generation=$2`, id, generation).Scan(&approved); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrConflict // Unresolved holds are not an attestation source.
+		}
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO edge_generation_owners(session_id,generation,node_id,approved_samples,last_event_seq,provenance) SELECT $1,$2,$3,$4,coalesce(max(sequence),0),'operator' FROM edge_events WHERE session_id=$1 AND generation=$2 ON CONFLICT DO NOTHING`, id, generation, node, approved)

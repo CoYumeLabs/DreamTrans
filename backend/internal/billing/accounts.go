@@ -186,8 +186,9 @@ func (s *Service) GetAccountSummary(ctx context.Context, userID string) (*Accoun
 		optIn := acct.TrainingOptIn.Bool
 		summary.TrainingOptIn = &optIn
 	}
-	summary.TrainingProgramAvailable = s.TrainingProgramEnabled(ctx)
-	summary.TrainingDiscountPercent = s.TrainingDiscountPercent(ctx)
+	training := s.TrainingSettings(ctx)
+	summary.TrainingProgramAvailable = training.Enabled
+	summary.TrainingDiscountPercent = training.DiscountPercent
 	if route, routeErr := s.routeDecisionTx(ctx, s.db, acct, now); routeErr == nil {
 		summary.Route = route
 	} else {

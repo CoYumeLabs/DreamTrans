@@ -286,6 +286,32 @@ type SessionCostSummary struct {
 	TotalUSD             float64 `json:"total_usd"`
 }
 
+// Aggregate ordinary charges once. Refunds drive indexed prefix lookups so a
+// session with many usage rows does not rescan every refund for every row.
+// The lateral aggregate keeps overlapping legacy prefixes additive without
+// multiplying charge or quantity totals. ^@ treats %, _ and backslashes literally.
+const sessionCostSummariesQuery = `
+ WITH totals AS (
+  SELECT session_id,action,SUM(charge_usd) charge,SUM(quantity) quantity
+  FROM usage_logs WHERE user_id=$1 AND session_id=ANY($2::uuid[])
+  GROUP BY session_id,action
+ ), discounts AS (
+  SELECT matched.session_id,SUM(matched.amount) amount
+  FROM route_discount_refunds d CROSS JOIN LATERAL (
+   SELECT l.session_id,SUM(d.amount_usd*(l.charge_usd-l.gift_usd)/NULLIF(d.paid_usd,0)) amount
+   FROM usage_logs l
+   WHERE l.user_id=d.user_id AND l.session_id=ANY($2::uuid[])
+    AND l.funding_route='gift' AND l.action='transcription'
+    AND l.idempotency_key ^@ d.key
+   GROUP BY l.session_id
+  ) matched WHERE d.user_id=$1 GROUP BY matched.session_id
+ )
+ SELECT t.session_id,t.action,
+  t.charge-CASE WHEN t.action='transcription' THEN COALESCE(d.amount,0) ELSE 0 END,
+  t.quantity
+ FROM totals t LEFT JOIN discounts d ON d.session_id=t.session_id
+`
+
 // GetSessionCostSummaries sums usage charges per session for sessions owned
 // by userID. Sessions without any attributed usage are simply absent from the
 // result. Callers must pass valid UUID strings.
@@ -297,12 +323,7 @@ func (s *Service) GetSessionCostSummaries(
 	if len(sessionIDs) == 0 {
 		return []SessionCostSummary{}, nil
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT session_id, action, SUM(charge_usd-COALESCE((SELECT SUM(d.amount_usd*(l.charge_usd-l.gift_usd)/NULLIF(d.paid_usd,0)) FROM route_discount_refunds d WHERE d.user_id=l.user_id AND l.funding_route='gift' AND l.action='transcription' AND left(l.idempotency_key,length(d.key))=d.key),0)), SUM(quantity)
-  FROM usage_logs l
-		WHERE user_id = $1 AND session_id = ANY($2::uuid[])
-		GROUP BY session_id, action
-	`, userID, pq.Array(sessionIDs))
+	rows, err := s.db.QueryContext(ctx, sessionCostSummariesQuery, userID, pq.Array(sessionIDs))
 	if err != nil {
 		return nil, err
 	}

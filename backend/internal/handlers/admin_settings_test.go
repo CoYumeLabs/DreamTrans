@@ -4,13 +4,17 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dreamtrans/backend/internal/billing"
-	_ "modernc.org/sqlite"
+	"github.com/lib/pq"
 )
 
 func TestHandleGetSystemSettingsReturnsTypedSafeDefaults(t *testing.T) {
@@ -37,13 +41,36 @@ func TestHandleGetSystemSettingsReturnsTypedSafeDefaults(t *testing.T) {
 }
 
 func TestStoredSystemSettingCorruptionFallsBackPerField(t *testing.T) {
-	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared"
-	db, err := sql.Open("sqlite", dsn)
+	databaseURL := os.Getenv("DREAMTRANS_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DREAMTRANS_TEST_DATABASE_URL is not configured")
+	}
+	parsed, err := url.Parse(databaseURL)
 	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
+		t.Fatal(err)
+	}
+	setup, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = setup.Close() })
+	schema := fmt.Sprintf("admin_settings_%d", time.Now().UnixNano())
+	quoted := pq.QuoteIdentifier(schema)
+	if _, err := setup.ExecContext(t.Context(), "CREATE SCHEMA "+quoted); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = setup.ExecContext(context.Background(), "DROP SCHEMA "+quoted+" CASCADE") })
+	query := parsed.Query()
+	query.Set("options", "-csearch_path="+schema)
+	parsed.RawQuery = query.Encode()
+	db, err := sql.Open("postgres", parsed.String())
+	if err != nil {
+		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	for _, statement := range []string{
+		`CREATE TABLE system_settings_revision (singleton BOOLEAN PRIMARY KEY, revision BIGINT NOT NULL)`,
+		`INSERT INTO system_settings_revision VALUES (true, 1)`,
 		`CREATE TABLE pricing_rules (
 			id TEXT, rule_type TEXT, model TEXT, price_per_unit REAL,
 			unit_type TEXT, description TEXT, is_active BOOLEAN,

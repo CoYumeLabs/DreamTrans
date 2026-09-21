@@ -21,6 +21,7 @@ import (
 
 // Store manages on-disk storage of documents, summaries and embeddings.
 type Store struct {
+	borrowedDB             bool
 	postgres               bool
 	db                     *sql.DB
 	path                   string
@@ -218,6 +219,9 @@ func (s *Store) sqliteDiskUsage() (totalBytes, walBytes int64, err error) {
 }
 
 func (s *Store) Close() error {
+	if s.borrowedDB {
+		return nil
+	}
 	ragSQLiteWriteMu.Lock()
 	defer ragSQLiteWriteMu.Unlock()
 	checkpointErr := s.checkpointWAL()

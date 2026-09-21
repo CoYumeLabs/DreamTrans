@@ -23,7 +23,7 @@ func TestCompleteStaleSessionsNeverTouchesLiveWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = db.Close() }()
+	t.Cleanup(func() { _ = db.Close() })
 	ctx := t.Context()
 	postgresStore := &PostgresStore{db: db}
 
@@ -65,6 +65,18 @@ func TestCompleteStaleSessionsNeverTouchesLiveWork(t *testing.T) {
 	stalePaused := createSession("paused", staleAt)
 	staleButStreaming := createSession("active", staleAt)
 	freshActive := createSession("active", time.Now().UTC())
+	staleButOnEdge := createSession("active", staleAt)
+	var nodeID string
+	if err := db.QueryRowContext(ctx, `INSERT INTO edge_nodes(name,region,endpoint,max_connections) VALUES('sweep','test','https://' || gen_random_uuid()::text || '.example.test',1) RETURNING id`).Scan(&nodeID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM edge_sessions WHERE id=$1`, staleButOnEdge)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM edge_nodes WHERE id=$1`, nodeID)
+	})
+	if _, err := db.ExecContext(ctx, `INSERT INTO edge_sessions(id,user_id,tenant_id,node_id,generation,token_id,status,lease_until,sample_rate,training,route,origin) VALUES($1,$2,$3,$4,1,gen_random_uuid(),'connected',now()+interval '5 minutes',16000,false,'{}','https://main.example.test')`, staleButOnEdge, userID, tenantID, nodeID); err != nil {
+		t.Fatal(err)
+	}
 
 	swept, err := postgresStore.CompleteStaleSessions(
 		ctx, 24*time.Hour, []string{staleButStreaming},
@@ -99,6 +111,9 @@ func TestCompleteStaleSessionsNeverTouchesLiveWork(t *testing.T) {
 	}
 	if s, _ := status(staleButStreaming); s != "active" {
 		t.Fatalf("excluded live-stream session was swept: status=%s", s)
+	}
+	if s, _ := status(staleButOnEdge); s != "active" {
+		t.Fatalf("live Edge lease was swept: %s", s)
 	}
 	if s, _ := status(freshActive); s != "active" {
 		t.Fatalf("fresh session was swept: status=%s", s)

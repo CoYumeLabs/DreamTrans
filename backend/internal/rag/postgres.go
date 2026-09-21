@@ -23,18 +23,32 @@ func NewPostgresStore(dsn string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(4)
 	db.SetMaxIdleConns(1)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	var ready bool
-	err = db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM deployment_metadata WHERE key='legacy_import_complete')`).Scan(&ready)
-	if err == nil && !ready {
-		err = errors.New("legacy RAG/config import must complete before enabling PostgreSQL RAG")
-	}
+	st, err := NewPostgresStoreWithDB(db)
 	if err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	return &Store{db: db, postgres: true}, nil
+	st.borrowedDB = false
+	return st, nil
+}
+
+// NewPostgresStoreWithDB borrows the application pool. Closing this store does
+// not close other handlers' connections or reconfigure the owner's pool limits.
+func NewPostgresStoreWithDB(db *sql.DB) (*Store, error) {
+	if db == nil {
+		return nil, errors.New("RAG requires an application database")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var ready bool
+	err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM deployment_metadata WHERE key='legacy_import_complete')`).Scan(&ready)
+	if err == nil && !ready {
+		err = errors.New("legacy RAG/config import must complete before enabling PostgreSQL RAG")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &Store{db: db, postgres: true, borrowedDB: true}, nil
 }
 
 // query translates only internal SQL, never user input or table identifiers.

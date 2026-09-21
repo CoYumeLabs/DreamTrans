@@ -52,10 +52,13 @@ def main():
             controller = release.Controller(root)
             current = release.inspect(database)
             controller.state = {
-                'format': 1, 'database_id': current['Id'], 'database_volume': volumes[0],
+                'format': 1, 'phase': 'ready', 'prefix': prefix,
+                'database_id': current['Id'], 'database_volume': volumes[0],
                 'database_image': current['Image'], 'database_network': network,
                 'application_volume': volumes[1], 'active': 'blue',
-                'colors': {'blue': {'image': application_image}},
+                'colors': {'blue': {'image': application_image, 'contract': {
+                    'protocol': 1, 'state_epoch': 1, 'expand_migrations': []
+                }}},
                 'database_env': {'PGHOST': 'db', 'PGPORT': '5432', 'PGDATABASE': 'fixture',
                                  'PGUSER': 'fixture', 'PGPASSWORD': 'isolated-fixture'},
             }

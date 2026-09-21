@@ -3,10 +3,11 @@ package handlers
 import (
 	"context"
 	"errors"
-	"github.com/dreamtrans/backend/internal/deployment"
 	"log"
 	"sync"
 	"time"
+
+	"github.com/dreamtrans/backend/internal/deployment"
 
 	"github.com/dreamtrans/backend/internal/config"
 	"github.com/dreamtrans/backend/internal/metrics"

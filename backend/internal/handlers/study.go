@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/dreamtrans/backend/internal/deployment"
 	"log"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/dreamtrans/backend/internal/deployment"
 
 	openai "github.com/dreamtrans/backend/internal/adapters/openai_provider"
 	"github.com/dreamtrans/backend/internal/auth"

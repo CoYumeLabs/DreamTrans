@@ -7,42 +7,37 @@ import (
 	"testing"
 )
 
-func TestRAGStatelessDoesNotReadOrWriteSharedHistory(t *testing.T) {
+func TestRAGHistoryIsExplicitAcrossRequestsAndInstances(t *testing.T) {
 	handler, prompts := newTitleTestHandler(t)
-	probe := authenticatedRAGRequest(http.MethodPost, "/api/rag/ask", "{}")
-	key := scopedRAGSessionID(probe, "")
-	clearHistory := func() { hist.Lock(); delete(hist.m, key); hist.Unlock() }
-	clearHistory()
-	t.Cleanup(clearHistory)
-	appendHistory(key, "user", "PRIVATE_PREVIOUS_QUESTION")
-	appendHistory(key, "assistant", "PRIVATE_PREVIOUS_ANSWER")
-	before := getSessionHistory(key)
-	response := httptest.NewRecorder()
-	handler.HandleAsk(response, authenticatedRAGRequest(http.MethodPost, "/api/rag/ask",
-		`{"question":"INDEPENDENT_NEW_QUESTION","stateless":true,"context_policy":{"mode":"full"}}`))
-	if response.Code != http.StatusOK {
-		t.Fatalf("stateless ask: %d %s", response.Code, response.Body.String())
-	}
-	for _, prompt := range prompts() {
-		if strings.Contains(prompt, "PRIVATE_PREVIOUS") {
-			t.Fatalf("stateless request included shared history: %s", prompt)
+	handler.billing = nil // Explicit standalone/anonymous deployment fixture.
+	for _, body := range []string{
+		`{"session_id":"same-anonymous-id","question":"PRIVATE_PREVIOUS_QUESTION","context_policy":{"mode":"full"}}`,
+		`{"session_id":"same-anonymous-id","question":"INDEPENDENT_NEW_QUESTION","context_policy":{"mode":"full"}}`,
+		`{"session_id":"same-anonymous-id","question":"STATELESS_QUESTION","stateless":true,"context_policy":{"mode":"full"}}`,
+	} {
+		response := httptest.NewRecorder()
+		handler.HandleAsk(response, httptest.NewRequest(http.MethodPost, "/api/rag/ask", strings.NewReader(body)))
+		if response.Code != http.StatusOK {
+			t.Fatalf("ask: %d %s", response.Code, response.Body.String())
 		}
 	}
-	if len(prompts()) != 1 {
-		t.Fatalf("expected one provider call, got %d", len(prompts()))
+	if len(prompts()) != 3 {
+		t.Fatalf("provider calls: %d", len(prompts()))
 	}
-	if got := getSessionHistory(key); got != before {
-		t.Fatalf("stateless request changed conversation history: %q", got)
+	for _, prompt := range prompts()[1:] {
+		if strings.Contains(prompt, "PRIVATE_PREVIOUS_QUESTION") {
+			t.Fatal("another request inherited anonymous history")
+		}
 	}
-	response = httptest.NewRecorder()
-	handler.HandleAsk(response, authenticatedRAGRequest(http.MethodPost, "/api/rag/ask", `{"question":"NORMAL_FOLLOWUP"}`))
+	// A second instance has no access to the first instance's memory. Explicit
+	// client history supplies exactly the same conversation after a release.
+	successor, successorPrompts := newTitleTestHandler(t)
+	response := httptest.NewRecorder()
+	successor.HandleAsk(response, authenticatedRAGRequest(http.MethodPost, "/api/rag/ask", `{"question":"FOLLOWUP","history":[{"role":"user","content":"CLIENT_SUPPLIED_QUESTION"},{"role":"assistant","content":"CLIENT_SUPPLIED_ANSWER"}],"context_policy":{"mode":"full"}}`))
 	if response.Code != http.StatusOK {
-		t.Fatalf("normal ask: %d %s", response.Code, response.Body.String())
+		t.Fatalf("successor ask: %d %s", response.Code, response.Body.String())
 	}
-	if !strings.Contains(prompts()[1], "PRIVATE_PREVIOUS_QUESTION") {
-		t.Fatal("normal chat lost its history")
-	}
-	if !strings.Contains(getSessionHistory(key), "NORMAL_FOLLOWUP") {
-		t.Fatal("normal chat did not retain followup")
+	if len(successorPrompts()) != 1 || !strings.Contains(successorPrompts()[0], "CLIENT_SUPPLIED_QUESTION") || !strings.Contains(successorPrompts()[0], "CLIENT_SUPPLIED_ANSWER") {
+		t.Fatal("successor lost explicit client history")
 	}
 }

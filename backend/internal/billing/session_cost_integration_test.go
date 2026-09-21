@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"testing"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 func createIntegrationSession(t *testing.T, db *sql.DB, user integrationUser, title string) string {
@@ -119,5 +121,78 @@ func TestSessionCostSummariesIntegration(t *testing.T) {
 	}
 	if len(foreign) != 0 {
 		t.Fatalf("foreign user read %d summaries, want 0", len(foreign))
+	}
+}
+
+// Prefixes are historical ledger data, not LIKE patterns. Keep the exact old
+// numeric result for overlaps, zero denominators, mixed actions and users.
+func TestSessionCostRefundQueryMatchesLegacySemantics(t *testing.T) {
+	db := integrationDB(t)
+	service := newIntegrationService(t, db)
+	user := createIntegrationUser(t, db, "cost-prefix")
+	other := createIntegrationUser(t, db, "cost-prefix-other")
+	sessionOne := createIntegrationSession(t, db, user, "one")
+	sessionTwo := createIntegrationSession(t, db, user, "two")
+	foreign := createIntegrationSession(t, db, other, "foreign")
+	for _, owner := range []integrationUser{user, other} {
+		if _, err := service.AdjustWallet(t.Context(), WalletAdjustment{UserID: owner.userID, AmountUSD: 5, Description: "fixture"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prefix := "literal:" + user.userID + ":"
+	special := prefix + `%_\界:`
+	for i, key := range []string{special + "one", special + "two", prefix + "plain", prefix + "paid", prefix + "translation", prefix + "chat", prefix + "zero", prefix + "null", prefix + "foreign"} {
+		owner, id := user, sessionOne
+		if i%2 == 1 {
+			id = sessionTwo
+		}
+		if i == 8 {
+			owner, id = other, foreign
+		}
+		usage := transcriptionMinutes(owner, 1, key)
+		usage.SessionID = &id
+		if _, err := service.RecordUsage(t.Context(), usage); err != nil {
+			t.Fatal(err)
+		}
+		action, funding := "transcription", "gift"
+		if i == 3 {
+			funding = "paid"
+		}
+		if i == 4 {
+			action = "translation"
+		}
+		if i == 5 {
+			action = "chat"
+		}
+		if _, err := db.ExecContext(t.Context(), `UPDATE usage_logs SET action=$2,funding_route=$3,gift_usd=charge_usd/4 WHERE idempotency_key=$1`, key, action, funding); err != nil {
+			t.Fatal(err)
+		}
+		if i == 7 {
+			if _, err := db.ExecContext(t.Context(), `UPDATE usage_logs SET idempotency_key=NULL WHERE idempotency_key=$1`, key); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, key := range []string{prefix, special, prefix + "zero", prefix + "foreign", ""} {
+		owner, paid := user, 1
+		if key == prefix+"foreign" {
+			owner = other
+		}
+		if key == prefix+"zero" {
+			paid = 0
+		}
+		if _, err := db.ExecContext(t.Context(), `INSERT INTO route_discount_refunds(key,user_id,account_id,paid_usd,discount_percent,amount_usd) SELECT $1,$2,id,$3,10,0.1 FROM billing_accounts WHERE owner_id=$2`, key, owner.userID, paid); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const legacy = `SELECT session_id,action,SUM(charge_usd-COALESCE((SELECT SUM(d.amount_usd*(l.charge_usd-l.gift_usd)/NULLIF(d.paid_usd,0)) FROM route_discount_refunds d WHERE d.user_id=l.user_id AND l.funding_route='gift' AND l.action='transcription' AND left(l.idempotency_key,length(d.key))=d.key),0)),SUM(quantity) FROM usage_logs l WHERE user_id=$1 AND session_id=ANY($2::uuid[]) GROUP BY session_id,action`
+	// SQL EXCEPT compares NUMERIC directly, without hiding rounding differences
+	// behind the float64 API representation.
+	query := `WITH old_result AS (` + legacy + `),new_result AS (` + sessionCostSummariesQuery + `) SELECT count(*) FROM ((SELECT * FROM old_result EXCEPT SELECT * FROM new_result) UNION ALL (SELECT * FROM new_result EXCEPT SELECT * FROM old_result)) differences`
+	for _, ids := range [][]string{{sessionOne}, {sessionOne, sessionTwo}, {sessionOne, foreign}, {foreign}, {}} {
+		var differences int
+		if err := db.QueryRowContext(t.Context(), query, user.userID, pq.Array(ids)).Scan(&differences); err != nil || differences != 0 {
+			t.Fatalf("changed historical cost semantics: differences=%d err=%v", differences, err)
+		}
 	}
 }

@@ -145,7 +145,7 @@ func (s *Service) Event(ctx context.Context, node string, e *edgeprotocol.Event)
 	if !errors.Is(err, sql.ErrNoRows) {
 		return ack, err
 	}
-	if v.Status == "closed" || e.Sequence > v.EventSeq+1024 || e.Samples > v.Approved {
+	if v.Status == "closed" || e.Sequence > v.EventSeq+1024 || e.Samples > v.Approved || e.ProviderSamples > v.Approved {
 		return ack, ErrConflict
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO edge_events(session_id,generation,sequence,event_id,payload_hash,payload) VALUES($1,$2,$3,$4,$5,$6)`, v.ID, v.Generation, e.Sequence, e.EventID, hash, string(payload))
@@ -189,11 +189,16 @@ func acknowledgedAudio(v *session) int64 {
 }
 
 func (s *Service) applyEvent(ctx context.Context, tx *sql.Tx, v *session, e *edgeprotocol.Event) error {
-	if e.Samples < v.Consumed || e.Samples > v.Approved || e.ProviderSamples < v.Provider || e.AudioSequence < v.AudioSeq || e.DurableAudioSequence < v.DurableSeq || e.DurableSamples < v.DurableSamples || e.DurableSamples > v.ResumeSamples+e.ProviderSamples {
+	if e.Samples < v.Consumed || e.Samples > v.Approved || e.ProviderSamples < v.Provider || e.ProviderSamples > v.Approved || e.AudioSequence < v.AudioSeq || e.DurableAudioSequence < v.DurableSeq || e.DurableSamples < v.DurableSamples || e.DurableSamples > v.ResumeSamples+e.ProviderSamples {
 		return ErrConflict
 	}
 	if (e.Kind == "usage" || e.Kind == "end") && (e.DurableAudioSequence != v.DurableSeq || e.DurableSamples != v.DurableSamples) {
 		return ErrConflict // Receipt and periodic billing reports cannot finalize audio.
+	}
+	if e.Kind == "end" {
+		if err := validateTerminalUsage(ctx, tx, v, e, v.EventSeq); err != nil {
+			return err
+		}
 	}
 	v.DurableSeq, v.DurableSamples = e.DurableAudioSequence, e.DurableSamples
 	v.Consumed = e.Samples
@@ -220,10 +225,42 @@ func (s *Service) applyEvent(ctx context.Context, tx *sql.Tx, v *session, e *edg
 	}
 	return nil
 }
+
+// validateTerminalUsage includes out-of-order and archived evidence, not only
+// the contiguous application watermark. An early or smaller end cannot refund
+// audio that another durable report has already proved was sent.
+func validateTerminalUsage(ctx context.Context, tx *sql.Tx, current *session, event *edgeprotocol.Event, last int64) error {
+	var sequence, samples, provider, audio int64
+	if err := tx.QueryRowContext(ctx, `SELECT coalesce(max(sequence),0),coalesce(max((payload->>'samples')::bigint),0),coalesce(max((payload->>'provider_samples')::bigint),0),coalesce(max((payload->>'audio_sequence')::bigint),0) FROM (SELECT sequence,payload FROM edge_events WHERE session_id=$1 AND generation=$2 UNION ALL SELECT sequence,payload FROM edge_archived_events WHERE session_id=$1 AND generation=$2) evidence`, event.SessionID, event.Generation).Scan(&sequence, &samples, &provider, &audio); err != nil {
+		return err
+	}
+	if event.Generation == current.Generation {
+		sequence, samples = max(sequence, current.EventSeq), max(samples, current.Consumed)
+		provider, audio = max(provider, current.Provider), max(audio, current.AudioSeq)
+	}
+	if event.Sequence < max(last, sequence) || event.Samples < samples || event.ProviderSamples < provider || event.AudioSequence < audio {
+		return ErrConflict
+	}
+	return nil
+}
+
 func (s *Service) settle(ctx context.Context, tx *sql.Tx, v *session, reason string) error {
 	if v.Status == "closed" {
 		return nil
 	}
+	if err := s.settleGeneration(ctx, tx, v, reason); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `UPDATE edge_sessions SET status='closed',updated_at=now() WHERE id=$1`, v.ID)
+	v.Status = "closed"
+	return err
+}
+
+// settleGeneration requires a terminal sent-audio total, or proof that an
+// authorization never connected. Transcript checkpoints only govern replay;
+// every successful upstream send is billable, including a replayed frame.
+// It deliberately does not modify the current generation's state or content.
+func (s *Service) settleGeneration(ctx context.Context, tx *sql.Tx, v *session, reason string) error {
 	rows, err := tx.QueryContext(ctx, `SELECT usage_key,samples FROM edge_budgets WHERE session_id=$1 AND generation=$2 AND NOT settled ORDER BY window_number`, v.ID, v.Generation)
 	if err != nil {
 		return err
@@ -246,11 +283,13 @@ func (s *Service) settle(ctx context.Context, tx *sql.Tx, v *session, reason str
 	if err != nil {
 		return err
 	}
-	// Unfinalized audio is released on handoff. Replaying that tail belongs to
-	// the new generation; only one durable checkpoint can bill each audio range.
-	billable := min(v.Consumed, max(int64(0), v.DurableSamples-v.ResumeSamples))
-	if v.Protocol == 1 {
-		billable = v.Consumed
+	billable := v.Consumed
+	var reserved int64
+	for _, b := range budgets {
+		reserved += b.samples
+	}
+	if billable < 0 || billable > reserved {
+		return ErrConflict
 	}
 	remaining := billable
 	for _, b := range budgets {
@@ -267,14 +306,33 @@ func (s *Service) settle(ctx context.Context, tx *sql.Tx, v *session, reason str
 	if _, err = tx.ExecContext(ctx, `INSERT INTO edge_reconciliations(session_id,generation,approved_samples,consumed_samples,provider_samples,reason,billable_samples) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`, v.ID, v.Generation, v.Approved, v.Consumed, v.Provider, reason, billable); err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE edge_sessions SET status='closed',updated_at=now() WHERE id=$1`, v.ID)
+	return nil
+}
+
+// fenceIncomplete stops an expired generation without inventing its final audio
+// total. A connected Edge may have sent more since its last periodic report.
+// Keep that prepayment pending until its durable terminal event is recovered.
+func (s *Service) fenceIncomplete(ctx context.Context, tx *sql.Tx, v *session, reason string) error {
+	if v.Status == "closed" {
+		return nil
+	}
+	if v.Status == "authorized" && v.Consumed == 0 && v.Provider == 0 && v.EventSeq == 0 && v.DurableSamples == v.ResumeSamples {
+		var hasEvents bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM edge_events WHERE session_id=$1 AND generation=$2)`, v.ID, v.Generation).Scan(&hasEvents); err != nil {
+			return err
+		}
+		if !hasEvents {
+			return s.settle(ctx, tx, v, reason+"_unused_authorization")
+		}
+	}
+	_, err := tx.ExecContext(ctx, `UPDATE edge_sessions SET status='closed',updated_at=now() WHERE id=$1`, v.ID)
 	v.Status = "closed"
 	return err
 }
 
-// Reap releases unused holds after a bounded result-delivery grace period.
-// Confirmed logical audio alone is charged; missing provider evidence is recorded
-// as an incomplete reconciliation rather than inventing usage or restoring a backup.
+// Reap fences expired grants after the result-delivery grace period. Unused
+// unconnected grants can be refunded; missing terminal usage remains prepaid
+// and unresolved, just as an interrupted main-site proxy's reservation does.
 func (s *Service) Reap(ctx context.Context) error {
 	rows, err := s.DB.QueryContext(ctx, `SELECT id FROM edge_sessions WHERE status<>'closed' AND lease_until<now()-interval '10 minutes' LIMIT 100`)
 	if err != nil {
@@ -314,7 +372,7 @@ func (s *Service) reapOne(ctx context.Context, id string) error {
 	if v.Until.After(time.Now().Add(-10 * time.Minute)) {
 		return nil
 	}
-	if err := s.settle(ctx, tx, &v, "lease_expired_missing_final"); err != nil {
+	if err := s.fenceIncomplete(ctx, tx, &v, "lease_expired_missing_end"); err != nil {
 		return err
 	}
 	return tx.Commit()

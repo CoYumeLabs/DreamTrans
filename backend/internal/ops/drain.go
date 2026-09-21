@@ -22,7 +22,7 @@ func (c *controller) configureDrain(seconds int) {
 	need(seconds >= -1 && seconds <= 604800, "handoff-after must be -1 (never) or 0..604800 seconds")
 	need(!strings.ContainsAny(c.root, " \n\r%\"\\"), "unsupported systemd installation path")
 	need(exists(filepath.Join(c.root, "dreamtransctl")), "install Go tools before configuring background drain")
-	unit := "dreamtrans-drain-" + str(c.state["prefix"])
+	unit := "dreamtrans-drain-" + c.state.Prefix
 	need(!strings.ContainsAny(unit, "/ \n\r%\"\\"), "invalid deployment prefix")
 	c.writeDrainUnits("/etc/systemd/system", unit)
 	c.command("", "systemctl", "daemon-reload")
@@ -47,8 +47,8 @@ func (c *controller) writeDrainUnits(directory, unit string) {
 
 func (c *controller) finishRelease(o *options) {
 	if c.yuaction() {
-		active, old := str(c.state["active"]), str(c.state["previous"])
-		if old != "" && str(c.state["phase"]) == "draining" {
+		active, old := c.state.Active, c.state.Previous
+		if old != "" && c.state.Phase == "draining" {
 			c.probe(active)
 			need(c.routeColor() == active, "active YuAction route not confirmed")
 			if yes(obj(c.inspect("container", c.name(old))["State"])["Running"]) {
@@ -60,7 +60,7 @@ func (c *controller) finishRelease(o *options) {
 
 	if yes(c.drainPolicy()["enabled"]) {
 		c.drainTick()
-		if str(c.state["phase"]) == "draining" {
+		if c.state.Phase == "draining" {
 			c.progress("后台", "旧连接继续运行；后台会按配置尝试迁移并在排空后自动停止旧实例，可用 status 查看进度")
 		}
 		return
@@ -70,26 +70,26 @@ func (c *controller) finishRelease(o *options) {
 
 func (c *controller) drainTick() {
 	policy := c.drainPolicy()
-	if !yes(policy["enabled"]) || str(c.state["phase"]) != "draining" {
+	if !yes(policy["enabled"]) || c.state.Phase != "draining" {
 		return
 	}
 	c.assertDatabase()
 	// Retire immediately when all work and durable events have been acknowledged.
 	c.drain(0)
-	if str(c.state["phase"]) != "draining" {
+	if c.state.Phase != "draining" {
 		return
 	}
-	old, active := str(c.state["previous"]), str(c.state["active"])
+	old, active := c.state.Previous, c.state.Active
 	need(old != "" && old != active, "invalid drain ownership")
 	seconds := number(policy["handoff_after_seconds"])
 	if seconds < 0 {
 		return
 	}
-	started, err := time.Parse(time.RFC3339Nano, str(c.state["drain_started_at"]))
+	started, err := time.Parse(time.RFC3339Nano, c.state.DrainStartedAt)
 	if err != nil {
 		// Adoption of an old state starts a full grace period; never invent an
 		// expired deadline for an already-running production session.
-		c.state["drain_started_at"] = time.Now().UTC().Format(time.RFC3339Nano)
+		c.state.DrainStartedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		c.persist()
 		return
 	}
@@ -112,7 +112,7 @@ func (c *controller) drainTick() {
 	if err != nil {
 		result = "handoff_check_failed_retrying"
 	}
-	c.state["handoff_status"] = result
+	c.state.HandoffStatus = result
 	c.persist()
 	c.progress("迁移", result)
 }

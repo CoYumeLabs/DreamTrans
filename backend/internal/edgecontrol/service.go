@@ -275,9 +275,11 @@ func (s *Service) authorize(ctx context.Context, user, tenant string, req Author
 	if req.Protocol < edgeprotocol.MinVersion || req.Protocol > edgeprotocol.Version {
 		return empty, errors.New("unsupported edge protocol")
 	}
-	if _, err := uuid.Parse(req.SessionID); err != nil {
+	parsedSessionID, err := uuid.Parse(req.SessionID)
+	if err != nil {
 		return empty, err
 	}
+	req.SessionID = parsedSessionID.String()
 	if !edgeprotocol.ValidSampleRate(req.SampleRate) {
 		return empty, errors.New("unsupported sample rate")
 	}
@@ -339,12 +341,27 @@ func (s *Service) authorize(ctx context.Context, user, tenant string, req Author
 		if old.Status != "closed" && old.Until.Add(3*time.Second).After(time.Now()) {
 			return empty, ErrConflict
 		}
-		if err := s.settle(ctx, tx, &old, "lease_expired_or_replaced"); err != nil {
+		if err := s.fenceIncomplete(ctx, tx, &old, "lease_expired_or_replaced"); err != nil {
 			return empty, err
 		}
 		generation = old.Generation + 1
 	} else if !errors.Is(oldErr, sql.ErrNoRows) {
 		return empty, oldErr
+	} else {
+		// Deletion keeps the usage ledger but cascades the generation rows.
+		// Reusing that session UUID would restart generation 1 and reuse an
+		// already settled reservation (and admit late events from its old node).
+		// The first immutable usage key identifies a previous Edge lifecycle.
+		// Match the migration 058 index expression so legacy UUID spellings
+		// remain fenced without rewriting financial idempotency records.
+		var previouslyAuthorized bool
+		lifecycleKey := "edge:" + strings.ReplaceAll(req.SessionID, "-", "") + ":1:1"
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM usage_logs WHERE idempotency_key LIKE 'edge:%:1:1' AND translate(replace(lower(idempotency_key), 'urn:uuid:', ''), '-{}', '')=$1)`, lifecycleKey).Scan(&previouslyAuthorized); err != nil {
+			return empty, err
+		}
+		if previouslyAuthorized {
+			return empty, ErrConflict
+		}
 	}
 	var count int
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM edge_sessions WHERE user_id=$1 AND status<>'closed' AND lease_until>now()`, user).Scan(&count); err != nil {

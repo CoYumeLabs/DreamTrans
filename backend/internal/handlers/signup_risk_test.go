@@ -2,10 +2,11 @@ package handlers
 
 import (
 	"context"
-	"github.com/dreamtrans/backend/internal/auth"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/dreamtrans/backend/internal/auth"
 )
 
 func TestSignupRiskAdminAccess(t *testing.T) {

@@ -80,8 +80,9 @@ type Ack struct {
 	Saved         bool  `json:"saved"`
 }
 
-// ArchiveAck acknowledges an audit copy only. It is never an audio watermark
-// or a statement that a transcript was applied to the user's history.
+// ArchiveAck acknowledges retained evidence and any eligible terminal usage
+// settlement. It is never an audio watermark or a statement that a transcript
+// was applied to the user's history.
 type ArchiveAck struct {
 	SessionID   string `json:"session_id"`
 	Generation  int64  `json:"generation"`
