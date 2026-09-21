@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/dreamtrans/backend/internal/auth"
+	"github.com/dreamtrans/backend/internal/edgecontrol"
 	"github.com/dreamtrans/backend/internal/models"
 	"github.com/dreamtrans/backend/internal/store"
 	"github.com/google/uuid"
@@ -22,9 +23,10 @@ import (
 
 // SessionHandler handles session-related endpoints
 type SessionHandler struct {
-	store       *store.PostgresStore
-	ragCleanup  func(tenantID, userID, sessionID string) error
-	liveStreams *liveTranscriptionRegistry
+	store        *store.PostgresStore
+	ragCleanup   func(tenantID, userID, sessionID string) error
+	liveStreams  *liveTranscriptionRegistry
+	edgeSessions *edgecontrol.Service
 }
 
 const maxSessionDurationSeconds = 2_147_483_647
@@ -39,6 +41,10 @@ func NewSessionHandler(postgresStore *store.PostgresStore) *SessionHandler {
 
 func (h *SessionHandler) SetRAGCleanup(cleanup func(tenantID, userID, sessionID string) error) {
 	h.ragCleanup = cleanup
+}
+
+func (h *SessionHandler) SetEdgeSessions(service *edgecontrol.Service) {
+	h.edgeSessions = service
 }
 
 // CreateSessionRequest represents a session creation request
@@ -557,11 +563,26 @@ func (h *SessionHandler) HandleDeleteSession(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	if h.edgeSessions != nil {
+		if err := h.edgeSessions.CancelAuthorizedSession(r.Context(), claims.UserID, claims.TenantID, sessionID); err != nil {
+			if errors.Is(err, edgecontrol.ErrConflict) {
+				http.Error(w, `{"error":"session is connected or awaiting Edge settlement","code":"edge_session_pending_settlement"}`, http.StatusConflict)
+				return
+			}
+			http.Error(w, `{"error":"failed to reconcile session"}`, http.StatusInternalServerError)
+			return
+		}
+	}
+
 	cancelledJobIDs, err := h.store.DeleteSessionAndCancelIndexJobs(
 		r.Context(),
 		sessionID,
 	)
 	if err != nil {
+		if errors.Is(err, store.ErrSessionUnsettledReservations) {
+			http.Error(w, `{"error":"session is awaiting Edge settlement","code":"edge_session_pending_settlement"}`, http.StatusConflict)
+			return
+		}
 		http.Error(w, `{"error":"failed to delete session"}`, http.StatusInternalServerError)
 		return
 	}

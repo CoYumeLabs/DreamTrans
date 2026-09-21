@@ -309,7 +309,7 @@ func buildHandler() (http.Handler, func()) {
 
 	// Create mux
 	mux := http.NewServeMux()
-	stopEdges := registerEdges(mux)
+	edgeService, stopEdges := registerEdges(mux)
 	priorCleanup := cleanup
 	cleanup = func() { stopEdges(); priorCleanup() }
 	mux.Handle("/healthz", probeHandler(nil))
@@ -497,6 +497,7 @@ func buildHandler() (http.Handler, func()) {
 		authHandler.SetRegistrationPolicy(registrationPolicy)
 		authHandler.SetAppName(os.Getenv("APP_NAME"))
 		sessionHandler := handlers.NewSessionHandler(pgStore)
+		sessionHandler.SetEdgeSessions(edgeService)
 		if ragHandler != nil {
 			sessionHandler.SetRAGCleanup(ragHandler.DeleteSessionData)
 		}

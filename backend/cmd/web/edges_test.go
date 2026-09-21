@@ -32,7 +32,8 @@ func TestUnconfiguredEdgeAdminRoutesRemainDiscoverable(t *testing.T) {
 	authMw = auth.NewAuthMiddleware(manager)
 	t.Setenv("EDGE_SIGNING_SEED", "")
 	mux := http.NewServeMux()
-	registerEdges(mux)()
+	_, stop := registerEdges(mux)
+	stop()
 	for _, path := range []string{"/api/admin/edges", "/api/admin/edges/setup", "/api/admin/edges/installer"} {
 		res := httptest.NewRecorder()
 		mux.ServeHTTP(res, httptest.NewRequest(http.MethodGet, path, nil))

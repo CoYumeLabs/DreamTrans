@@ -23,9 +23,9 @@ func edgeIngressRoute(enabled bool, fallback http.Handler) http.Handler {
 	})
 }
 
-func registerEdges(mux *http.ServeMux) func() {
+func registerEdges(mux *http.ServeMux) (*edgecontrol.Service, func()) {
 	if authMw == nil {
-		return func() {}
+		return nil, func() {}
 	}
 	ready := os.Getenv("EDGE_SIGNING_SEED") != "" && pgStore != nil
 	mux.Handle("/api/admin/edges/setup", authMw.RequireAuth(edgecontrol.SetupHTTP(ready)))
@@ -38,7 +38,7 @@ func registerEdges(mux *http.ServeMux) func() {
 		}))
 		mux.Handle("/api/admin/edges", unconfigured)
 		mux.Handle("/api/admin/edges/", unconfigured)
-		return func() {}
+		return nil, func() {}
 	}
 	service, err := edgecontrol.New(pgStore.DB(), billingSvc, os.Getenv("EDGE_SIGNING_SEED"))
 	if err != nil {
@@ -74,5 +74,5 @@ func registerEdges(mux *http.ServeMux) func() {
 			}
 		}
 	}()
-	return func() { cancel(); <-done }
+	return service, func() { cancel(); <-done }
 }

@@ -19,6 +19,7 @@ import (
 
 var ErrLastSuperAdmin = errors.New("at least one active super administrator is required")
 var ErrSessionIDConflict = errors.New("session id belongs to another owner")
+var ErrSessionUnsettledReservations = errors.New("session has unsettled Edge reservations")
 var ErrBatchJobConflict = errors.New("batch job is already registered to different usage")
 var ErrStorageQuota = errors.New("tenant storage quota exceeded")
 var ErrAdminUserForbidden = errors.New("administrator cannot modify target user")
@@ -596,6 +597,13 @@ func (s *PostgresStore) DeleteSessionAndCancelIndexJobs(
 	); err != nil {
 		return nil, err
 	}
+	// Serialize deletion with Edge authorization, connection and settlement.
+	// Take the Edge user lock before user rows, matching reservation billing.
+	// Otherwise a concurrent new generation can hold edge_sessions while its
+	// budget insert waits for our user lock and our cascade waits for its row.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,5401))`, ownerUserID); err != nil {
+		return nil, err
+	}
 	var lockedUserID string
 	if err := tx.QueryRowContext(ctx, `
 		SELECT id FROM users WHERE id = $1 FOR UPDATE
@@ -630,6 +638,13 @@ func (s *PostgresStore) DeleteSessionAndCancelIndexJobs(
 	}
 	result, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = $1`, id)
 	if err != nil {
+		// Migration 055 deliberately rejects deletion before Edge settlement.
+		// Match that exact guard, not unrelated check-constraint failures.
+		var postgresError *pq.Error
+		if errors.As(err, &postgresError) && postgresError.Code == "23514" &&
+			postgresError.Message == "edge session still has unsettled reservations" {
+			return nil, fmt.Errorf("%w: %w", ErrSessionUnsettledReservations, err)
+		}
 		return nil, normalizeStorageQuotaError(err)
 	}
 	affected, err := result.RowsAffected()
