@@ -197,8 +197,8 @@ func TestNoCapacityOrBalanceDoesNotAuthorize(t *testing.T) {
 	}
 }
 
-// A crash may leave receipts ahead of durable provider finals. Only finalized
-// audio is billed before takeover; the unfinalized tail is replayed once.
+// A crash may leave sent audio ahead of durable provider finals. The checkpoint
+// controls replay, while every actual send (including replay) remains billable.
 func TestCrashHandoffUsesDurableCheckpointAndFencesRecoveredNode(t *testing.T) {
 	s, user, tenant, nodes := setup(t)
 	id := createSession(t, s, user, tenant)
@@ -281,6 +281,12 @@ func TestCrashHandoffUsesDurableCheckpointAndFencesRecoveredNode(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
+	// The predecessor's missing terminal report kept its prepayment pending.
+	// Recovery settles its own sends without modifying the successor's history.
+	oldEnd := edgeprotocol.Event{SessionID: id, Generation: 1, Sequence: 3, EventID: uuid.NewString(), Kind: "end", AudioSequence: 20, Samples: 32000, ProviderSamples: 32000, DurableAudioSequence: 10, DurableSamples: 16000}
+	if _, err := s.Archive(t.Context(), a.Grant.NodeID, &oldEnd); err != nil {
+		t.Fatal(err)
+	}
 	var quantity float64
 	var consumed, provider, billable int64
 	var unsettled, records int
@@ -293,12 +299,12 @@ func TestCrashHandoffUsesDurableCheckpointAndFencesRecoveredNode(t *testing.T) {
 	if err = s.DB.QueryRow(`SELECT count(*) FROM edge_budgets WHERE session_id=$1 AND NOT settled`, id).Scan(&unsettled); err != nil {
 		t.Fatal(err)
 	}
-	if math.Abs(quantity-2.0/60) > 1e-8 || billable != 32000 || provider != 48000 || consumed != 48000 || records != 2 || unsettled != 0 {
+	if math.Abs(quantity-3.0/60) > 1e-8 || billable != 48000 || provider != 48000 || consumed != 48000 || records != 2 || unsettled != 0 {
 		t.Fatalf("replay billing quantity=%g billable=%d supplier=%d received=%d settlements=%d unsettled=%d", quantity, billable, provider, consumed, records, unsettled)
 	}
 }
 
-func TestLeaseExpiryReleasesUnfinalizedBudgetAndRejectsForgedCheckpoint(t *testing.T) {
+func TestLeaseExpiryRetainsUnknownTailAndRejectsForgedCheckpoint(t *testing.T) {
 	s, user, tenant, _ := setup(t)
 	id := createSession(t, s, user, tenant)
 	a, err := s.Authorize(t.Context(), user, tenant, AuthorizeRequest{Protocol: 2, SessionID: id, SampleRate: 16000, Origin: "https://main.example.test"})
@@ -328,8 +334,17 @@ func TestLeaseExpiryReleasesUnfinalizedBudgetAndRejectsForgedCheckpoint(t *testi
 	if err = s.Reap(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	var billable, count int
-	if err = s.DB.QueryRow(`SELECT sum(billable_samples),count(*) FROM edge_reconciliations WHERE session_id=$1`, id).Scan(&billable, &count); err != nil || billable != 0 || count != 1 {
+	var pending, count int
+	if err = s.DB.QueryRow(`SELECT (SELECT count(*) FROM edge_budgets WHERE session_id=$1 AND NOT settled),(SELECT count(*) FROM edge_reconciliations WHERE session_id=$1)`, id).Scan(&pending, &count); err != nil || pending != 1 || count != 0 {
+		t.Fatalf("expiry finalized unknown tail: pending=%d settlements=%d err=%v", pending, count, err)
+	}
+	e.Sequence++
+	e.EventID, e.Kind = uuid.NewString(), "end"
+	if _, err = s.Archive(t.Context(), a.Grant.NodeID, &e); err != nil {
+		t.Fatal(err)
+	}
+	var billable int
+	if err = s.DB.QueryRow(`SELECT sum(billable_samples),count(*) FROM edge_reconciliations WHERE session_id=$1`, id).Scan(&billable, &count); err != nil || billable != 16000 || count != 1 {
 		t.Fatalf("expiry reconciliation: %d %d %v", billable, count, err)
 	}
 }
@@ -450,7 +465,7 @@ func TestInterruptedEndRecordsUnfinalizedAudioInsteadOfCompleted(t *testing.T) {
 	}
 	var reason string
 	var billed int64
-	if err = s.DB.QueryRow(`SELECT reason,billable_samples FROM edge_reconciliations WHERE session_id=$1`, id).Scan(&reason, &billed); err != nil || reason != "interrupted_unfinalized_audio" || billed != 0 {
+	if err = s.DB.QueryRow(`SELECT reason,billable_samples FROM edge_reconciliations WHERE session_id=$1`, id).Scan(&reason, &billed); err != nil || reason != "interrupted_unfinalized_audio" || billed != 16000 {
 		t.Fatalf("incomplete audio hidden: %s billed=%d %v", reason, billed, err)
 	}
 }

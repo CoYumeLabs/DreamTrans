@@ -341,7 +341,7 @@ func (s *Service) authorize(ctx context.Context, user, tenant string, req Author
 		if old.Status != "closed" && old.Until.Add(3*time.Second).After(time.Now()) {
 			return empty, ErrConflict
 		}
-		if err := s.settle(ctx, tx, &old, "lease_expired_or_replaced"); err != nil {
+		if err := s.fenceIncomplete(ctx, tx, &old, "lease_expired_or_replaced"); err != nil {
 			return empty, err
 		}
 		generation = old.Generation + 1
