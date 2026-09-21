@@ -43,3 +43,6 @@ backend/*.out
 # Docker files themselves
 Dockerfile*
 docker-compose*.yml
+
+# YuAction has independent build contexts under yuaction/.
+yuaction

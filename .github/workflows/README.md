@@ -1,5 +1,8 @@
 # GitHub Actions CI/CD
 
+> 主站与 YuAction 统一由 `ci.yml` 验证，`docker-build.yml` 在全部检查通过后发布四个组件镜像。YuAction 保持独立端口；当前流程见 [合仓说明](../../docs/deployment/yuaction-monorepo.md)。
+
+
 This workflow automatically builds and pushes Docker images to GitHub Container Registry (ghcr.io).
 
 ## Workflow Triggers

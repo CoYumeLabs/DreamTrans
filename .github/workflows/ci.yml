@@ -19,7 +19,7 @@ concurrency:
   # still cancel superseded runs to avoid wasting CI capacity.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# The three verification jobs below (frontend, backend, security scan) are
+# Product verification jobs and the security scan are
 # independent and run in parallel; publish-image gates on all of them, so the
 # split changes wall-clock time, not what a broken commit can publish.
 jobs:
@@ -236,6 +236,83 @@ jobs:
           flags: backend
           token: ${{ secrets.CODECOV_TOKEN }}
         continue-on-error: true  # Don't fail if codecov is not configured
+
+  yuaction:
+    name: YuAction Tests & Runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: yuaction
+          POSTGRES_PASSWORD: yuaction-test
+          POSTGRES_DB: yuaction_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U yuaction -d yuaction_test"
+          --health-interval 5s --health-timeout 3s --health-retries 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+          cache-dependency-path: yuaction/backend/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+          cache: npm
+          cache-dependency-path: yuaction/frontend/package-lock.json
+      - name: Verify installer lifecycle and monorepo migration
+        run: |
+          bash -n yuaction/scripts/install.sh
+          python3 -m unittest discover -s yuaction/scripts/tests -v
+      - name: Verify Go dependencies, formatting and database migrations
+        working-directory: yuaction/backend
+        env:
+          TEST_DATABASE_URL: postgres://yuaction:yuaction-test@localhost:5432/yuaction_test?sslmode=disable
+        run: |
+          test -z "$(gofmt -l .)"
+          go mod tidy -diff
+          go mod download
+          go mod verify
+          go test -race ./...
+          go vet ./...
+      - name: Verify full YuAction browser suite
+        working-directory: yuaction/frontend
+        env:
+          CI: 'true'
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run build
+          npm run test:e2e
+      - uses: docker/setup-buildx-action@v3
+      - name: Build YuAction backend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./yuaction/backend
+          load: true
+          tags: yuaction-backend-ci:${{ github.sha }}
+          cache-from: type=gha,scope=yuaction-backend
+          cache-to: type=gha,mode=max,scope=yuaction-backend
+      - name: Build YuAction frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./yuaction/frontend
+          load: true
+          tags: yuaction-frontend-ci:${{ github.sha }}
+          cache-from: type=gha,scope=yuaction-frontend
+          cache-to: type=gha,mode=max,scope=yuaction-frontend
+      - name: Verify independent port, persistence and container recreation
+        run: python3 yuaction/scripts/tests/runtime_test.py "yuaction-backend-ci:${GITHUB_SHA}" "yuaction-frontend-ci:${GITHUB_SHA}"
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: yuaction-browser-test-results
+          path: yuaction/frontend/test-results/
 
   security-scan:
     name: Security Scan
@@ -548,6 +625,7 @@ jobs:
       - frontend
       - backend
       - security-scan
+      - yuaction
       - build-verification
     permissions:
       contents: read

@@ -17,6 +17,15 @@ Quick links:
 - Environment variables: docs/ENVIRONMENT_VARIABLES.md
 - Performance Monitoring: docs/PERFORMANCE_MONITORING.md
 
+## YuAction live interaction
+
+YuAction is maintained in this repository under [`yuaction/`](yuaction/README.md).
+It provides host, participant and display interfaces for live rooms, shared
+captions and questions. Both products use one CI and release commit; YuAction
+retains its own services and default port **11452**. Existing installations can
+move to the new installer without changing rooms, database, keys or ports.
+See [monorepo deployment and migration](docs/deployment/yuaction-monorepo.md).
+
 ## 📱 Unified UI
 
 DreamTrans now uses one responsive React workspace on both `/` and `/pro`.

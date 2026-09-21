@@ -87,7 +87,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           # Disable metadata-action's implicit semver -> latest behavior.
-          # Only the explicit default-branch rule below may move :latest.
+          # Latest is promoted only after every component has been published.
           flavor: |
             latest=false
           tags: |
@@ -96,7 +96,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=sha-,format=short
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=long
             
       - name: Build and push Docker image
         id: main-image
@@ -138,11 +138,73 @@ jobs:
           cache-to: type=gha,mode=max,scope=dreamtrans-edge
           platforms: linux/amd64,linux/arm64
 
+      - name: YuAction backend image metadata
+        id: yuaction-backend-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/dreamtrans-yuaction-backend
+          flavor: latest=false
+          tags: |
+            type=sha,prefix=sha-,format=long
+            type=semver,pattern={{version}}
+      - name: Publish verified YuAction backend
+        id: yuaction-backend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./yuaction/backend
+          push: true
+          tags: ${{ steps.yuaction-backend-meta.outputs.tags }}
+          labels: ${{ steps.yuaction-backend-meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha,scope=yuaction-backend
+          cache-to: type=gha,mode=max,scope=yuaction-backend
+
+      - name: YuAction frontend image metadata
+        id: yuaction-frontend-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/dreamtrans-yuaction-frontend
+          flavor: latest=false
+          tags: |
+            type=sha,prefix=sha-,format=long
+            type=semver,pattern={{version}}
+      - name: Publish verified YuAction frontend
+        id: yuaction-frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./yuaction/frontend
+          push: true
+          tags: ${{ steps.yuaction-frontend-meta.outputs.tags }}
+          labels: ${{ steps.yuaction-frontend-meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha,scope=yuaction-frontend
+          cache-to: type=gha,mode=max,scope=yuaction-frontend
+
+      - name: Promote complete main release
+        if: github.ref == 'refs/heads/main'
+        env:
+          MAIN_DIGEST: ${{ steps.main-image.outputs.digest }}
+          YUACTION_BACKEND_DIGEST: ${{ steps.yuaction-backend.outputs.digest }}
+          YUACTION_FRONTEND_DIGEST: ${{ steps.yuaction-frontend.outputs.digest }}
+        run: |
+          set -euo pipefail
+          current="$(git ls-remote --exit-code origin refs/heads/main | awk 'NR == 1 {print $1}')"
+          if [[ "$current" != "$GITHUB_SHA" ]]; then
+            echo 'Newer main exists; retaining immutable images without moving latest.'
+            exit 0
+          fi
+          repository="${REGISTRY}/${IMAGE_NAME,,}"
+          docker buildx imagetools create --tag "${repository}-yuaction-backend:latest" "${repository}-yuaction-backend@${YUACTION_BACKEND_DIGEST}"
+          docker buildx imagetools create --tag "${repository}-yuaction-frontend:latest" "${repository}-yuaction-frontend@${YUACTION_FRONTEND_DIGEST}"
+          docker buildx imagetools create --tag "${repository}:latest" "${repository}@${MAIN_DIGEST}"
+
       - name: Record immutable release references
         if: github.event_name != 'pull_request'
         env:
           MAIN_DIGEST: ${{ steps.main-image.outputs.digest }}
           EDGE_DIGEST: ${{ steps.edge-image.outputs.digest }}
+          YUACTION_BACKEND_DIGEST: ${{ steps.yuaction-backend.outputs.digest }}
+          YUACTION_FRONTEND_DIGEST: ${{ steps.yuaction-frontend.outputs.digest }}
         run: |
           repository="${REGISTRY}/${IMAGE_NAME,,}"
           python3 - "$repository" <<'PYTHON'
@@ -151,6 +213,8 @@ jobs:
               "commit": os.environ["GITHUB_SHA"],
               "main_image": sys.argv[1] + "@" + os.environ["MAIN_DIGEST"],
               "edge_image": sys.argv[1] + "@" + os.environ["EDGE_DIGEST"],
+              "yuaction_backend_image": sys.argv[1] + "-yuaction-backend@" + os.environ["YUACTION_BACKEND_DIGEST"],
+              "yuaction_frontend_image": sys.argv[1] + "-yuaction-frontend@" + os.environ["YUACTION_FRONTEND_DIGEST"],
           }
           with open("release-images.json", "w") as output:
               json.dump(manifest, output, indent=2)
