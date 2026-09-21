@@ -104,14 +104,21 @@ export function useUnifiedAuth(): UnifiedAuthState {
   const [pendingVerification, setPendingVerification] = useState<PendingVerification | null>(null)
   const [verificationOutcome, setVerificationOutcome] = useState<VerificationOutcome | null>(null)
   const balanceRequestRef = useRef(0)
+  const accountRequestRef = useRef(0)
+  const balanceSnapshotRevisionRef = useRef(0)
 
   const clearBilling = useCallback(() => {
+    balanceRequestRef.current += 1
+    accountRequestRef.current += 1
+    balanceSnapshotRevisionRef.current += 1
     setBalance(null)
     setAccount(null)
+    setPaymentsEnabled(false)
   }, [])
 
   const refreshBalance = useCallback(async () => {
     const request = ++balanceRequestRef.current
+    const snapshotRevision = balanceSnapshotRevisionRef.current
     const ownerId = getStoredUser()?.id ?? null
     if (!ownerId) {
       if (request === balanceRequestRef.current) clearBilling()
@@ -121,18 +128,20 @@ export function useUnifiedAuth(): UnifiedAuthState {
       const nextBalance = await getUserBalance()
       if (
         request !== balanceRequestRef.current
+        || snapshotRevision !== balanceSnapshotRevisionRef.current
         || getStoredUser()?.id !== ownerId
       ) {
         return
       }
       if (nextBalance.user_id !== ownerId) {
-        clearBilling()
+        setBalance(null)
         return
       }
       setBalance(nextBalance)
     } catch {
       if (
         request === balanceRequestRef.current
+        && snapshotRevision === balanceSnapshotRevisionRef.current
         && getStoredUser()?.id === ownerId
       ) {
         setBalance(null)
@@ -141,33 +150,46 @@ export function useUnifiedAuth(): UnifiedAuthState {
   }, [clearBilling])
 
   const refreshAccount = useCallback(async () => {
-    const request = ++balanceRequestRef.current
+    const request = ++accountRequestRef.current
+    const balanceRequest = ++balanceRequestRef.current
+    const snapshotRevision = balanceSnapshotRevisionRef.current
     const ownerId = getStoredUser()?.id ?? null
     if (!ownerId) {
-      if (request === balanceRequestRef.current) clearBilling()
+      if (request === accountRequestRef.current) clearBilling()
       return
     }
     try {
       const next = await getUserBillingAccount()
       if (
-        request !== balanceRequestRef.current
+        request !== accountRequestRef.current
         || getStoredUser()?.id !== ownerId
       ) {
         return
       }
       if (next.account.user_id !== ownerId) {
-        clearBilling()
-        return
+        throw new Error('Billing account owner does not match the current user')
       }
       setAccount(next.account)
-      setBalance(next.account)
+      if (
+        balanceRequest === balanceRequestRef.current
+        && snapshotRevision === balanceSnapshotRevisionRef.current
+      ) {
+        setBalance(next.account)
+      }
       setPaymentsEnabled(next.payments_enabled === true)
     } catch {
       if (
-        request === balanceRequestRef.current
+        request === accountRequestRef.current
         && getStoredUser()?.id === ownerId
       ) {
-        clearBilling()
+        setAccount(null)
+        setPaymentsEnabled(false)
+        if (
+          balanceRequest === balanceRequestRef.current
+          && snapshotRevision === balanceSnapshotRevisionRef.current
+        ) {
+          setBalance(null)
+        }
       }
     }
   }, [clearBilling])
@@ -178,8 +200,9 @@ export function useUnifiedAuth(): UnifiedAuthState {
       void refreshBalance()
       return
     }
-    // Do not bump balanceRequestRef: an account load in flight during the
-    // first push must still land so the panel has plan and grant details.
+    // HTTP started before this push must not overwrite or clear its snapshot.
+    // Account details still have their own request lifetime and may arrive later.
+    balanceSnapshotRevisionRef.current += 1
     setBalance(next)
   }, [refreshBalance])
 
@@ -245,7 +268,6 @@ export function useUnifiedAuth(): UnifiedAuthState {
       // stored identity synchronously prevents the workspace from retaining
       // account A as owner while authenticated requests already use B's token.
       const nextUser = getStoredUser()
-      balanceRequestRef.current += 1
       setUser(nextUser)
       clearBilling()
       if (nextUser) {
@@ -374,7 +396,6 @@ export function useUnifiedAuth(): UnifiedAuthState {
       // that is stored now instead of letting the stale logout completion
       // overwrite the newer account with an anonymous React state.
       const currentUser = getStoredUser()
-      balanceRequestRef.current += 1
       setUser(currentUser)
       clearBilling()
       if (currentUser) {
