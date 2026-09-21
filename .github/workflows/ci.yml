@@ -615,6 +615,26 @@ jobs:
           docker logs "$container"
           exit 1
 
+  incident-recovery:
+    name: Verify distinct release recovery
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise the exact published releases on isolated production-shaped volumes
+        run: |
+          set -euo pipefail
+          bash -n scripts/recover-e163-release.sh
+          image=ghcr.io/coyumelabs/dreamtrans@sha256:a6fcde016bec5d69d78f4bdf0fcdbb9bf85df3c6755f4c1c6b529bbb3661b64d
+          docker pull "$image"
+          container=$(docker create "$image")
+          artifact="${RUNNER_TEMP}/recovery-dreamtransctl"
+          docker cp "$container:/usr/share/dreamtrans/dreamtransctl" "$artifact"
+          docker rm -v "$container"
+          chmod 0700 "$artifact"
+          sudo env DREAMTRANS_CTL="$artifact" python3 scripts/tests/recover_e163_runtime_test.py "$image"
+
   # Publication is deliberately downstream of both the source/test gate and
   # the production-image verification gate. A failing push can no longer
   # replace the mutable :latest tag with an unverified image.
@@ -627,6 +647,7 @@ jobs:
       - security-scan
       - yuaction
       - build-verification
+      - incident-recovery
     permissions:
       contents: read
       packages: write
