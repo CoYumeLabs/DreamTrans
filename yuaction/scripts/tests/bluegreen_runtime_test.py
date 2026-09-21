@@ -214,10 +214,23 @@ def main():
                 output = open(root / ('-'.join(operation[:1]) + '.log'), 'w+')
                 child = subprocess.Popen(cli_args(*operation, '--drain-timeout', '30'), stdout=output, stderr=output)
                 assert ws.receive()['type'] == 'handoff'
+                # Offers are retryable while a client preflights the new route.
+                # Deliver another offer deterministically before acknowledging.
+                docker('exec', prefix + '-' + state()['previous'], '/app/yuaction', 'deploy-control', 'handoff')
                 with lock:
                     current[0] = None
                     ws.command('handoff')
-                assert ws.receive()['type'] == 'migrated'
+                deadline = time.monotonic() + 20
+                repeated_offers = 0
+                while True:
+                    message = ws.receive()
+                    if message == {'type': 'handoff', 'version': 1}:
+                        repeated_offers += 1
+                        assert time.monotonic() < deadline, 'handoff never completed'
+                        continue
+                    assert message == {'type': 'migrated', 'version': 1}, message
+                    break
+                assert repeated_offers >= 1, 'duplicate-offer scenario was not exercised'
                 ws.close()
                 ws = WebSocket(ws_url, cookie)
                 assert ws.receive()['type'] == 'ready'
