@@ -347,8 +347,9 @@ func (s *Server) mutate(r *http.Request, host bool, change func(*Room) error) (R
 }
 func (s *Server) question(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Content   string `json:"content"`
-		SegmentID string `json:"segmentId"`
+		Content    string   `json:"content"`
+		SegmentID  string   `json:"segmentId"`
+		SegmentIDs []string `json:"segmentIds"`
 	}
 	if err := decode(w, r, &in); err != nil {
 		writeError(w, err)
@@ -367,21 +368,32 @@ func (s *Server) question(w http.ResponseWriter, r *http.Request) {
 		if len(room.Questions) >= 300 {
 			return fail(409, "此预览版每个房间最多接收 300 个问题")
 		}
-		quotedText := ""
-		if in.SegmentID != "" {
-			found := false
-			for _, seg := range room.Segments {
-				if seg.ID == in.SegmentID {
-					found = true
-					quotedText = seg.Text
-					break
-				}
-			}
-			if !found {
-				return fail(400, "引用的字幕不存在")
-			}
+		ids := in.SegmentIDs
+		if len(ids) == 0 && in.SegmentID != "" {
+			ids = []string{in.SegmentID}
 		}
-		room.Questions = append(room.Questions, Question{ID: id, Content: in.Content, Status: "pending", SegmentID: in.SegmentID, QuotedText: quotedText, CreatedAt: time.Now().UTC()})
+		if len(ids) > 48 || (len(ids) > 0 && in.SegmentID != "" && ids[0] != in.SegmentID) {
+			return fail(400, "引用的字幕无效")
+		}
+		byID := make(map[string]Segment, len(room.Segments))
+		for _, seg := range room.Segments {
+			byID[seg.ID] = seg
+		}
+		quotedText := ""
+		seen := make(map[string]bool, len(ids))
+		for _, id := range ids {
+			seg, found := byID[id]
+			if !found || seen[id] {
+				return fail(400, "引用的字幕不存在或重复")
+			}
+			seen[id] = true
+			quotedText = joinSegmentText(quotedText, normalizeSegmentText(seg.Text))
+		}
+		firstID := ""
+		if len(ids) > 0 {
+			firstID = ids[0]
+		}
+		room.Questions = append(room.Questions, Question{ID: id, Content: in.Content, Status: "pending", SegmentID: firstID, SegmentIDs: ids, QuotedText: quotedText, CreatedAt: time.Now().UTC()})
 		return nil
 	})
 	if err != nil {

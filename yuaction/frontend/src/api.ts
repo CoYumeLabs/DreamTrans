@@ -13,6 +13,8 @@ export type Segment = {
   source: "demo" | "yufolo";
   createdAt: string;
   updatedAt?: string;
+  speaker?: string;
+  segmentIds?: readonly string[];
   startTime?: number;
   endTime?: number;
   translations?: Record<string, string>;

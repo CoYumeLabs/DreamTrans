@@ -39,7 +39,9 @@ services:
         condition: service_healthy
     restart: unless-stopped
   frontend:
-    build: ./frontend
+    build:
+      context: ..
+      dockerfile: yuaction/frontend/Dockerfile
     ports:
       - "${APP_BIND:-127.0.0.1}:${APP_PORT:-11452}:80"
     depends_on:

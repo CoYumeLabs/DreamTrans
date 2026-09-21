@@ -301,7 +301,8 @@ jobs:
       - name: Build YuAction frontend
         uses: docker/build-push-action@v5
         with:
-          context: ./yuaction/frontend
+          context: .
+          file: yuaction/frontend/Dockerfile
           load: true
           tags: yuaction-frontend-ci:${{ github.sha }}
           cache-from: type=gha,scope=yuaction-frontend

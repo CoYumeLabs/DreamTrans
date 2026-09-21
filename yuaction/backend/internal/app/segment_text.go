@@ -33,6 +33,11 @@ func lastRune(text string) string {
 	}
 	return string(r)
 }
+
+// Match Yufolo scriptText.joinSegmentTexts, including Hangul fragment joins.
+func isCJKJoin(r rune) bool {
+	return spacelessCJK(r) || (r >= 0x3130 && r <= 0x318f) || (r >= 0xac00 && r <= 0xd7af)
+}
 func joinSegmentText(left, right string) string {
 	a, b := strings.TrimSpace(left), strings.TrimSpace(right)
 	if a == "" {
@@ -43,7 +48,7 @@ func joinSegmentText(left, right string) string {
 	}
 	last, _ := utf8.DecodeLastRuneInString(a)
 	first, _ := utf8.DecodeRuneInString(b)
-	if spacelessCJK(last) || spacelessCJK(first) || strings.ContainsRune(",.;:!?%)]}»”’…、，。；：！？』」）】", first) {
+	if isCJKJoin(last) || isCJKJoin(first) || strings.ContainsRune(",.;:!?%)]}»”’…、，。；：！？』」）】", first) {
 		return a + b
 	}
 	return a + " " + b

@@ -80,7 +80,13 @@ export default function RoomPage({
   }
   async function submitQuestion(e: FormEvent) {
     e.preventDefault();
-    if (await mutate("/questions", { content, segmentId: quote?.id || "" })) {
+    if (
+      await mutate("/questions", {
+        content,
+        segmentId: quote?.segmentIds?.[0] || quote?.id || "",
+        segmentIds: quote?.segmentIds,
+      })
+    ) {
       setContent("");
       setQuote(null);
       setNotice("问题已发送，主持人和房间参与者都可以看到。");

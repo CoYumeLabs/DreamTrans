@@ -7,6 +7,7 @@ type Question struct {
 	Content    string    `json:"content"`
 	Status     string    `json:"status"`
 	SegmentID  string    `json:"segmentId,omitempty"`
+	SegmentIDs []string  `json:"segmentIds,omitempty"`
 	QuotedText string    `json:"quotedText,omitempty"`
 	CreatedAt  time.Time `json:"createdAt"`
 }

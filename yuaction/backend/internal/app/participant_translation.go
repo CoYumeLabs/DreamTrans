@@ -15,8 +15,9 @@ var captionLanguages = map[string]string{"cmn": "中文", "en": "English", "ja":
 
 func (s *Server) requestTranslations(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Language string `json:"language"`
-		Retry    bool   `json:"retry"`
+		Language   string   `json:"language"`
+		Retry      bool     `json:"retry"`
+		SegmentIDs []string `json:"segmentIds"`
 	}
 	if err := decode(w, r, &in); err != nil {
 		writeError(w, err)
@@ -32,6 +33,14 @@ func (s *Server) requestTranslations(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, err)
 		return
+	}
+	if len(in.SegmentIDs) > 50 {
+		writeError(w, fail(400, "请求的字幕过多"))
+		return
+	}
+	selected := make(map[string]bool, len(in.SegmentIDs))
+	for _, id := range in.SegmentIDs {
+		selected[id] = true
 	}
 	if s.yufolo == nil || !rec.Link.Created {
 		writeError(w, fail(409, "主持人连接 Yufolo 转录后可选择译文"))
@@ -53,8 +62,15 @@ func (s *Server) requestTranslations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	started := 0
-	for i := max(0, len(room.Segments)-8); i < len(room.Segments); i++ {
+	window := 8
+	if len(selected) > 0 {
+		window = 50
+	}
+	for i := max(0, len(room.Segments)-window); i < len(room.Segments); i++ {
 		seg := room.Segments[i]
+		if len(selected) > 0 && !selected[seg.ID] {
+			continue
+		}
 		if seg.Source != "yufolo" || seg.Translations[in.Language] != "" {
 			continue
 		}
