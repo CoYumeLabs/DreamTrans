@@ -172,7 +172,8 @@ jobs:
         id: yuaction-frontend
         uses: docker/build-push-action@v5
         with:
-          context: ./yuaction/frontend
+          context: .
+          file: yuaction/frontend/Dockerfile
           push: true
           tags: ${{ steps.yuaction-frontend-meta.outputs.tags }}
           labels: ${{ steps.yuaction-frontend-meta.outputs.labels }}

@@ -1,0 +1,14 @@
+**
+!frontend/
+!frontend/src/
+!frontend/src/core/
+!frontend/src/core/transcription/
+!frontend/src/core/transcription/*.ts
+!yuaction/
+!yuaction/frontend/
+!yuaction/frontend/**
+**/node_modules
+**/dist
+**/test-results
+**/playwright-report
+**/.env*

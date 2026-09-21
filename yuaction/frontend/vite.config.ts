@@ -5,6 +5,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     strictPort: true,
+    fs: { allow: ["../.."] },
     proxy: {
       "/api": {
         target: process.env.API_TARGET || "http://127.0.0.1:18083",

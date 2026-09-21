@@ -236,7 +236,7 @@ func TestSegmentBoundariesAndNormalization(t *testing.T) {
 	if got := normalizeSegmentText("你  好 ， 世 界 ！"); got != "你好，世界！" {
 		t.Fatal(got)
 	}
-	if got := joinSegmentText("안녕", "하세요"); got != "안녕 하세요" {
+	if got := joinSegmentText("안녕", "하세요"); got != "안녕하세요" {
 		t.Fatal(got)
 	}
 	base := Segment{Text: "Could you", Source: "yufolo", Speaker: "S1", EndTime: 1, Parts: 1}

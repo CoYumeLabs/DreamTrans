@@ -1,6 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, AudioLines, MessageCircle } from "lucide-react";
 import { api, type Segment } from "../api";
+import { captionFeed } from "../captionFeed";
 import { Empty, Pill, Time } from "./ui";
 
 export default function Captions({
@@ -21,15 +22,21 @@ export default function Captions({
     () => localStorage.getItem(`yuaction.translation.${code}`) || "",
   );
   const [translationError, setTranslationError] = useState("");
+  const captions = useMemo(
+    () => captionFeed(segments, chooseTranslation ? target : "").slice(-8),
+    [segments, chooseTranslation, target],
+  );
   const latestSegments = useRef(segments);
+  const visibleIds = useRef<string[]>([]);
   latestSegments.current = segments;
+  visibleIds.current = captions.flatMap((caption) => [...caption.segmentIds!]);
   useEffect(() => {
     if (!chooseTranslation || !target || !code) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       const pending = latestSegments.current
-        .slice(-8)
+        .filter((s) => visibleIds.current.includes(s.id))
         .some(
           (s) =>
             s.source === "yufolo" &&
@@ -40,7 +47,7 @@ export default function Captions({
         try {
           await api(`/rooms/${code}/translations`, {
             method: "POST",
-            body: { language: target },
+            body: { language: target, segmentIds: visibleIds.current },
           });
           if (active) setTranslationError("");
         } catch (e) {
@@ -57,7 +64,7 @@ export default function Captions({
   }, [chooseTranslation, target, code]);
   const list = useRef<HTMLDivElement>(null);
   const [follow, setFollow] = useState(true);
-  const latest = `${segments.at(-1)?.id}:${segments.at(-1)?.text}:${JSON.stringify(segments.at(-1)?.translations)}`;
+  const latest = `${captions.at(-1)?.id}:${captions.at(-1)?.text}:${captions.at(-1)?.translation}`;
   useLayoutEffect(() => {
     if (follow && list.current)
       list.current.scrollTop = list.current.scrollHeight;
@@ -126,7 +133,7 @@ export default function Captions({
               setFollow(el.scrollHeight - el.scrollTop - el.clientHeight < 35);
           }}
         >
-          {segments.slice(-8).map((s) => (
+          {captions.map((s) => (
             <article className="caption" key={s.id}>
               <div className="caption-meta">
                 <Time value={s.createdAt} />
@@ -146,23 +153,28 @@ export default function Captions({
                 <>
                   {s.translations?.[target] ? (
                     <p className="translation">{s.translations[target]}</p>
-                  ) : s.translationErrors?.[target] ? (
+                  ) : null}
+                  {s.translationErrors?.[target] ? (
                     <p className="form-note">
                       {s.translationErrors[target]}{" "}
                       <button
                         onClick={() =>
                           void api(`/rooms/${code}/translations`, {
                             method: "POST",
-                            body: { language: target, retry: true },
+                            body: {
+                              language: target,
+                              retry: true,
+                              segmentIds: s.segmentIds,
+                            },
                           }).catch((e) => setTranslationError(e.message))
                         }
                       >
                         重试译文
                       </button>
                     </p>
-                  ) : (
+                  ) : s.translationPending ? (
                     <p className="form-note">等待句段完成并翻译…</p>
-                  )}
+                  ) : null}
                 </>
               ) : (
                 language === "both" &&

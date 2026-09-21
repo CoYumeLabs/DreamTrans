@@ -1,3 +1,5 @@
+import { useMemo } from "react";
+import { captionFeed } from "../captionFeed";
 import { MessageCircle, Radio } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useRoom } from "../useRoom";
@@ -6,7 +8,10 @@ import { Brand, Connection, ErrorNote, Pill } from "../components/ui";
 export default function Display({ code }: { code: string }) {
   const { room, connection, error } = useRoom(code);
   const question = room?.questions.find((q) => q.status === "showing");
-  const segment = room?.segments.at(-1);
+  const segment = useMemo(
+    () => captionFeed(room?.segments || []).at(-1),
+    [room?.segments],
+  );
   const url = `${window.location.origin}/rooms/${code}`;
   return (
     <div className="display-page">

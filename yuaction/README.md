@@ -161,3 +161,16 @@ docs/
 ```
 
 当前代码在 DreamTrans 主仓库的 `yuaction/` 目录维护，原 YuAction 历史通过保留父提交的合并导入。AnyQA 原项目作为业务参考保留。
+
+### 字幕聚合与源码构建
+
+YuAction 的普通字幕页和投屏页直接复用主站 `frontend/src/core/transcription/TranscriptFeedModel.ts`，与 Yufolo 使用同一套短句合并、句末断段、时间排序和译文关联规则。原始字幕 ID 和存储记录保留；对整张字幕卡提问时，服务端验证所有来源 ID 并保存完整引用。
+
+前端镜像需要主仓库作为构建上下文，以包含共享模型：
+
+```bash
+# 在 DreamTrans 仓库根目录执行
+docker build -f yuaction/frontend/Dockerfile -t yuaction-frontend:local .
+```
+
+`docker compose -f yuaction/compose.yml build` 已配置相同的上下文。已部署的 GHCR 镜像使用方式不变。
