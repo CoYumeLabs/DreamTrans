@@ -172,6 +172,119 @@ async function verifyStore(): Promise<void> {
   assert(store.getSegments({ offset: 1, limit: 1 })[0]?.id === second.record.id, 'range read')
 }
 
+async function verifyPartialThrottleWithDelayedTimer(): Promise<void> {
+  let now = 1_000
+  const socket = new FakeSocket()
+  const client = new SpeechmaticsProxyClient({
+    url: 'ws://dreamtrans.test/ws/speechmatics',
+    tokenProvider: () => 'token',
+    socketFactory: () => socket,
+    clock: () => now,
+    partialUpdateIntervalMs: 50,
+  })
+  const start = client.start()
+  await nextTurn()
+  socket.open()
+  socket.message({ message: 'RecognitionStarted' })
+  await start
+
+  const realSetTimeout = globalThis.setTimeout
+  const realClearTimeout = globalThis.clearTimeout
+  const timers = new Map<number, { due: number; callback: () => void }>()
+  let nextTimer = 0
+  const partials: Array<{ text: string | null; at: number }> = []
+  client.on('partial', partial => partials.push({ text: partial?.text ?? null, at: now }))
+  // Keep WebSocket message parsing asynchronous, but run partial timers only
+  // when explicitly requested. Advancing the clock alone models a busy main
+  // thread receiving a new message before its overdue timer callback runs.
+  globalThis.setTimeout = ((callback: () => void, delay = 0) => {
+    const id = ++nextTimer
+    timers.set(id, { due: now + delay, callback })
+    return id
+  }) as unknown as typeof globalThis.setTimeout
+  globalThis.clearTimeout = ((id: number) => {
+    timers.delete(id)
+  }) as unknown as typeof globalThis.clearTimeout
+  const runDueTimers = () => {
+    for (const [id, timer] of timers) {
+      if (timer.due <= now) {
+        timers.delete(id)
+        timer.callback()
+      }
+    }
+  }
+  const deliver = async (text: string, endTime: number, final = false) => {
+    socket.message({
+      message: final ? 'AddTranscript' : 'AddPartialTranscript',
+      metadata: { transcript: text, start_time: 0, end_time: endTime },
+      results: [{ alternatives: [{ speaker: 'S1' }] }],
+    })
+    await new Promise<void>(resolve => realSetTimeout(resolve, 0))
+  }
+  const visiblePartial = () => client.store.getSnapshot().activePartial?.text ?? null
+  try {
+    await deliver('First', 0.1)
+    assert(visiblePartial() === 'First', 'the first partial must appear immediately')
+    now = 1_010
+    await deliver('Coalesced', 0.2)
+    now = 1_040
+    await deliver('Latest within interval', 0.3)
+    now = 1_049
+    runDueTimers()
+    assert(visiblePartial() === 'First', 'normal partials must retain the 50ms throttle')
+    now = 1_050
+    runDueTimers()
+    assert(visiblePartial() === 'Latest within interval', 'the timer must apply the latest coalesced partial')
+
+    now = 1_060
+    await deliver('Overdue queued partial', 0.4)
+    now = 1_200 // Deliberately leave the timer due at 1_100 unexecuted.
+    await deliver('Fresh after main-thread stall', 0.5)
+    assert(visiblePartial() === 'Fresh after main-thread stall', 'an overdue timer must not delay a newly arrived partial')
+    const afterImmediate = partials.length
+    runDueTimers()
+    assert(partials.length === afterImmediate, 'the cancelled overdue timer must not republish or revert text')
+
+    now = 1_210
+    await deliver('Still throttled', 0.6)
+    now = 1_249
+    runDueTimers()
+    assert(visiblePartial() === 'Fresh after main-thread stall', 'immediate overdue recovery must restart the normal interval')
+    now = 1_250
+    runDueTimers()
+    assert(visiblePartial() === 'Still throttled', 'the next scheduled partial must still flush')
+
+    now = 1_260
+    await deliver('Superseded by final', 0.7)
+    now = 1_270
+    await deliver('Confirmed sentence.', 0.8, true)
+    assert(visiblePartial() === null, 'a final must immediately clear its partial')
+    now = 1_280
+    await deliver('Partial after final', 0.9)
+    now = 1_300
+    runDueTimers()
+    assert(visiblePartial() === 'Partial after final', 'a cancelled pre-final timer must not restore its older text')
+    assert(client.store.getSegmentAt(0)?.text === 'Confirmed sentence.', 'partial timers must never change confirmed text')
+
+    now = 1_310
+    await deliver('Superseded by empty', 1)
+    now = 1_320
+    await deliver('', 1)
+    assert(visiblePartial() === null, 'an empty partial must clear immediately')
+    const afterEmpty = partials.length
+    now = 1_400
+    runDueTimers()
+    assert(visiblePartial() === null && partials.length === afterEmpty, 'an empty partial must cancel the pending update')
+    const nonempty = partials.filter(partial => partial.text !== null)
+    assert(nonempty.every((partial, index) => index === 0 || partial.at - nonempty[index - 1].at >= 50), 'nonempty partial updates must remain at least 50ms apart')
+    assert(timers.size === 0, 'no partial timer may remain after cancellation')
+  } finally {
+    client.destroy()
+    globalThis.setTimeout = realSetTimeout
+    globalThis.clearTimeout = realClearTimeout
+  }
+}
+
 async function verifyClient(): Promise<void> {
   const sockets: FakeSocket[] = []
   const socketProtocols: string[][] = []
@@ -357,6 +470,7 @@ async function verifyCancelledStart(): Promise<void> {
 }
 
 await verifyStore()
+await verifyPartialThrottleWithDelayedTimer()
 await verifyClient()
 await verifyCancelledStart()
 

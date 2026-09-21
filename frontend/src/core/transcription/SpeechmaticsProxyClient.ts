@@ -1397,8 +1397,12 @@ export class SpeechmaticsProxyClient {
     const elapsed = this.clock() - this.lastPartialAppliedAt
     if (
       this.partialUpdateIntervalMs === 0 ||
-      (this.transcriptPartialTimer === null && elapsed >= this.partialUpdateIntervalMs)
+      elapsed >= this.partialUpdateIntervalMs
     ) {
+      // A busy main thread can deliver a newer message before an overdue
+      // timer runs. The interval has already elapsed: apply this result now
+      // and discard the queued partial so it cannot restore older text.
+      this.discardTranscriptPartial()
       this.applyTranscriptPartial(input)
       return
     }
