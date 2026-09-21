@@ -5,6 +5,8 @@ import { Brand, Button, ErrorNote } from "../components/ui";
 import RoomPage from "./RoomPage";
 import { useConfig } from "../hooks/useConfig";
 import AccountPanel from "../components/AccountPanel";
+import { useMessages } from "../i18n";
+import { LocaleSwitch } from "../i18n/LocaleSwitch";
 
 function HostGate({
   code,
@@ -13,6 +15,7 @@ function HostGate({
   code: string;
   onReady: (key: string) => void;
 }) {
+  const m = useMessages();
   const [key, setKey] = useState(readHostKey(code));
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -34,15 +37,16 @@ function HostGate({
   }, []);
   return (
     <div className="center-page">
+      <LocaleSwitch />
       <Brand />
       <form className="panel gate-form" onSubmit={verify}>
         <span className="empty-icon">
           <Settings2 size={26} />
         </span>
-        <h1>进入主持人工作台</h1>
-        <p>房间 {code} · 输入创建活动时保存的主持人密钥。</p>
+        <h1>{m.hostGate.title}</h1>
+        <p>{m.hostGate.body(code)}</p>
         <label>
-          主持人密钥
+          {m.hostGate.key}
           <input
             type="password"
             value={key}
@@ -53,10 +57,10 @@ function HostGate({
         </label>
         <ErrorNote message={error} />
         <Button className="primary full" disabled={busy}>
-          {busy ? "正在验证…" : "进入工作台"}
+          {busy ? m.hostGate.verifying : m.hostGate.enter}
         </Button>
         <a href={`/rooms/${code}`}>
-          以参与者身份加入
+          {m.hostGate.join}
           <ArrowRight size={15} />
         </a>
       </form>
@@ -65,6 +69,7 @@ function HostGate({
 }
 
 export default function Host({ code }: { code: string }) {
+  const m = useMessages();
   const { config } = useConfig();
   const [hostKey, setHostKey] = useState("");
   const [accountReady, setAccountReady] = useState(false);
@@ -74,6 +79,7 @@ export default function Host({ code }: { code: string }) {
       <RoomPage code={code} hostKey={readHostKey(code)} isHost />
     ) : (
       <div className="center-page">
+        <LocaleSwitch />
         <Brand />
         <AccountPanel
           onChange={(user) => {
@@ -87,7 +93,7 @@ export default function Host({ code }: { code: string }) {
           }}
         />
         <ErrorNote message={error} />
-        <a href={`/rooms/${code}`}>以参与者身份加入</a>
+        <a href={`/rooms/${code}`}>{m.hostGate.join}</a>
       </div>
     );
   return hostKey ? (

@@ -30,6 +30,8 @@ import QuestionCard from "../components/QuestionCard";
 import TranscriptionPanel from "../components/TranscriptionPanel";
 import AssistantPanel from "../components/AssistantPanel";
 import { useAssistant } from "../useAssistant";
+import { useMessages } from "../i18n";
+import { LocaleSwitch } from "../i18n/LocaleSwitch";
 
 export default function RoomPage({
   code,
@@ -40,6 +42,7 @@ export default function RoomPage({
   hostKey?: string;
   isHost?: boolean;
 }) {
+  const m = useMessages();
   const { room, connection, error: loadError, accept } = useRoom(code);
   const { config } = useConfig();
   const [error, setError] = useState("");
@@ -48,11 +51,9 @@ export default function RoomPage({
   const [quote, setQuote] = useState<Segment | null>(null);
   const [filter, setFilter] = useState("all");
   const [notice, setNotice] = useState("");
-  const [demoText, setDemoText] = useState(
-    "欢迎来到今天的课堂。任何时候有疑问，都可以在这里提出来。",
-  );
+  const [demoText, setDemoText] = useState(m.room.demoSample);
   const [demoTranslation, setDemoTranslation] = useState(
-    "Welcome to today’s class. Feel free to ask a question at any time.",
+    m.room.demoSampleTranslation,
   );
   const questionInput = useRef<HTMLTextAreaElement>(null);
   const inviteDialog = useRef<HTMLDialogElement>(null);
@@ -89,7 +90,7 @@ export default function RoomPage({
     ) {
       setContent("");
       setQuote(null);
-      setNotice("问题已发送，主持人和房间参与者都可以看到。");
+      setNotice(m.room.questionSent);
     }
   }
   async function sendDemo(e: FormEvent) {
@@ -101,7 +102,7 @@ export default function RoomPage({
         translation: demoTranslation,
       })
     )
-      setNotice("演示字幕已同步到房间。未采集音频，也未调用转录服务。");
+      setNotice(m.room.demoSent);
   }
   function quoteSegment(segment: Segment) {
     setQuote(segment);
@@ -114,11 +115,12 @@ export default function RoomPage({
   if (!room)
     return (
       <div className="center-page">
+        <LocaleSwitch />
         <Brand />
         <div className="panel loading-panel">
           <ErrorNote message={loadError} />
-          {!loadError && <p>正在进入房间…</p>}
-          <a href="/">返回活动空间</a>
+          {!loadError && <p>{m.room.loading}</p>}
+          <a href="/">{m.room.backHome}</a>
         </div>
       </div>
     );
@@ -132,10 +134,11 @@ export default function RoomPage({
       <header className="room-topbar">
         <Brand />
         <div className="room-topbar-right">
+          <LocaleSwitch />
           <Connection state={connection} />
           <a href="/" className="text-link">
             <ArrowLeft size={15} />
-            活动空间
+            {m.room.back}
           </a>
         </div>
       </header>
@@ -143,18 +146,18 @@ export default function RoomPage({
         <div className="room-heading">
           <div>
             <div className="eyebrow">
-              {host
-                ? "主持人工作台 / LIVE WORKSPACE"
-                : "一起参与 / LIVE SESSION"}
+              {host ? m.room.hostEyebrow : m.room.guestEyebrow}
             </div>
             <h1>{room.title}</h1>
             <div className="room-subtitle">
               <Pill tone={room.status === "live" ? "green" : "neutral"}>
                 <span className="tiny-dot" />
-                {room.status === "live" ? "活动进行中" : "活动已结束"}
+                {room.status === "live" ? m.room.live : m.room.ended}
               </Pill>
-              <span>{room.kind === "classroom" ? "互动课堂" : "现场演讲"}</span>
-              <span>房间 {room.code}</span>
+              <span>
+                {room.kind === "classroom" ? m.room.classroom : m.room.talk}
+              </span>
+              <span>{m.room.room(room.code)}</span>
             </div>
           </div>
           {host && (
@@ -164,7 +167,7 @@ export default function RoomPage({
                 onClick={() => inviteDialog.current?.showModal()}
               >
                 <Users size={17} />
-                邀请参与
+                {m.room.invite}
               </Button>
               <a
                 className="button soft"
@@ -173,7 +176,7 @@ export default function RoomPage({
                 rel="noreferrer"
               >
                 <Monitor size={17} />
-                打开大屏
+                {m.room.display}
               </a>
               <Button
                 className={room.status === "live" ? "outline" : "primary"}
@@ -181,9 +184,7 @@ export default function RoomPage({
                 onClick={() => {
                   if (
                     room.status !== "live" ||
-                    window.confirm(
-                      "结束后将停止接收新问题和字幕，已有内容仍可查看。确定结束？",
-                    )
+                    window.confirm(m.room.endConfirm)
                   )
                     void mutate(
                       "",
@@ -192,31 +193,31 @@ export default function RoomPage({
                     );
                 }}
               >
-                {room.status === "live" ? "结束活动" : "重新开启"}
+                {room.status === "live" ? m.room.end : m.room.reopen}
               </Button>
             </div>
           )}
         </div>
-        <nav className="room-shortcuts" aria-label="活动内容">
+        <nav className="room-shortcuts" aria-label={m.room.shortcuts}>
           {host && config?.yufoloConnected && (
             <a href="#transcription">
               <AudioLines size={15} />
-              转录控制
+              {m.room.transcription}
             </a>
           )}
           <a href="#captions">
             <AudioLines size={15} />
-            共享字幕
+            {m.room.captions}
           </a>
           {!host && room.status === "live" && (
             <a href="#ask">
               <Send size={15} />
-              我要提问
+              {m.room.ask}
             </a>
           )}
           <a href="#questions">
             <MessageCircle size={15} />
-            {host ? "现场提问" : "大家的提问"}
+            {host ? m.room.hostQuestions : m.room.guestQuestions}
             <span>{room.questions.length}</span>
           </a>
         </nav>
@@ -234,7 +235,7 @@ export default function RoomPage({
                 <MessageCircle size={20} />
               </span>
               <span>
-                收到的问题
+                {m.room.received}
                 <strong>
                   {room.questions.length.toString().padStart(2, "0")}
                 </strong>
@@ -245,7 +246,7 @@ export default function RoomPage({
                 <CircleHelp size={20} />
               </span>
               <span>
-                等待回应
+                {m.room.waiting}
                 <strong>
                   {room.questions
                     .filter((q) => q.status === "pending")
@@ -259,7 +260,7 @@ export default function RoomPage({
                 <Check size={20} />
               </span>
               <span>
-                已经解答
+                {m.room.answered}
                 <strong>
                   {room.questions
                     .filter((q) => q.status === "answered")
@@ -274,7 +275,7 @@ export default function RoomPage({
           <section className="spotlight">
             <span>
               <Radio size={16} />
-              现在正在讨论
+              {m.room.discussing}
             </span>
             <h2>{showing.content}</h2>
           </section>
@@ -293,17 +294,17 @@ export default function RoomPage({
             {!host && (
               <section className="panel question-compose" id="ask">
                 <div className="panel-heading">
-                  <h3>你的问题，值得被听见。</h3>
+                  <h3>{m.room.composeTitle}</h3>
                   <MessageCircle size={19} />
                 </div>
                 <form onSubmit={submitQuestion}>
                   {quote && (
                     <div className="quote-preview">
-                      <span>关于这段字幕：{quote.text}</span>
+                      <span>{m.room.quote(quote.text)}</span>
                       <button
                         type="button"
                         className="icon-button"
-                        aria-label="取消引用"
+                        aria-label={m.room.clearQuote}
                         onClick={() => setQuote(null)}
                       >
                         <X size={16} />
@@ -312,8 +313,8 @@ export default function RoomPage({
                   )}
                   <textarea
                     ref={questionInput}
-                    aria-label="你的问题"
-                    placeholder="有什么疑问，或者想进一步了解的地方？"
+                    aria-label={m.room.questionLabel}
+                    placeholder={m.room.questionPlaceholder}
                     value={content}
                     onChange={(e) => setContent(e.target.value)}
                     required
@@ -321,7 +322,7 @@ export default function RoomPage({
                     disabled={room.status !== "live"}
                   />
                   <div className="compose-footer">
-                    <small>匿名提问 · 房间内公开</small>
+                    <small>{m.room.anonymous}</small>
                     <Button
                       type="submit"
                       className="primary"
@@ -330,7 +331,7 @@ export default function RoomPage({
                       }
                     >
                       <Send size={16} />
-                      {room.status === "live" ? "发送问题" : "活动已结束"}
+                      {room.status === "live" ? m.room.send : m.room.closed}
                     </Button>
                   </div>
                 </form>
@@ -339,17 +340,17 @@ export default function RoomPage({
             <section className="panel questions-panel" id="questions">
               <div className="panel-heading">
                 <h3>
-                  {host ? "现场提问" : "大家的提问"}{" "}
+                  {host ? m.room.hostQuestions : m.room.guestQuestions}{" "}
                   <span className="count">{room.questions.length}</span>
                 </h3>
                 <MessageCircle size={18} />
               </div>
               <div className="tabs">
                 {[
-                  ["all", "全部"],
-                  ["pending", "待回应"],
-                  ["showing", "正在展示"],
-                  ["answered", "已解答"],
+                  ["all", m.room.all],
+                  ["pending", m.room.pending],
+                  ["showing", m.room.showing],
+                  ["answered", m.room.answeredTab],
                 ].map(([value, label]) => (
                   <button
                     key={value}
@@ -375,7 +376,7 @@ export default function RoomPage({
                       )}
                       onGenerate={() => void assistant.generate(q.id)}
                       onDelete={() => {
-                        if (confirm("删除这个问题及其 AI 草稿？"))
+                        if (confirm(m.room.deleteConfirm))
                           void mutate(
                             `/questions/${q.id}`,
                             undefined,
@@ -391,14 +392,10 @@ export default function RoomPage({
               ) : (
                 <Empty
                   title={
-                    filter === "all"
-                      ? "给第一个问题一点时间"
-                      : "这里暂时没有问题"
+                    filter === "all" ? m.room.emptyAll : m.room.emptyFiltered
                   }
                 >
-                  {host
-                    ? "分享房间码，让台下的想法来到这里。"
-                    : "关于刚才的内容，你有什么想问的吗？"}
+                  {host ? m.room.emptyHost : m.room.emptyGuest}
                 </Empty>
               )}
             </section>
@@ -420,11 +417,11 @@ export default function RoomPage({
                   <AudioLines size={18} />
                   YUFOLO CONNECTION
                 </span>
-                <h3>让所有人，跟上同一段讲述。</h3>
+                <h3>{m.room.integrationTitle}</h3>
                 <p>
                   {config?.yufoloConnected
-                    ? "主持人开启一次转录，大家同步阅读同一份字幕。"
-                    : "共享转录尚未配置，连接 Yufolo 后即可开始。"}
+                    ? m.room.integrationLinked
+                    : m.room.integrationWaiting}
                 </p>
                 <Pill
                   tone={
@@ -432,13 +429,13 @@ export default function RoomPage({
                   }
                 >
                   {room.transcription === "recording"
-                    ? "正在转录"
+                    ? m.room.recording
                     : room.transcription === "error" ||
                         room.transcription === "interrupted"
-                      ? "转录已中断，等待主持人恢复"
+                      ? m.room.interrupted
                       : config?.yufoloConnected
-                        ? "等待主持人开启转录"
-                        : "真实转录尚未连接"}
+                        ? m.room.waitingHost
+                        : m.room.notConnected}
                 </Pill>
               </section>
             )}
@@ -446,17 +443,15 @@ export default function RoomPage({
             {host && config?.demo && (
               <section className="panel demo-panel">
                 <div className="panel-heading">
-                  <h3>体验字幕同步</h3>
-                  <Pill tone="neutral">仅演示</Pill>
+                  <h3>{m.room.demoTitle}</h3>
+                  <Pill tone="neutral">{m.room.demoOnly}</Pill>
                 </div>
-                <p className="form-note">
-                  输入一句话，查看其他参与者和大屏的同步效果。
-                </p>
+                <p className="form-note">{m.room.demoBody}</p>
                 <form onSubmit={sendDemo}>
                   <label>
-                    原文
+                    {m.room.demoOriginal}
                     <textarea
-                      aria-label="演示字幕原文"
+                      aria-label={m.room.demoOriginalLabel}
                       value={demoText}
                       onChange={(e) => setDemoText(e.target.value)}
                       required
@@ -464,9 +459,9 @@ export default function RoomPage({
                     />
                   </label>
                   <label>
-                    译文（可选）
+                    {m.room.demoTranslation}
                     <textarea
-                      aria-label="演示字幕译文"
+                      aria-label={m.room.demoTranslationLabel}
                       value={demoTranslation}
                       onChange={(e) => setDemoTranslation(e.target.value)}
                       maxLength={2000}
@@ -478,7 +473,7 @@ export default function RoomPage({
                     disabled={busy || room.status !== "live"}
                   >
                     <Radio size={16} />
-                    发送演示字幕
+                    {m.room.demoSend}
                   </Button>
                 </form>
               </section>
@@ -487,14 +482,12 @@ export default function RoomPage({
               <details className="panel key-panel">
                 <summary>
                   <Settings2 size={16} />
-                  主持人访问密钥
+                  {m.room.hostKey}
                 </summary>
-                <p>
-                  此标签页会记住密钥。请妥善保存，以便关闭标签页后重新管理活动；不要分享给参与者。
-                </p>
+                <p>{m.room.hostKeyBody}</p>
                 <input
                   type="password"
-                  aria-label="主持人访问密钥"
+                  aria-label={m.room.hostKeyLabel}
                   readOnly
                   value={hostKey}
                   onFocus={(e) => e.target.select()}
@@ -504,27 +497,27 @@ export default function RoomPage({
                   onClick={async () => {
                     try {
                       await navigator.clipboard.writeText(hostKey);
-                      setNotice("主持人密钥已复制，请保存在安全的地方。");
+                      setNotice(m.room.copied);
                     } catch {
-                      setError("无法使用剪贴板，请选中密钥后手动复制。");
+                      setError(m.room.copyFailed);
                     }
                   }}
                 >
                   <Copy size={14} />
-                  复制密钥
+                  {m.room.copy}
                 </Button>
               </details>
             )}
             <p className="aside-signature">
-              少一点距离，多一点回应。
+              {m.room.signature}
               <br />
               <span>YUAction · BY COYUME</span>
             </p>
           </aside>
         </div>
         <footer>
-          <span>YuAction · 每个声音都有位置</span>
-          <span>{host ? "主持人工作台" : "参与者空间"}</span>
+          <span>YuAction · {m.room.footer}</span>
+          <span>{host ? m.room.hostSpace : m.room.guestSpace}</span>
         </footer>
       </main>
       {host && (
@@ -536,11 +529,11 @@ export default function RoomPage({
           <div className="dialog-heading">
             <div>
               <span className="eyebrow">INVITE YOUR AUDIENCE</span>
-              <h2 id="invite-activity-title">分享这个现场</h2>
+              <h2 id="invite-activity-title">{m.room.inviteTitle}</h2>
             </div>
             <button
               className="icon-button"
-              aria-label="关闭邀请"
+              aria-label={m.room.closeInvite}
               onClick={() => inviteDialog.current?.close()}
             >
               <X size={20} />

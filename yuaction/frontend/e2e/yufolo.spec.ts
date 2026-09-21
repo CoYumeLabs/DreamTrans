@@ -30,7 +30,7 @@ test("Yufolo login, one microphone, shared captions, pause and account recovery"
     page.getByRole("button", { name: "开始转录", exact: true }),
   ).toBeVisible();
   const guestURL = hostURL.replace(/\/host$/, "");
-  const guestContext = await browser.newContext();
+  const guestContext = await browser.newContext({ locale: "zh-CN" });
   const guest = await guestContext.newPage();
   await guest.goto(guestURL);
   await expect(guest.getByRole("heading", { name: title })).toBeVisible();
@@ -59,7 +59,7 @@ test("Yufolo login, one microphone, shared captions, pause and account recovery"
     ),
   ).toBeTruthy();
   await page.setViewportSize({ width: 1280, height: 720 });
-  const recoveredContext = await browser.newContext();
+  const recoveredContext = await browser.newContext({ locale: "zh-CN" });
   const recovered = await recoveredContext.newPage();
   await recovered.goto(hostURL);
   await recovered
@@ -172,7 +172,7 @@ test("Yufolo knowledge upload, private automatic AI drafts, indexing and deletio
   await expect(page.getByRole("dialog")).toContainText("0.02 DP");
   await page.getByRole("button", { name: "确认并建立索引" }).click();
   await expect(page.getByRole("dialog")).not.toBeVisible();
-  const context = await browser.newContext();
+  const context = await browser.newContext({ locale: "zh-CN" });
   const guest = await context.newPage();
   await guest.goto(page.url().replace(/\/host$/, ""));
   await expect(guest.getByRole("heading", { name: "资料与 AI" })).toHaveCount(

@@ -2478,6 +2478,56 @@ footer > span:first-child {
 .mobile-brand {
   display: none;
 }
+.topbar-tools,
+.display-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+.ya-locale-switch {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 3px;
+  gap: 2px;
+  background: #eef0f3;
+  border-radius: 999px;
+}
+.ya-locale-switch button {
+  min-height: 28px;
+  padding: 2px 10px;
+  color: #70717e;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 650;
+}
+.ya-locale-switch button.is-active {
+  color: #242632;
+  background: #fff;
+  box-shadow: 0 1px 2px #25223514;
+}
+.center-page {
+  position: relative;
+}
+.center-page > .ya-locale-switch {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+}
+.display-page .ya-locale-switch {
+  background: #ffffff14;
+}
+.display-page .ya-locale-switch button {
+  color: #c9c4d6;
+}
+.display-page .ya-locale-switch button.is-active {
+  color: #f4f0fa;
+  background: #ffffff22;
+  box-shadow: none;
+}
 .activity-card-header {
   display: flex;
   align-items: center;
@@ -2495,8 +2545,16 @@ footer > span:first-child {
     width: 31px;
     height: 31px;
   }
-  .topbar .workspace-breadcrumb {
+  .topbar .workspace-breadcrumb,
+  .topbar-note {
     display: none;
+  }
+  .room-topbar-right {
+    gap: 10px;
+  }
+  .ya-locale-switch button {
+    padding: 2px 8px;
+    font-size: 11px;
   }
 }
 

@@ -3,6 +3,8 @@ import { ArrowDown, AudioLines, MessageCircle } from "lucide-react";
 import { api, type Segment } from "../api";
 import { captionFeed } from "../captionFeed";
 import { Empty, Pill, Time } from "./ui";
+import { useMessages } from "../i18n";
+import { localizeError } from "../i18n/errors";
 
 export default function Captions({
   segments,
@@ -17,6 +19,7 @@ export default function Captions({
   code?: string;
   chooseTranslation?: boolean;
 }) {
+  const m = useMessages();
   const [language, setLanguage] = useState("both");
   const [target, setTarget] = useState(
     () => localStorage.getItem(`yuaction.translation.${code}`) || "",
@@ -77,11 +80,11 @@ export default function Captions({
       <div className="panel-heading">
         <h3>
           <AudioLines size={18} />
-          共享字幕
+          {m.captions.title}
         </h3>
         {chooseTranslation ? (
           <select
-            aria-label="我的译文语言"
+            aria-label={m.captions.myLanguage}
             value={target}
             onChange={(e) => {
               setTarget(e.target.value);
@@ -92,7 +95,7 @@ export default function Captions({
               );
             }}
           >
-            <option value="">只看原文</option>
+            <option value="">{m.captions.originalOnly}</option>
             {[
               ["cmn", "中文"],
               ["en", "English"],
@@ -109,18 +112,18 @@ export default function Captions({
           </select>
         ) : segments.some((s) => s.translation) ? (
           <select
-            aria-label="字幕显示方式"
+            aria-label={m.captions.display}
             value={language}
             onChange={(e) => setLanguage(e.target.value)}
           >
-            <option value="both">双语</option>
-            <option value="original">原文</option>
+            <option value="both">{m.captions.both}</option>
+            <option value="original">{m.captions.original}</option>
           </select>
         ) : null}
       </div>
       {translationError && (
         <p className="form-note" role="status">
-          {translationError}
+          {localizeError(translationError)}
         </p>
       )}
       {segments.length ? (
@@ -137,14 +140,16 @@ export default function Captions({
             <article className="caption" key={s.id}>
               <div className="caption-meta">
                 <Time value={s.createdAt} />
-                {s.source === "demo" && <Pill tone="neutral">演示字幕</Pill>}
+                {s.source === "demo" && (
+                  <Pill tone="neutral">{m.captions.demo}</Pill>
+                )}
                 {onQuote && (
                   <button
                     onClick={() => onQuote(s)}
-                    aria-label={`针对字幕提问：${s.text}`}
+                    aria-label={m.captions.askAbout(s.text)}
                   >
                     <MessageCircle size={14} />
-                    针对这段提问
+                    {m.captions.ask}
                   </button>
                 )}
               </div>
@@ -156,7 +161,7 @@ export default function Captions({
                   ) : null}
                   {s.translationErrors?.[target] ? (
                     <p className="form-note">
-                      {s.translationErrors[target]}{" "}
+                      {localizeError(s.translationErrors[target])}{" "}
                       <button
                         onClick={() =>
                           void api(`/rooms/${code}/translations`, {
@@ -169,11 +174,11 @@ export default function Captions({
                           }).catch((e) => setTranslationError(e.message))
                         }
                       >
-                        重试译文
+                        {m.captions.retry}
                       </button>
                     </p>
                   ) : s.translationPending ? (
-                    <p className="form-note">等待句段完成并翻译…</p>
+                    <p className="form-note">{m.captions.pending}</p>
                   ) : null}
                 </>
               ) : (
@@ -184,14 +189,14 @@ export default function Captions({
           ))}
         </div>
       ) : (
-        <Empty icon={<AudioLines size={27} />} title="等待共享字幕">
-          <span>主持人连接转录后，大家将在这里同步看到内容。</span>
+        <Empty icon={<AudioLines size={27} />} title={m.captions.empty}>
+          <span>{m.captions.emptyBody}</span>
         </Empty>
       )}
       {!follow && (
         <button className="caption-follow" onClick={() => setFollow(true)}>
           <ArrowDown size={14} />
-          回到最新字幕
+          {m.captions.follow}
         </button>
       )}
     </section>

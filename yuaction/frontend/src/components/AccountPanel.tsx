@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { api } from "../api";
 import { Button, ErrorNote } from "./ui";
 import { ArrowUpRight, AudioLines, LogOut, ShieldCheck } from "lucide-react";
+import { useMessages } from "../i18n";
 
 export type Account = { id: string; name: string; email: string };
 export default function AccountPanel({
@@ -9,6 +10,7 @@ export default function AccountPanel({
 }: {
   onChange: (user: Account | null) => void;
 }) {
+  const m = useMessages();
   const [user, setUser] = useState<Account | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -54,16 +56,16 @@ export default function AccountPanel({
             <span className="account-symbol">
               <ShieldCheck size={22} />
             </span>
-            <span className="eyebrow">你的工作空间</span>
+            <span className="eyebrow">{m.account.workspace}</span>
           </div>
           <h3>{user.name || user.email}</h3>
-          <p>已连接 Yufolo · 活动归属于此账号</p>
+          <p>{m.account.connected}</p>
           <div className="account-benefit">
             <AudioLines size={18} />
             <span>
-              从现场到课后
+              {m.account.benefit}
               <br />
-              <small>转录记录同步保存在 Yufolo</small>
+              <small>{m.account.benefitMeta}</small>
             </span>
           </div>
           <Button
@@ -79,7 +81,7 @@ export default function AccountPanel({
             }}
           >
             <LogOut size={15} />
-            退出登录
+            {m.account.logout}
           </Button>
         </>
       ) : (
@@ -89,12 +91,12 @@ export default function AccountPanel({
               <AudioLines size={21} />
             </span>
             <div>
-              <h3>准备好开讲了吗？</h3>
-              <p>使用 Yufolo 账号登录</p>
+              <h3>{m.account.ready}</h3>
+              <p>{m.account.loginHint}</p>
             </div>
           </div>
           <label>
-            邮箱
+            {m.account.email}
             <input
               type="email"
               autoComplete="username"
@@ -105,22 +107,22 @@ export default function AccountPanel({
             />
           </label>
           <label>
-            密码
+            {m.account.password}
             <input
               type="password"
               autoComplete="current-password"
-              placeholder="输入你的密码"
+              placeholder={m.account.passwordPlaceholder}
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
           </label>
           <Button className="primary" disabled={busy}>
-            {busy ? "正在登录…" : "登录 Yufolo"}
+            {busy ? m.account.signingIn : m.account.login}
             <ArrowUpRight size={16} />
           </Button>
           <p className="account-hint">
-            <ShieldCheck size={13} /> 听众无需登录，扫码即可参与
+            <ShieldCheck size={13} /> {m.account.audience}
           </p>
         </form>
       )}

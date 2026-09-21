@@ -9,6 +9,14 @@ export default defineConfig({
     baseURL: "http://127.0.0.1:5175",
     trace: "retain-on-failure",
     ...devices["Desktop Chrome"],
+    locale: "zh-CN",
+    launchOptions: {
+      args: [
+        "--no-proxy-server",
+        "--disable-background-networking",
+        "--disable-component-update",
+      ],
+    },
   },
   projects: [
     { name: "demo", testIgnore: /yufolo\.spec\.ts/ },
@@ -20,6 +28,9 @@ export default defineConfig({
         permissions: ["microphone"],
         launchOptions: {
           args: [
+            "--no-proxy-server",
+            "--disable-background-networking",
+            "--disable-component-update",
             "--use-fake-device-for-media-stream",
             "--use-fake-ui-for-media-stream",
           ],

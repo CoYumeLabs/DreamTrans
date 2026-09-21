@@ -3,6 +3,7 @@ import type { AnswerDraft as Draft } from "../useAssistant";
 import AnswerDraft from "./AnswerDraft";
 import type { Question } from "../api";
 import { Button, Pill, Time } from "./ui";
+import { useMessages } from "../i18n";
 
 export default function QuestionCard({
   question: q,
@@ -23,11 +24,13 @@ export default function QuestionCard({
   draft?: Draft;
   aiEnabled?: boolean;
 }) {
+  const m = useMessages();
   return (
     <article className={`question-card ${q.status}`}>
       <div className="question-meta">
         <span className="question-author">
-          <span className="avatar">?</span>一位参与者
+          <span className="avatar">?</span>
+          {m.question.someone}
           <Time value={q.createdAt} />
         </span>
         <Pill
@@ -40,19 +43,19 @@ export default function QuestionCard({
           }
         >
           {q.status === "showing"
-            ? "正在展示"
+            ? m.question.showing
             : q.status === "answered"
-              ? "已解答"
-              : "待回应"}
+              ? m.question.answered
+              : m.question.pending}
         </Pill>
       </div>
       {q.segmentId && (
         <details className="question-quote">
           <summary className="question-context">
             <AudioLines size={13} />
-            来自一段共享字幕 · 查看原文
+            {m.question.fromCaption}
           </summary>
-          <blockquote>{q.quotedText || "引用字幕暂不可用"}</blockquote>
+          <blockquote>{q.quotedText || m.question.quoteMissing}</blockquote>
         </details>
       )}
       <p>{q.content}</p>
@@ -68,7 +71,7 @@ export default function QuestionCard({
             onClick={onGenerate}
           >
             <Sparkles size={14} />
-            {draft ? "重新生成 AI 建议" : "生成 AI 建议"}
+            {draft ? m.question.regenerate : m.question.generate}
           </Button>
           {q.status !== "showing" && (
             <Button
@@ -77,7 +80,7 @@ export default function QuestionCard({
               onClick={() => onStatus("showing")}
             >
               <Monitor size={14} />
-              展示问题
+              {m.question.show}
             </Button>
           )}
           {q.status !== "answered" && (
@@ -87,7 +90,7 @@ export default function QuestionCard({
               onClick={() => onStatus("answered")}
             >
               <Check size={15} />
-              标记已解答
+              {m.question.markAnswered}
             </Button>
           )}
           {q.status !== "pending" && (
@@ -96,16 +99,16 @@ export default function QuestionCard({
               disabled={disabled}
               onClick={() => onStatus("pending")}
             >
-              移回待回应
+              {m.question.moveBack}
             </Button>
           )}
           <Button
             className="text small"
             onClick={onDelete}
-            aria-label={`删除问题：${q.content}`}
+            aria-label={m.question.deleteLabel(q.content)}
           >
             <Trash2 size={14} />
-            删除
+            {m.question.delete}
           </Button>
         </div>
       )}

@@ -3,6 +3,7 @@ import { api, type Room } from "../api";
 import { RecordingTransport } from "../RecordingTransport";
 import { Button, ErrorNote, Pill } from "./ui";
 import { AudioLines, Mic, Pause } from "lucide-react";
+import { useMessages } from "../i18n";
 
 type Link = {
   sessionId: string;
@@ -19,16 +20,6 @@ type Capture = {
   flush?: () => void;
   timer?: ReturnType<typeof setTimeout>;
 };
-const languages = [
-  ["cmn_en", "自动（中英混合）"],
-  ["cmn", "中文"],
-  ["en", "英语"],
-  ["ja", "日语"],
-  ["ko", "韩语"],
-  ["de", "德语"],
-  ["fr", "法语"],
-  ["es", "西班牙语"],
-];
 export default function TranscriptionPanel({
   room,
   hostKey,
@@ -36,6 +27,17 @@ export default function TranscriptionPanel({
   room: Room;
   hostKey: string;
 }) {
+  const m = useMessages();
+  const languages = [
+    ["cmn_en", m.transcription.auto],
+    ["cmn", m.transcription.cmn],
+    ["en", m.transcription.en],
+    ["ja", m.transcription.ja],
+    ["ko", m.transcription.ko],
+    ["de", m.transcription.de],
+    ["fr", m.transcription.fr],
+    ["es", m.transcription.es],
+  ];
   const [source, setSource] = useState("cmn");
 
   const [link, setLink] = useState<Link | null>(null);
@@ -65,15 +67,20 @@ export default function TranscriptionPanel({
           setSource(v.sourceLanguage);
         }
       })
-      .catch((e) => setError(e.message));
-    const leave = () => {
+      .catch((e) => setError((e as Error).message));
+    const cancel = () => {
       generation.current++;
       cleanup();
     };
-    window.addEventListener("pagehide", leave);
+    // A hide event before the microphone is open must not abandon the start
+    // while the button still says it is connecting.
+    const onHide = () => {
+      if (capture.current.stream || capture.current.transport) cancel();
+    };
+    window.addEventListener("pagehide", onHide);
     return () => {
-      window.removeEventListener("pagehide", leave);
-      leave();
+      window.removeEventListener("pagehide", onHide);
+      cancel();
     };
   }, [room.code]);
   useEffect(() => {
@@ -89,9 +96,7 @@ export default function TranscriptionPanel({
     const own = ++generation.current;
     try {
       if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia)
-        throw new Error(
-          "麦克风需要 HTTPS 或 localhost，请使用安全地址打开主持人页面。",
-        );
+        throw new Error(m.transcription.insecure);
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
@@ -101,6 +106,7 @@ export default function TranscriptionPanel({
       });
       if (generation.current !== own) {
         stream.getTracks().forEach((t) => t.stop());
+        setState("idle");
         return;
       }
       const c: Capture = { stream };
@@ -116,6 +122,7 @@ export default function TranscriptionPanel({
       });
       if (generation.current !== own) {
         releaseMic(c);
+        setState("idle");
         return;
       }
       setLink(next);
@@ -161,7 +168,7 @@ export default function TranscriptionPanel({
               .connect(silent)
               .connect(context.destination);
             stream.getTracks().forEach((track) => {
-              track.onended = () => fail("麦克风已断开，请重新开始转录。");
+              track.onended = () => fail(m.transcription.micEnded);
             });
             setState("recording");
           } catch (e) {
@@ -207,26 +214,26 @@ export default function TranscriptionPanel({
         </span>
         <div>
           <span className="eyebrow">LIVE TRANSCRIPTION</span>
-          <h3>共享实时转录</h3>
+          <h3>{m.transcription.title}</h3>
         </div>
         <AudioLines className="control-wave" size={28} />
       </div>
       <Pill tone={state === "recording" ? "green" : "neutral"}>
         {state === "recording"
-          ? "正在采集麦克风"
+          ? m.transcription.recording
           : state === "starting"
-            ? "正在连接…"
+            ? m.transcription.starting
             : state === "stopping"
-              ? "正在保存最后的字幕…"
+              ? m.transcription.stopping
               : recordingElsewhere
-                ? "其他主持端正在转录"
-                : "麦克风未开启"}
+                ? m.transcription.elsewhere
+                : m.transcription.idle}
       </Pill>
       <div className="language-fields">
         <label>
-          原文语言
+          {m.transcription.source}
           <select
-            aria-label="原文语言"
+            aria-label={m.transcription.sourceLabel}
             value={source}
             disabled={working || !!link?.sessionId}
             onChange={(e) => {
@@ -241,20 +248,15 @@ export default function TranscriptionPanel({
           </select>
         </label>
       </div>
-      <p>
-        仅此主持端采集音频，参与者自行选择译文语言；同一种译文共享生成。转录与
-        AI 翻译使用你的 Yufolo 余额。
-      </p>
+      <p>{m.transcription.body}</p>
       {source === "cmn_en" && (
-        <p className="form-note">
-          自动模式识别中文与英文混合讲话；其他语种请手动选择。
-        </p>
+        <p className="form-note">{m.transcription.autoHint}</p>
       )}
       <ErrorNote message={error} />
       {state === "recording" ? (
         <Button className="outline full" onClick={() => void stop()}>
           <Pause size={17} />
-          暂停转录
+          {m.transcription.pause}
         </Button>
       ) : state === "starting" ? (
         <Button
@@ -265,7 +267,7 @@ export default function TranscriptionPanel({
             setState("idle");
           }}
         >
-          取消连接
+          {m.transcription.cancel}
         </Button>
       ) : (
         <Button
@@ -275,19 +277,15 @@ export default function TranscriptionPanel({
         >
           <Mic size={17} />
           {working
-            ? "请稍候…"
+            ? m.transcription.wait
             : recordingElsewhere
-              ? "正在接收共享字幕"
+              ? m.transcription.receiving
               : room.status !== "live"
-                ? "活动已结束"
-                : "开始转录"}
+                ? m.transcription.ended
+                : m.transcription.start}
         </Button>
       )}
-      {link?.linked && (
-        <p className="form-note">
-          已关联 Yufolo 会话，确认的字幕会同步保存到你的 Yufolo 账号。
-        </p>
-      )}
+      {link?.linked && <p className="form-note">{m.transcription.linked}</p>}
     </section>
   );
 }

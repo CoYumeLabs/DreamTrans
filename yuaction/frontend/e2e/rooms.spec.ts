@@ -26,10 +26,11 @@ test("host, two participants and display share questions and captions", async ({
     page.getByRole("button", { name: "邀请参与", exact: true }),
   ).toBeFocused();
   const one = await browser.newContext({
+    locale: "zh-CN",
     viewport: { width: 390, height: 844 },
   });
-  const two = await browser.newContext();
-  const displayContext = await browser.newContext();
+  const two = await browser.newContext({ locale: "zh-CN" });
+  const displayContext = await browser.newContext({ locale: "zh-CN" });
   const p1 = await one.newPage(),
     p2 = await two.newPage(),
     screen = await displayContext.newPage();

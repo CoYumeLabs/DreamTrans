@@ -4,8 +4,11 @@ import { MessageCircle, Radio } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useRoom } from "../useRoom";
 import { Brand, Connection, ErrorNote, Pill } from "../components/ui";
+import { useMessages } from "../i18n";
+import { LocaleSwitch } from "../i18n/LocaleSwitch";
 
 export default function Display({ code }: { code: string }) {
+  const m = useMessages();
   const { room, connection, error } = useRoom(code);
   const question = room?.questions.find((q) => q.status === "showing");
   const segment = useMemo(
@@ -17,25 +20,30 @@ export default function Display({ code }: { code: string }) {
     <div className="display-page">
       <header>
         <Brand light />
-        <Connection state={connection} />
+        <div className="display-tools">
+          <LocaleSwitch />
+          <Connection state={connection} />
+        </div>
       </header>
       <main>
-        <div className="display-eyebrow">{room?.title || "正在连接房间"}</div>
+        <div className="display-eyebrow">
+          {room?.title || m.display.connecting}
+        </div>
         <ErrorNote message={error} />
         {room?.status === "ended" ? (
           <>
-            <Pill>活动已结束</Pill>
+            <Pill>{m.display.ended}</Pill>
             <h1>
-              谢谢每一次提问，
+              {m.display.thanks}
               <br />
-              和每一个认真倾听的你。
+              {m.display.thanksLine}
             </h1>
           </>
         ) : question ? (
           <>
             <span className="display-label">
               <MessageCircle size={20} />
-              现在，让我们聊聊
+              {m.display.discuss}
             </span>
             <h1 className="display-question">{question.content}</h1>
           </>
@@ -43,20 +51,20 @@ export default function Display({ code }: { code: string }) {
           <>
             <span className="display-label">
               <Radio size={20} />
-              让每个声音，都被听见
+              {m.display.listen}
             </span>
             <h1>
-              好的交流，
+              {m.display.start}
               <br />
-              从一个问题开始。
+              {m.display.startLine}
             </h1>
-            <p>扫码加入，分享你的疑问与想法。</p>
+            <p>{m.display.scan}</p>
           </>
         )}
         {segment && (
           <div className="display-caption">
             {segment.source === "demo" && (
-              <span className="display-demo">演示字幕</span>
+              <span className="display-demo">{m.display.demo}</span>
             )}
             <p>{segment.text}</p>
             {segment.translation && (
@@ -69,7 +77,7 @@ export default function Display({ code }: { code: string }) {
         <div>
           <span>JOIN THE CONVERSATION</span>
           <strong>{code}</strong>
-          <small>打开 YuAction，输入房间码</small>
+          <small>{m.display.joinHint}</small>
         </div>
         <div className="display-qr">
           <QRCodeSVG value={url} size={112} level="M" />

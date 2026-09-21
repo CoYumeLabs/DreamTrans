@@ -1,12 +1,15 @@
 import type { ReactNode, ButtonHTMLAttributes } from "react";
 import { AudioLines, CircleHelp, MessageCircle } from "lucide-react";
+import { intlLocale, useLocale, useMessages } from "../i18n";
+import { localizeError } from "../i18n/errors";
 
 export function Brand({ light = false }: { light?: boolean }) {
+  const m = useMessages();
   return (
     <a
       href="/"
       className={`brand ${light ? "light" : ""}`}
-      aria-label="YuAction 首页"
+      aria-label={m.brand.home}
     >
       <span className="brand-symbol">
         <AudioLines size={22} strokeWidth={2.5} />
@@ -31,10 +34,11 @@ export function Button({
 }
 
 export function ErrorNote({ message }: { message: string }) {
-  return message ? (
+  const text = localizeError(message);
+  return text ? (
     <div className="error-note" role="alert">
       <CircleHelp size={17} />
-      {message}
+      {text}
     </div>
   ) : null;
 }
@@ -50,9 +54,10 @@ export function Pill({
 }
 
 export function Time({ value }: { value: string }) {
+  const [locale] = useLocale();
   return (
     <time dateTime={value}>
-      {new Date(value).toLocaleTimeString("zh-CN", {
+      {new Date(value).toLocaleTimeString(intlLocale(locale), {
         hour: "2-digit",
         minute: "2-digit",
       })}
@@ -61,6 +66,7 @@ export function Time({ value }: { value: string }) {
 }
 
 export function Connection({ state }: { state: string }) {
+  const m = useMessages();
   return (
     <span
       className={`connection ${state === "live" ? "" : "waiting"}`}
@@ -68,10 +74,10 @@ export function Connection({ state }: { state: string }) {
     >
       <i />
       {state === "live"
-        ? "实时同步中"
+        ? m.connection.live
         : state === "connecting"
-          ? "正在连接"
-          : "连接中断，正在重连"}
+          ? m.connection.connecting
+          : m.connection.interrupted}
     </span>
   );
 }

@@ -1,12 +1,15 @@
 import ReactMarkdown from "react-markdown";
 import type { AnswerDraft as Draft, DraftPart } from "../useAssistant";
+import { useMessages } from "../i18n";
+import { localizeError } from "../i18n/errors";
 
 function Part({ part, title }: { part: DraftPart; title: string }) {
+  const m = useMessages();
   return (
     <section className="draft-part">
       <h4>{title}</h4>
       {part.status === "processing" ? (
-        <p role="status">正在生成…</p>
+        <p role="status">{m.draft.generating}</p>
       ) : (
         <>
           {part.text && (
@@ -22,15 +25,17 @@ function Part({ part, title }: { part: DraftPart; title: string }) {
               </ReactMarkdown>
             </div>
           )}
-          {part.error && <p className="form-note">{part.error}</p>}
+          {part.error && (
+            <p className="form-note">{localizeError(part.error)}</p>
+          )}
           {!!part.sources?.length && (
             <details>
-              <summary>查看资料依据（{part.sources.length}）</summary>
+              <summary>{m.draft.sources(part.sources.length)}</summary>
               {part.sources.map((s, i) => (
                 <blockquote key={`${s.documentId}-${i}`}>
                   <strong>
                     [{i + 1}] {s.name}
-                    {s.chunk ? ` · 片段 ${s.chunk}` : ""}
+                    {s.chunk ? ` · ${m.draft.chunk(s.chunk)}` : ""}
                   </strong>
                   {s.text && <p>{s.text}</p>}
                 </blockquote>
@@ -43,12 +48,13 @@ function Part({ part, title }: { part: DraftPart; title: string }) {
   );
 }
 export default function AnswerDraft({ draft }: { draft: Draft }) {
+  const m = useMessages();
   return (
     <details className="answer-draft" open>
-      <summary>AI 回答参考 · 仅主持人可见</summary>
+      <summary>{m.draft.summary}</summary>
       <div className="draft-grid">
-        <Part title="通用建议" part={draft.generic} />
-        <Part title="知识库回答" part={draft.knowledge} />
+        <Part title={m.draft.generic} part={draft.generic} />
+        <Part title={m.draft.knowledge} part={draft.knowledge} />
       </div>
     </details>
   );

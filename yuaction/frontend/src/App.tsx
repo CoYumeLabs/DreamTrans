@@ -3,6 +3,8 @@ import Host from "./pages/Host";
 import Display from "./pages/Display";
 import RoomPage from "./pages/RoomPage";
 import { Brand } from "./components/ui";
+import { LocaleSwitch } from "./i18n/LocaleSwitch";
+import { useMessages } from "./i18n";
 
 export default function App() {
   const match = window.location.pathname.match(
@@ -18,13 +20,18 @@ export default function App() {
       <RoomPage code={code} />
     );
   }
-  if (window.location.pathname !== "/")
-    return (
-      <div className="center-page">
-        <Brand />
-        <h1>没有找到这个页面</h1>
-        <a href="/">返回活动空间</a>
-      </div>
-    );
+  if (window.location.pathname !== "/") return <NotFound />;
   return <Home />;
+}
+
+function NotFound() {
+  const m = useMessages();
+  return (
+    <div className="center-page">
+      <LocaleSwitch />
+      <Brand />
+      <h1>{m.notFound.title}</h1>
+      <a href="/">{m.notFound.back}</a>
+    </div>
+  );
 }

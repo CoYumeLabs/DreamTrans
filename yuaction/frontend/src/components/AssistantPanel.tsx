@@ -3,18 +3,12 @@ import { BookOpen, FileUp, Sparkles, Trash2 } from "lucide-react";
 import { api } from "../api";
 import type { AssistantInfo, AssistantSettings } from "../useAssistant";
 import { Button, ErrorNote, Pill } from "./ui";
+import { useMessages, type Messages } from "../i18n";
+import { localizeError } from "../i18n/errors";
 
-const statuses: Record<string, string> = {
-  ready: "可检索",
-  pending: "等待提取",
-  processing: "处理中",
-  extracting: "提取中",
-  indexing: "索引中",
-  failed: "处理失败",
-  interrupted: "处理中断",
-  outdated: "需要重新索引",
-  queued: "排队中",
-};
+function documentStatus(status: string, labels: Messages["assistant"]["docStatus"]) {
+  return status in labels ? labels[status as keyof typeof labels] : status;
+}
 type IndexPreview = {
   estimated_dp: number;
   pending_chunks: number;
@@ -34,6 +28,7 @@ export default function AssistantPanel({
   error: string;
   refresh: () => Promise<void>;
 }) {
+  const m = useMessages();
   const [settings, setSettings] = useState<AssistantSettings | null>(null);
   const [message, setMessage] = useState("");
   const [failure, setFailure] = useState("");
@@ -63,7 +58,7 @@ export default function AssistantPanel({
   }
   async function upload(file: File) {
     if (file.size > 10 * 1024 * 1024) {
-      setFailure("单个文件最多 10 MB");
+      setFailure(m.assistant.fileTooBig);
       return;
     }
     await act(async () => {
@@ -76,8 +71,8 @@ export default function AssistantPanel({
         signal: AbortSignal.timeout(60000),
       });
       const body = await response.json();
-      if (!response.ok) throw new Error(body.error || "上传失败");
-    }, "资料已上传，处理状态会自动更新。");
+      if (!response.ok) throw new Error(body.error || m.assistant.uploadFailed);
+    }, m.assistant.uploaded);
     setSettings(null);
   }
   async function previewIndex() {
@@ -96,35 +91,33 @@ export default function AssistantPanel({
       <div className="panel-heading">
         <h3>
           <BookOpen size={18} />
-          资料与 AI
+          {m.assistant.title}
         </h3>
-        <Pill tone="purple">主持人专用</Pill>
+        <Pill tone="purple">{m.assistant.hostOnly}</Pill>
       </div>
-      <p className="form-note">
-        上传讲义，为现场问题生成通用建议和有资料依据的回答。AI
-        草稿仅主持人可见。
-      </p>
+      <p className="form-note">{m.assistant.intro}</p>
       <ErrorNote message={error || failure} />
       {info && !info.configured && (
         <p className="assistant-notice">
-          {info.message || "尚未配置 AI。请在服务端设置聊天接口、密钥与模型。"}
+          {info.message
+            ? localizeError(info.message)
+            : m.assistant.notConfigured}
         </p>
       )}
       {info?.provider === "yufolo" && (
         <p className="form-note">
-          资料、模型和额度由 Yufolo 管理。生成回答和语义索引使用你的 Yufolo
-          余额。
+          {m.assistant.yufolo}
         </p>
       )}
       {settings && info && (
         <>
           <details className="assistant-settings">
-            <summary>知识库与回答设置</summary>
+            <summary>{m.assistant.settings}</summary>
             {info.provider === "yufolo" && (
               <label>
-                关联 Yufolo 知识库
+                {m.assistant.project}
                 <select
-                  aria-label="关联 Yufolo 知识库"
+                  aria-label={m.assistant.projectLabel}
                   value={settings.projectId || ""}
                   onFocus={() =>
                     void api<{ projects: { id: string; name: string }[] }>(
@@ -138,10 +131,12 @@ export default function AssistantPanel({
                     setSettings({ ...settings, projectId: e.target.value })
                   }
                 >
-                  <option value="">为这个活动创建知识库</option>
+                  <option value="">{m.assistant.newProject}</option>
                   {settings.projectId &&
                     !projects.some((p) => p.id === settings.projectId) && (
-                      <option value={settings.projectId}>当前关联知识库</option>
+                      <option value={settings.projectId}>
+                        {m.assistant.currentProject}
+                      </option>
                     )}
                   {projects.map((p) => (
                     <option key={p.id} value={p.id}>
@@ -160,12 +155,12 @@ export default function AssistantPanel({
                   setSettings({ ...settings, autoAnswer: e.target.checked })
                 }
               />
-              收到新问题时自动生成 AI 建议
+              {m.assistant.auto}
             </label>
             <label>
-              通用回答提示词
+              {m.assistant.genericPrompt}
               <textarea
-                aria-label="通用回答提示词"
+                aria-label={m.assistant.genericPrompt}
                 value={settings.genericPrompt}
                 maxLength={2000}
                 onChange={(e) =>
@@ -174,9 +169,9 @@ export default function AssistantPanel({
               />
             </label>
             <label>
-              知识库回答提示词
+              {m.assistant.kbPrompt}
               <textarea
-                aria-label="知识库回答提示词"
+                aria-label={m.assistant.kbPrompt}
                 value={settings.kbPrompt}
                 maxLength={2000}
                 onChange={(e) =>
@@ -185,9 +180,9 @@ export default function AssistantPanel({
               />
             </label>
             <label>
-              检索片段数量
+              {m.assistant.topK}
               <input
-                aria-label="检索片段数量"
+                aria-label={m.assistant.topK}
                 type="number"
                 min={1}
                 max={8}
@@ -209,11 +204,11 @@ export default function AssistantPanel({
                         key: hostKey,
                         body: settings,
                       }),
-                    "设置已保存。",
+                    m.assistant.saved,
                   )
                 }
               >
-                保存回答设置
+                {m.assistant.save}
               </Button>
               <Button
                 className="text small"
@@ -222,13 +217,13 @@ export default function AssistantPanel({
                   setSettings({ ...settings, genericPrompt: "", kbPrompt: "" })
                 }
               >
-                恢复默认提示词
+                {m.assistant.reset}
               </Button>
             </div>
           </details>
           <div className="assistant-actions">
             <input
-              aria-label="上传知识库资料"
+              aria-label={m.assistant.uploadLabel}
               ref={input}
               hidden
               type="file"
@@ -249,7 +244,7 @@ export default function AssistantPanel({
               onClick={() => input.current?.click()}
             >
               <FileUp size={16} />
-              上传资料
+              {m.assistant.upload}
             </Button>
             {info.provider === "yufolo" && (
               <Button
@@ -260,18 +255,18 @@ export default function AssistantPanel({
                 onClick={() => void previewIndex()}
               >
                 <Sparkles size={15} />
-                建立语义索引
+                {m.assistant.index}
               </Button>
             )}
           </div>
           <p className="form-note">
             {info.provider === "yufolo"
-              ? "PDF、DOCX、TXT、Markdown、CSV、TSV、JSON、XLSX、图片"
-              : "PDF、DOCX、TXT、Markdown、HTML、CSV、JSON、XLSX"}{" "}
-            · 单个文件最多 10 MB
+              ? m.assistant.formatsYufolo
+              : m.assistant.formatsLocal}{" "}
+            · {m.assistant.size}
           </p>
           {info.documents.length === 0 ? (
-            <p className="muted">还没有资料。也可以先使用通用 AI 建议。</p>
+            <p className="muted">{m.assistant.empty}</p>
           ) : (
             <ul className="document-list">
               {info.documents.map((d) => (
@@ -279,12 +274,19 @@ export default function AssistantPanel({
                   <div>
                     <strong>{d.name}</strong>
                     <small>
-                      {statuses[d.status] || d.status} · {d.chunkCount} 个片段
+                      {documentStatus(d.status, m.assistant.docStatus)} ·{" "}
+                      {m.assistant.chunks(d.chunkCount)}
                       {d.indexStatus
-                        ? ` · 语义索引：${d.indexStatus === "ready" ? "就绪" : d.indexStatus}`
+                        ? ` · ${m.assistant.semantic}：${
+                            d.indexStatus === "ready"
+                              ? m.assistant.ready
+                              : d.indexStatus
+                          }`
                         : ""}
                     </small>
-                    {d.error && <span className="error-note">{d.error}</span>}
+                    {d.error && (
+                      <span className="error-note">{localizeError(d.error)}</span>
+                    )}
                   </div>
                   <div className="document-actions">
                     {["failed", "interrupted", "outdated"].includes(
@@ -300,21 +302,24 @@ export default function AssistantPanel({
                                 method: "POST",
                                 key: hostKey,
                               }),
-                            "已重新提交处理。",
+                            m.assistant.requeued,
                           )
                         }
                       >
-                        重试
+                        {m.assistant.retry}
                       </Button>
                     )}
                     <Button
                       className="text small"
-                      aria-label={`删除资料 ${d.name}`}
+                      aria-label={m.assistant.deleteLabel(d.name)}
                       disabled={busy}
                       onClick={() => {
                         if (
                           confirm(
-                            `删除资料“${d.name}”？${info.provider === "yufolo" ? "这也会从关联的 Yufolo 知识库删除。" : ""}`,
+                            m.assistant.deleteConfirm(
+                              d.name,
+                              info.provider === "yufolo",
+                            ),
                           )
                         )
                           void act(
@@ -323,7 +328,7 @@ export default function AssistantPanel({
                                 method: "DELETE",
                                 key: hostKey,
                               }),
-                            "资料已删除。",
+                            m.assistant.deleted,
                           );
                       }}
                     >
@@ -346,20 +351,23 @@ export default function AssistantPanel({
         className="dialog-panel"
         aria-labelledby="index-dialog-title"
       >
-        <h2 id="index-dialog-title">建立知识库语义索引</h2>
+        <h2 id="index-dialog-title">{m.assistant.indexTitle}</h2>
         {preview && (
           <>
             <p>
               {preview.requires_indexing
-                ? `将处理 ${preview.pending_chunks} 个片段，Yufolo 预计扣除 ${preview.estimated_dp} DP。`
-                : "当前资料已经完成索引。"}
+                ? m.assistant.indexPending(
+                    preview.pending_chunks,
+                    preview.estimated_dp,
+                  )
+                : m.assistant.indexDone}
             </p>
             <div className="assistant-actions">
               <Button
                 className="outline"
                 onClick={() => indexDialog.current?.close()}
               >
-                取消
+                {m.assistant.cancel}
               </Button>
               {preview.requires_indexing && (
                 <Button
@@ -377,10 +385,10 @@ export default function AssistantPanel({
                         },
                       });
                       indexDialog.current?.close();
-                    }, "语义索引已提交，完成后将用于资料检索。")
+                    }, m.assistant.indexSubmitted)
                   }
                 >
-                  确认并建立索引
+                  {m.assistant.confirmIndex}
                 </Button>
               )}
             </div>

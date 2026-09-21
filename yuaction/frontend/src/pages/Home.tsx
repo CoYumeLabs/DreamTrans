@@ -17,8 +17,11 @@ import { api, recentRooms, rememberRoom, saveHostKey, type Room } from "../api";
 import { useConfig } from "../hooks/useConfig";
 import { Brand, Button, ErrorNote, Pill } from "../components/ui";
 import AccountPanel, { type Account } from "../components/AccountPanel";
+import { intlLocale, useMessages } from "../i18n";
+import { LocaleSwitch } from "../i18n/LocaleSwitch";
 
 export default function Home() {
+  const m = useMessages();
   const { config, error: configError } = useConfig();
   const [creating, setCreating] = useState(false);
   const [kind, setKind] = useState<"classroom" | "talk">("classroom");
@@ -90,7 +93,7 @@ export default function Home() {
     e.preventDefault();
     const code = joinCode.trim().toUpperCase();
     if (!/^[A-F0-9]{8}$/.test(code)) {
-      setError("请输入 8 位房间码");
+      setError(m.home.badCode);
       return;
     }
     window.location.assign(`/rooms/${code}`);
@@ -99,15 +102,15 @@ export default function Home() {
     <div className="app-shell">
       <aside className="sidebar">
         <Brand />
-        <div className="workspace-label">工作空间</div>
+        <div className="workspace-label">{m.home.workspace}</div>
         <nav>
           <a className="nav-item active" href="/">
             <LayoutDashboard size={18} />
-            活动空间
+            {m.home.activities}
           </a>
           <a className="nav-item" href="#join">
             <Users size={18} />
-            加入活动
+            {m.home.joinNav}
           </a>
           <a
             className="nav-item"
@@ -116,53 +119,56 @@ export default function Home() {
             rel="noreferrer"
           >
             <AudioLines size={18} />
-            Yufolo 学习空间
+            {m.home.yufoloSpace}
             <ArrowRight size={14} className="nav-arrow" />
           </a>
         </nav>
         <div className="sidebar-note">
-          <span className="mini-label">专为真实的交流</span>
+          <span className="mini-label">{m.home.noteKicker}</span>
           <p>
-            好的表达，
+            {m.home.noteBody}
             <br />
-            从听见彼此开始。
+            {m.home.noteBodyLine}
           </p>
           <span>BY COYUME</span>
         </div>
         <div className="sidebar-bottom">
           <span className="avatar">Y</span>
           <div>
-            <strong>现场，从这里开始</strong>
-            <small>课堂 · 演讲 · 每一次分享</small>
+            <strong>{m.home.sidebarTitle}</strong>
+            <small>{m.home.sidebarMeta}</small>
           </div>
         </div>
       </aside>
       <main className="home-main">
         <header className="topbar">
           <span className="workspace-breadcrumb">
-            工作空间 <ChevronRight size={14} />
-            <strong>活动概览</strong>
+            {m.home.workspace} <ChevronRight size={14} />
+            <strong>{m.home.overview}</strong>
           </span>
           <div className="mobile-brand">
             <Brand />
           </div>
-          <span className="topbar-note">
-            <Radio size={14} /> 让交流发生在现场
-          </span>
+          <div className="topbar-tools">
+            <span className="topbar-note">
+              <Radio size={14} /> {m.home.topNote}
+            </span>
+            <LocaleSwitch />
+          </div>
         </header>
         <div className="home-content">
           <div className="page-heading">
             <div>
               <div className="eyebrow">YOUR NEXT CONVERSATION</div>
               <h1>
-                让每一次表达，都有回应<span>。</span>
+                {m.home.headline}<span>{m.home.headlineMark}</span>
               </h1>
-              <p>创建一个活动，把实时字幕、现场提问和每一位听众连接起来。</p>
+              <p>{m.home.lede}</p>
             </div>
             <div className="page-actions">
               <a href="#join" className="button outline">
                 <Users size={16} />
-                加入活动
+                {m.home.join}
               </a>
               <Button
                 className="primary"
@@ -170,7 +176,7 @@ export default function Home() {
                 disabled={!config}
               >
                 <Plus size={18} />
-                创建活动
+                {m.home.create}
               </Button>
             </div>
           </div>
@@ -180,20 +186,20 @@ export default function Home() {
             <section className="hero-card">
               <div className="hero-copy">
                 <span className="hero-label">
-                  <span className="tiny-dot" /> 一场讲述，多种回应
+                  <span className="tiny-dot" /> {m.home.heroKicker}
                 </span>
                 <h2>
-                  你专注讲述。
+                  {m.home.heroTitle}
                   <br />
-                  <span>让全场，跟上你的想法。</span>
+                  <span>{m.home.heroTitleLine}</span>
                 </h2>
                 <p>
-                  字幕跟随声音，问题随时抵达。
+                  {m.home.heroBody}
                   <br />
-                  为课堂和演讲，留出更多交流的空间。
+                  {m.home.heroBodyLine}
                 </p>
                 <a href="#join" className="hero-link">
-                  受邀参加？加入活动 <ArrowRight size={16} />
+                  {m.home.heroLink} <ArrowRight size={16} />
                 </a>
               </div>
               <div className="hero-visual" aria-hidden="true">
@@ -203,26 +209,26 @@ export default function Home() {
                   <AudioLines size={38} strokeWidth={1.5} />
                 </div>
                 <span className="signal-chip chip-caption">
-                  <AudioLines size={15} /> 实时字幕
+                  <AudioLines size={15} /> {m.home.chipCaption}
                 </span>
                 <span className="signal-chip chip-question">
-                  <MessageCircle size={15} /> 现场提问
+                  <MessageCircle size={15} /> {m.home.chipQuestion}
                 </span>
                 <span className="signal-chip chip-people">
-                  <Users size={15} /> 共同参与
+                  <Users size={15} /> {m.home.chipPeople}
                 </span>
               </div>
               <div className="hero-steps">
                 <span>
-                  <ScanLine size={16} /> 扫码加入
+                  <ScanLine size={16} /> {m.home.stepScan}
                 </span>
                 <i />
                 <span>
-                  <AudioLines size={16} /> 字幕同步
+                  <AudioLines size={16} /> {m.home.stepCaptions}
                 </span>
                 <i />
                 <span>
-                  <MessageCircle size={16} /> 随时提问
+                  <MessageCircle size={16} /> {m.home.stepAsk}
                 </span>
               </div>
             </section>
@@ -230,7 +236,7 @@ export default function Home() {
               <div className="account-slot" ref={accountSlot}>
                 {awaitingLogin && (
                   <p className="account-prompt" role="status">
-                    先登录，随后继续创建你的活动。
+                    {m.home.loginPrompt}
                   </p>
                 )}
                 <AccountPanel onChange={setUser} />
@@ -240,15 +246,14 @@ export default function Home() {
           <div className="section-title">
             <div>
               <h2>
-                我的活动 <span>{rooms.length.toString().padStart(2, "0")}</span>
+                {m.home.myActivities}{" "}
+                <span>{rooms.length.toString().padStart(2, "0")}</span>
               </h2>
               <p>
-                {config?.yufoloConnected
-                  ? "你的课堂与演讲，都在这里"
-                  : "此浏览器最近创建的课堂与演讲"}
+                {config?.yufoloConnected ? m.home.ownedHint : m.home.recentHint}
               </p>
             </div>
-            <span className="muted-label">随时回到你的现场</span>
+            <span className="muted-label">{m.home.returnHint}</span>
           </div>
           <div className={`activity-grid ${rooms.length ? "" : "is-empty"}`}>
             {rooms.map((room) => (
@@ -267,7 +272,7 @@ export default function Home() {
                   </span>
                   {"status" in room && (
                     <Pill tone={room.status === "live" ? "green" : "neutral"}>
-                      {room.status === "live" ? "进行中" : "已结束"}
+                      {room.status === "live" ? m.home.live : m.home.ended}
                     </Pill>
                   )}
                 </div>
@@ -276,11 +281,11 @@ export default function Home() {
                   <ArrowRight size={18} />
                 </div>
                 <p>
-                  {room.kind === "classroom" ? "互动课堂" : "现场演讲"} ·{" "}
-                  {new Date(room.createdAt).toLocaleDateString("zh-CN")}
+                  {room.kind === "classroom" ? m.home.classroom : m.home.talk} ·{" "}
+                  {new Date(room.createdAt).toLocaleDateString(intlLocale())}
                 </p>
                 <div className="activity-bottom">
-                  <span>房间码</span>
+                  <span>{m.home.roomCode}</span>
                   <strong>{room.code}</strong>
                 </div>
               </a>
@@ -293,11 +298,9 @@ export default function Home() {
               <span>
                 <Plus size={24} />
               </span>
-              <strong>创建新的活动</strong>
+              <strong>{m.home.createAnother}</strong>
               <small>
-                {rooms.length
-                  ? "为下一次分享准备一个空间"
-                  : "给活动起个名字，邀请大家一起加入。"}
+                {rooms.length ? m.home.createAnotherHint : m.home.createFirstHint}
               </small>
             </button>
           </div>
@@ -306,19 +309,19 @@ export default function Home() {
               <span className="small-icon">
                 <Users size={20} />
               </span>
-              <h3>受邀参加活动？</h3>
-              <p>输入主持人分享的房间码，即可加入。</p>
+              <h3>{m.home.invitedTitle}</h3>
+              <p>{m.home.invitedBody}</p>
               <form onSubmit={join}>
                 <input
-                  aria-label="房间码"
-                  placeholder="输入 8 位房间码"
+                  aria-label={m.home.codeLabel}
+                  placeholder={m.home.codePlaceholder}
                   maxLength={8}
                   value={joinCode}
                   onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
                   required
                 />
                 <Button className="dark" type="submit">
-                  加入
+                  {m.home.joinSubmit}
                   <ArrowRight size={16} />
                 </Button>
               </form>
@@ -330,17 +333,19 @@ export default function Home() {
                   YUFOLO × YUACTION
                 </span>
                 <Pill tone={config?.yufoloConnected ? "green" : "neutral"}>
-                  {config?.yufoloConnected ? "已连接" : "等待配置"}
+                  {config?.yufoloConnected
+                    ? m.home.yufoloLinked
+                    : m.home.yufoloWaiting}
                 </Pill>
               </div>
-              <h3>一个人开讲，所有人跟上。</h3>
+              <h3>{m.home.yufoloTitle}</h3>
               <p>
                 {config?.yufoloConnected
-                  ? "用 Yufolo 账号登录，开启一次转录，让全场同步阅读原文与译文。"
-                  : "连接 Yufolo 后，主持人可以开启麦克风，让全场共享同一份字幕。"}
+                  ? m.home.yufoloLinkedBody
+                  : m.home.yufoloWaitingBody}
               </p>
               <a href="https://yufolo.com" target="_blank" rel="noreferrer">
-                了解 Yufolo
+                {m.home.aboutYufolo}
                 <ArrowRight size={15} />
               </a>
             </section>
@@ -348,12 +353,12 @@ export default function Home() {
           <ErrorNote message={configError || (!creating ? error : "")} />
           {config?.demo && (
             <p className="preview-note">
-              已启用演示模式。演示字幕不调用识别服务；未配置数据库时，重启会清空活动。
+              {m.home.demoNote}
             </p>
           )}
           <footer>
             <span>YuAction · BY COYUME</span>
-            <span>每一次连接，都值得认真对待。</span>
+            <span>{m.home.footer}</span>
           </footer>
         </div>
       </main>
@@ -368,30 +373,30 @@ export default function Home() {
           <div className="dialog-heading">
             <div>
               <div className="eyebrow">NEW SESSION</div>
-              <h2 id="create-activity-title">创建活动</h2>
+              <h2 id="create-activity-title">{m.home.create}</h2>
             </div>
             <button
               className="icon-button"
               type="button"
-              aria-label="关闭"
+              aria-label={m.home.close}
               onClick={() => setCreating(false)}
             >
               <X size={20} />
             </button>
           </div>
           <label>
-            活动名称
+            {m.home.name}
             <input
               autoFocus
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="例如：设计思维 · 第一堂课"
+              placeholder={m.home.namePlaceholder}
               maxLength={100}
               required
             />
           </label>
           <fieldset>
-            <legend>活动类型</legend>
+            <legend>{m.home.kind}</legend>
             <div className="kind-options">
               <button
                 type="button"
@@ -400,8 +405,8 @@ export default function Home() {
                 onClick={() => setKind("classroom")}
               >
                 <GraduationCap size={24} />
-                <strong>课堂</strong>
-                <small>让每个困惑被看见</small>
+                <strong>{m.home.classroomKind}</strong>
+                <small>{m.home.classroomHint}</small>
               </button>
               <button
                 type="button"
@@ -410,14 +415,14 @@ export default function Home() {
                 onClick={() => setKind("talk")}
               >
                 <Mic size={24} />
-                <strong>演讲</strong>
-                <small>与现场产生共鸣</small>
+                <strong>{m.home.talkKind}</strong>
+                <small>{m.home.talkHint}</small>
               </button>
             </div>
           </fieldset>
           {config?.creatorKeyRequired && (
             <label>
-              活动创建密钥
+              {m.home.creatorKey}
               <input
                 type="password"
                 value={creatorKey}
@@ -425,15 +430,15 @@ export default function Home() {
                 required
                 autoComplete="off"
               />
-              <small>由部署管理员提供，仅用于创建活动。</small>
+              <small>{m.home.creatorKeyHint}</small>
             </label>
           )}
           <ErrorNote message={error} />
           <Button className="primary full" type="submit" disabled={busy}>
-            {busy ? "正在创建…" : "创建并进入工作台"}
+            {busy ? m.home.creating : m.home.createEnter}
             <ArrowRight size={17} />
           </Button>
-          <p className="form-note">创建后即可分享房间码。参与者无需注册。</p>
+          <p className="form-note">{m.home.createNote}</p>
         </form>
       </dialog>
     </div>
