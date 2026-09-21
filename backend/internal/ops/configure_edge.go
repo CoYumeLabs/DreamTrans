@@ -16,11 +16,11 @@ import (
 // It never rewrites Compose, .env, credentials, volume names or database data.
 func (c *controller) configureEdge(o *options) {
 	c.assertDatabase()
-	need(str(c.state["phase"]) == "ready", "finish the current release with resume/drain before configuring Edge")
-	active := str(c.state["active"])
-	release := obj(obj(c.state["colors"])[active])
+	need(c.state.Phase == "ready", "finish the current release with resume/drain before configuring Edge")
+	active := c.state.Active
+	release := obj(c.state.Colors[active])
 	need(number(obj(release["contract"])["edge_configuration"]) >= 1, "upgrade the main application first; its version cannot safely separate Edge management from routing")
-	settings := cloneObject(obj(c.state["application_env"]))
+	settings := cloneObject(c.state.ApplicationEnv)
 	previous := cloneObject(settings)
 	need(o.routing == "" || o.routing == "on" || o.routing == "off", "--routing must be on or off")
 	c.progress("1/4", "核对主站配置；无需 Cloudflare API Key")
@@ -75,7 +75,7 @@ func (c *controller) configureEdge(o *options) {
 		settings["EDGE_PROXY_IMAGE"] = o.proxyImage
 	}
 	if str(settings["EDGE_PROXY_IMAGE"]) == "" {
-		settings["EDGE_PROXY_IMAGE"] = repositoryDigest(c.inspect("image", str(c.state["proxy_image"])))
+		settings["EDGE_PROXY_IMAGE"] = repositoryDigest(c.inspect("image", c.state.ProxyImage))
 	}
 	if o.tunnelImage != "" {
 		settings["EDGE_CLOUDFLARED_IMAGE"] = o.tunnelImage
@@ -103,7 +103,7 @@ func (c *controller) configureEdge(o *options) {
 		fail("pending configuration exists; use upgrade or restore it before changing configuration")
 	}
 	save(filepath.Join(c.path, "configuration.previous.json"), previous)
-	c.state["application_env"] = settings
+	c.state.ApplicationEnv = settings
 	c.persist()
 	c.progress("3/4", "配置已安全保存；通过蓝绿发布生效，失败可 resume/abort")
 	deploy := *o

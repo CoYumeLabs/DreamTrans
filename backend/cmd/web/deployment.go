@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"time"
 
@@ -11,20 +12,14 @@ import (
 	"github.com/dreamtrans/backend/internal/rag"
 )
 
-func loadServerConfig() error {
+func loadServerConfig(db *sql.DB) error {
 	if os.Getenv("RAG_STORAGE") != "postgres" {
 		return config.Load()
 	}
-	db, err := sql.Open("postgres", os.Getenv("DATABASE_URL"))
-	if err != nil {
-		return err
+	if db == nil {
+		return errors.New("PostgreSQL configuration requires the application database")
 	}
-	db.SetMaxOpenConns(2)
-	// The configuration reader owns this pool for the process lifetime.
-	if err = config.LoadPostgres(db); err != nil {
-		_ = db.Close()
-	}
-	return err
+	return config.LoadPostgres(db)
 }
 
 func importDeploymentState() error {

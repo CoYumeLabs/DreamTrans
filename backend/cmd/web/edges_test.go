@@ -1,10 +1,12 @@
 package main
 
 import (
-	"github.com/dreamtrans/backend/internal/auth"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/dreamtrans/backend/internal/auth"
 )
 
 func TestRegionalModeRequiresSharedAdmission(t *testing.T) {
@@ -23,16 +25,16 @@ func TestRegionalModeRequiresSharedAdmission(t *testing.T) {
 }
 
 func TestUnconfiguredEdgeAdminRoutesRemainDiscoverable(t *testing.T) {
-	old := authMw
-	t.Cleanup(func() { authMw = old })
+	app := newApplication(context.Background())
+	t.Cleanup(app.Close)
 	manager, err := auth.NewJWTManagerWithSecrets("0123456789abcdef0123456789abcdef", "fedcba9876543210fedcba9876543210")
 	if err != nil {
 		t.Fatal(err)
 	}
-	authMw = auth.NewAuthMiddleware(manager)
+	app.Auth = auth.NewAuthMiddleware(manager)
 	t.Setenv("EDGE_SIGNING_SEED", "")
 	mux := http.NewServeMux()
-	_, stop := registerEdges(mux)
+	_, stop := app.registerEdges(mux)
 	stop()
 	for _, path := range []string{"/api/admin/edges", "/api/admin/edges/setup", "/api/admin/edges/installer"} {
 		res := httptest.NewRecorder()

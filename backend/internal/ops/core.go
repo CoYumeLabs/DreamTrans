@@ -197,7 +197,7 @@ type controller struct {
 	httpClient  *http.Client
 	ctx         context.Context
 	root, path  string
-	state       object
+	state       *deploymentState
 	run         runner
 	out, errOut io.Writer
 	sleep       func(time.Duration)
@@ -222,8 +222,8 @@ func newController(ctx context.Context, root string, out, errOut io.Writer) *con
 	//nolint:gosec // A private directory needs owner traversal permission.
 	check(os.Chmod(c.path, 0o700), "cannot protect state directory")
 	if exists(filepath.Join(c.path, "state.json")) {
-		c.state = load(filepath.Join(c.path, "state.json"))
-		need(number(c.state["format"]) == 1, "unsupported state format; conversion required")
+		c.state = readDeploymentState(filepath.Join(c.path, "state.json"))
+		need(c.state.Format == 1, "unsupported state format; conversion required")
 	}
 	return c
 }
@@ -240,10 +240,15 @@ func (c *controller) inspect(kind, name string) object {
 	need(len(a) == 1, "ambiguous Docker identity")
 	return obj(a[0])
 }
-func (c *controller) persist()                 { save(filepath.Join(c.path, "state.json"), c.state) }
-func (c *controller) name(color string) string { return str(c.state["prefix"]) + "-" + color }
-func (c *controller) yuaction() bool           { return str(c.state["role"]) == "yuaction" }
-func (c *controller) edge() bool               { return str(c.state["role"]) == "edge" }
+func (c *controller) persist() {
+	if err := c.state.validate(); err != nil {
+		fail(err.Error())
+	}
+	save(filepath.Join(c.path, "state.json"), c.state)
+}
+func (c *controller) name(color string) string { return c.state.Prefix + "-" + color }
+func (c *controller) yuaction() bool           { return c.state != nil && c.state.Role == "yuaction" }
+func (c *controller) edge() bool               { return c.state != nil && c.state.Role == "edge" }
 func (c *controller) progress(step, message string) {
 	bar := ""
 	var n, total int
@@ -308,11 +313,11 @@ func (c *controller) assertDatabase() {
 		need(exists(filepath.Join(c.root, "config", "edge.json")), "existing Edge identity is missing")
 		return
 	}
-	d := c.inspect("container", str(c.state["database_id"]))
-	need(str(d["Id"]) == str(c.state["database_id"]) && c.dataMount(d, "/var/lib/postgresql/data") == str(c.state["database_volume"]), "production database identity or volume changed")
+	d := c.inspect("container", c.state.DatabaseID)
+	need(str(d["Id"]) == c.state.DatabaseID && c.dataMount(d, "/var/lib/postgresql/data") == c.state.DatabaseVolume, "production database identity or volume changed")
 	need(yes(obj(d["State"])["Running"]), "existing database is not running; it will not be recreated")
 	if !c.yuaction() {
-		c.inspect("volume", str(c.state["application_volume"]))
+		c.inspect("volume", c.state.ApplicationVolume)
 	}
 }
 
@@ -336,6 +341,10 @@ func (c *controller) bundle(image string, fn func(string)) {
 	fn(directory)
 }
 func contractOK(next, old object) {
+	validateReleaseContract(next)
+	if old != nil {
+		validateReleaseContract(old)
+	}
 	need(number(next["protocol"]) == 1 && number(next["state_epoch"]) == 1, "unsupported release/state protocol")
 	need(next["expand_migrations"] != nil, "release lacks reviewed expand-only migration manifest")
 	_ = list(next["expand_migrations"])
@@ -394,7 +403,7 @@ func (c *controller) waitReady(color string) {
 	fail("instance readiness failed; persisted release remains recoverable")
 }
 func (c *controller) pg(sql string) string {
-	a := append([]string{"docker", "exec", "-i"}, envArgs(obj(c.state["database_env"]))...)
-	a = append(a, str(c.state["database_id"]), "psql", "-XAt", "-v", "ON_ERROR_STOP=1")
+	a := append([]string{"docker", "exec", "-i"}, envArgs(c.state.DatabaseEnv)...)
+	a = append(a, c.state.DatabaseID, "psql", "-XAt", "-v", "ON_ERROR_STOP=1")
 	return c.command(sql, a...)
 }

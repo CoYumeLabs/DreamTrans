@@ -3,11 +3,12 @@ package handlers
 import (
 	"context"
 	"errors"
-	"github.com/dreamtrans/backend/internal/models"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dreamtrans/backend/internal/models"
 )
 
 func TestVerificationBaseURLRejectsUnsafeConfiguration(t *testing.T) {

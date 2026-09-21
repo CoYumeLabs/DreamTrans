@@ -51,12 +51,12 @@ func (c *controller) migrate(bundle string, contract object) {
 		copyFile(path, filepath.Join(stage, "migrations", filepath.Base(path)), 0o600)
 	}
 	copyFile(filepath.Join(bundle, "migrate.sh"), filepath.Join(stage, "migrate.sh"), 0o700)
-	args := make([]string, 0, 16+2*len(obj(c.state["database_env"])))
-	args = append(args, "run", "--rm", "--network", str(c.state["database_network"]), "--mount", "type=bind,src="+stage+",dst=/release,readonly")
-	args = append(args, envArgs(obj(c.state["database_env"]))...)
-	args = append(args, "-e", "MIGRATIONS_DIR=/release/migrations", "--entrypoint", "/bin/sh", str(c.state["database_image"]), "/release/migrate.sh")
+	args := make([]string, 0, 16+2*len(c.state.DatabaseEnv))
+	args = append(args, "run", "--rm", "--network", c.state.DatabaseNetwork, "--mount", "type=bind,src="+stage+",dst=/release,readonly")
+	args = append(args, envArgs(c.state.DatabaseEnv)...)
+	args = append(args, "-e", "MIGRATIONS_DIR=/release/migrations", "--entrypoint", "/bin/sh", c.state.DatabaseImage, "/release/migrate.sh")
 	c.docker(args...)
-	c.state["schema"] = migrations
+	c.state.Schema = migrations
 	c.persist()
 }
 func (c *controller) writeRoute(color string) {
@@ -114,12 +114,12 @@ func (c *controller) syncEntry() {
 		return
 	}
 	c.assertDatabase()
-	network := str(c.state["database_network"])
-	_, ok := networks(c.inspect("container", str(c.state["database_id"])))[network]
+	network := c.state.DatabaseNetwork
+	_, ok := networks(c.inspect("container", c.state.DatabaseID))[network]
 	need(ok, "recorded database network is no longer attached")
 	proxy := c.inspect("container", c.name("proxy"))
-	_, entry := networks(proxy)[str(c.state["network"])]
-	need(str(proxy["Image"]) == str(c.state["proxy_image"]) && hasMount(proxy, "/release", filepath.Join(c.path, "proxy")) && entry, "proxy identity differs from recorded installation")
+	_, entry := networks(proxy)[c.state.Network]
+	need(str(proxy["Image"]) == c.state.ProxyImage && hasMount(proxy, "/release", filepath.Join(c.path, "proxy")) && entry, "proxy identity differs from recorded installation")
 	members := obj(c.inspect("network", network)["Containers"])
 	for id := range members {
 		if id == str(proxy["Id"]) {
@@ -140,14 +140,14 @@ func (c *controller) ensureProxy(color string) {
 	c.writeRoute(color)
 	if c.containerExists("proxy") {
 		p := c.inspect("container", c.name("proxy"))
-		need(str(p["Image"]) == str(c.state["proxy_image"]) && hasMount(p, "/release", filepath.Join(c.path, "proxy")), "existing proxy differs from recorded installation")
+		need(str(p["Image"]) == c.state.ProxyImage && hasMount(p, "/release", filepath.Join(c.path, "proxy")), "existing proxy differs from recorded installation")
 		if !yes(obj(p["State"])["Running"]) {
 			c.docker("start", c.name("proxy"))
 		} else {
 			c.reloadProxy()
 		}
 	} else {
-		c.docker("run", "-d", "--name", c.name("proxy"), "--restart", "unless-stopped", "--network", str(c.state["network"]), "--network-alias", "dreamtrans", "-p", fmt.Sprintf("%s:%d:8080", str(c.state["bind"]), number(c.state["port"])), "--mount", "type=bind,src="+filepath.Join(c.path, "proxy")+",dst=/release,readonly", "--log-opt", "max-size=10m", "--log-opt", "max-file=3", str(c.state["proxy_image"]), "nginx", "-g", "daemon off;", "-c", "/release/nginx.conf")
+		c.docker("run", "-d", "--name", c.name("proxy"), "--restart", "unless-stopped", "--network", c.state.Network, "--network-alias", "dreamtrans", "-p", fmt.Sprintf("%s:%d:8080", c.state.Bind, c.state.Port), "--mount", "type=bind,src="+filepath.Join(c.path, "proxy")+",dst=/release,readonly", "--log-opt", "max-size=10m", "--log-opt", "max-file=3", c.state.ProxyImage, "nginx", "-g", "daemon off;", "-c", "/release/nginx.conf")
 	}
 	c.syncEntry()
 	for range 30 {
@@ -163,10 +163,10 @@ func (c *controller) reloadProxy() {
 	c.docker("exec", c.name("proxy"), "nginx", "-s", "reload", "-c", "/release/nginx.conf")
 }
 func (c *controller) switchColor(color string) {
-	c.state["phase"] = "switching"
-	c.state["target"] = color
+	c.state.Phase = "switching"
+	c.state.Target = color
 	c.persist()
-	old := str(c.state["active"])
+	old := c.state.Active
 	c.control(color, "active")
 	c.writeRoute(color)
 	err := attempt(func() {
@@ -187,24 +187,18 @@ func (c *controller) switchColor(color string) {
 		c.control(color, "draining")
 		fail(err.Error())
 	}
-	c.state["active"] = color
-	if settings, ok := obj(obj(c.state["colors"])[color])["application_env"]; ok && !c.edge() {
-		c.state["application_env"] = cloneObject(obj(settings))
+	c.state.Active = color
+	if settings, ok := obj(c.state.Colors[color])["application_env"]; ok && !c.edge() {
+		c.state.ApplicationEnv = cloneObject(obj(settings))
 	}
-	c.state["previous"] = nullable(old)
-	c.state["phase"] = "observing"
-	c.state["drain_started_at"] = time.Now().UTC().Format(time.RFC3339Nano)
-	delete(c.state, "handoff_status")
+	c.state.Previous = old
+	c.state.Phase = "observing"
+	c.state.DrainStartedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	c.state.HandoffStatus = ""
 	c.persist()
 	if old != "" && old != color {
 		c.control(old, "draining")
 	}
-}
-func nullable(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
 }
 func (c *controller) startColor(color, image string, contract object) {
 	if c.yuaction() {
@@ -216,7 +210,7 @@ func (c *controller) startColor(color, image string, contract object) {
 		return
 	}
 	name := c.name(color)
-	colors := obj(c.state["colors"])
+	colors := c.state.Colors
 	if c.containerExists(color) {
 		_, recorded := colors[color]
 		need(recorded, "candidate name is already owned by an unrecorded container")
@@ -236,7 +230,7 @@ func (c *controller) startColor(color, image string, contract object) {
 	atomic(filepath.Join(dir, "mode"), []byte("standby\n"), 0o600)
 	check(os.Chown(filepath.Join(dir, "mode"), 10001, 10001), "cannot assign mode file")
 	settings := object{}
-	for k, v := range obj(c.state["application_env"]) {
+	for k, v := range c.state.ApplicationEnv {
 		settings[k] = v
 	}
 	for k, v := range (object{"RAG_STORAGE": "postgres", "ALLOW_ANONYMOUS_API": "false", "DREAMTRANS_DEPLOYMENT_MODE": "standby", "DREAMTRANS_DEPLOYMENT_STATE": "/deployment/mode", "PORT": "8080"}) {
@@ -244,12 +238,12 @@ func (c *controller) startColor(color, image string, contract object) {
 	}
 	envFile := filepath.Join(dir, "application.env")
 	atomic(envFile, envBytes(settings), 0o600)
-	colors[color] = object{"image": image, "contract": contract, "application_env": cloneObject(obj(c.state["application_env"]))}
-	c.state["phase"] = "candidate"
-	c.state["target"] = color
+	colors[color] = object{"image": image, "contract": contract, "application_env": cloneObject(c.state.ApplicationEnv)}
+	c.state.Phase = "candidate"
+	c.state.Target = color
 	c.persist()
-	c.docker("run", "-d", "--name", name, "--restart", "unless-stopped", "--network", str(c.state["database_network"]), "--env-file", envFile, "--mount", "type=volume,src="+str(c.state["application_volume"])+",dst=/app/data", "--mount", "type=bind,src="+dir+",dst=/deployment", "--log-opt", "max-size=10m", "--log-opt", "max-file=3", "--label", "dreamtrans.release="+str(c.state["prefix"]), image)
-	c.docker("network", "connect", str(c.state["network"]), name)
+	c.docker("run", "-d", "--name", name, "--restart", "unless-stopped", "--network", c.state.DatabaseNetwork, "--env-file", envFile, "--mount", "type=volume,src="+c.state.ApplicationVolume+",dst=/app/data", "--mount", "type=bind,src="+dir+",dst=/deployment", "--log-opt", "max-size=10m", "--log-opt", "max-file=3", "--label", "dreamtrans.release="+c.state.Prefix, image)
+	c.docker("network", "connect", c.state.Network, name)
 	c.progress("4/8", "启动 "+color+"；待命实例不领取后台任务")
 	c.smoke(color)
 }
@@ -285,15 +279,15 @@ func (c *controller) initialColor(image string, contract object) {
 	if c.edge() {
 		need(hasMount(current, "/spool", filepath.Join(c.path, "blue", "spool")), "initial Edge journal differs from intent")
 	} else {
-		need(c.dataMount(current, "/app/data") == str(c.state["application_volume"]), "initial application volume differs from intent")
+		need(c.dataMount(current, "/app/data") == c.state.ApplicationVolume, "initial application volume differs from intent")
 	}
-	if _, ok := networks(current)[str(c.state["network"])]; !ok {
-		c.docker("network", "connect", str(c.state["network"]), c.name("blue"))
+	if _, ok := networks(current)[c.state.Network]; !ok {
+		c.docker("network", "connect", c.state.Network, c.name("blue"))
 	}
 	if !yes(obj(current["State"])["Running"]) {
 		c.docker("start", c.name("blue"))
 	}
-	colors := obj(c.state["colors"])
+	colors := c.state.Colors
 	if _, ok := colors["blue"]; !ok {
 		colors["blue"] = object{"image": image, "contract": contract}
 	}
@@ -303,7 +297,7 @@ func (c *controller) initialColor(image string, contract object) {
 func (c *controller) initMain(o *options) {
 	if c.state != nil {
 		c.assertDatabase()
-		if str(c.state["initial_image"]) != "" && str(c.state["active"]) == "" {
+		if c.state.InitialImage != "" && c.state.Active == "" {
 			need(o.maintenance, "interrupted initial conversion requires --maintenance")
 			c.resumeInitial()
 			return
@@ -353,47 +347,47 @@ func (c *controller) initMain(o *options) {
 		if port == "" {
 			port = "5432"
 		}
-		c.state = object{"format": 1, "prefix": prefix, "network": prefix + "-entry", "database_network": network, "database_id": db["Id"], "database_image": db["Image"], "database_volume": c.dataMount(db, "/var/lib/postgresql/data"), "application_volume": c.dataMount(app, "/app/data"), "application_env": settings, "legacy_id": app["Id"], "legacy_restart": obj(obj(app["HostConfig"])["RestartPolicy"])["Name"], "proxy_image": proxy, "port": o.port, "bind": bind, "database_env": object{"PGHOST": dsn.Hostname(), "PGPORT": port, "PGDATABASE": strings.TrimPrefix(dsn.Path, "/"), "PGUSER": dsn.User.Username(), "PGPASSWORD": password}, "active": nil, "previous": nil, "colors": object{}, "phase": "initializing", "initial_image": image, "initial_contract": contract}
+		c.state = stateFromObject(object{"format": 1, "prefix": prefix, "network": prefix + "-entry", "database_network": network, "database_id": db["Id"], "database_image": db["Image"], "database_volume": c.dataMount(db, "/var/lib/postgresql/data"), "application_volume": c.dataMount(app, "/app/data"), "application_env": settings, "legacy_id": app["Id"], "legacy_restart": obj(obj(app["HostConfig"])["RestartPolicy"])["Name"], "proxy_image": proxy, "port": o.port, "bind": bind, "database_env": object{"PGHOST": dsn.Hostname(), "PGPORT": port, "PGDATABASE": strings.TrimPrefix(dsn.Path, "/"), "PGUSER": dsn.User.Username(), "PGPASSWORD": password}, "active": nil, "previous": nil, "colors": object{}, "phase": "initializing", "initial_image": image, "initial_contract": contract})
 		c.persist()
 	})
 	c.resumeInitial()
 }
 func (c *controller) resumeInitial() {
-	image := str(c.state["initial_image"])
-	contract := obj(c.state["initial_contract"])
-	if str(c.state["phase"]) == "initializing" {
+	image := c.state.InitialImage
+	contract := c.state.InitialContract
+	if c.state.Phase == "initializing" {
 		c.bundle(image, func(b string) { c.migrate(b, contract) })
 		c.ensureEntryNetwork()
 		c.progress("维护", "停止旧写入，最终导入；原卷保持原样")
-		c.docker("update", "--restart=no", str(c.state["legacy_id"]))
-		c.docker("stop", "--timeout", "-1", str(c.state["legacy_id"]))
-		c.state["phase"] = "importing"
+		c.docker("update", "--restart=no", c.state.LegacyID)
+		c.docker("stop", "--timeout", "-1", c.state.LegacyID)
+		c.state.Phase = "importing"
 		c.persist()
 	}
 	file := filepath.Join(c.path, "import.env")
-	atomic(file, envBytes(obj(c.state["application_env"])), 0o600)
-	c.docker("run", "--rm", "--network", str(c.state["database_network"]), "--env-file", file, "--mount", "type=volume,src="+str(c.state["application_volume"])+",dst=/app/data", "--entrypoint", "/app/server", image, "deploy-import")
+	atomic(file, envBytes(c.state.ApplicationEnv), 0o600)
+	c.docker("run", "--rm", "--network", c.state.DatabaseNetwork, "--env-file", file, "--mount", "type=volume,src="+c.state.ApplicationVolume+",dst=/app/data", "--entrypoint", "/app/server", image, "deploy-import")
 	c.initialColor(image, contract)
 	c.control("blue", "active")
 	c.ensureProxy("blue")
-	c.state["active"] = "blue"
-	c.state["phase"] = "ready"
+	c.state.Active = "blue"
+	c.state.Phase = "ready"
 	c.persist()
 	c.progress("✓", "固定入口就绪；YuAction 使用 http://dreamtrans:8080")
 }
 func (c *controller) ensureEntryNetwork() {
-	network := str(c.state["network"])
+	network := c.state.Network
 	for _, n := range strings.Split(c.docker("network", "ls", "--format", "{{.Name}}"), "\n") {
 		if n == network {
-			need(str(obj(c.inspect("network", network)["Labels"])["dreamtrans.release"]) == str(c.state["prefix"]), "entry network belongs to another installation")
+			need(str(obj(c.inspect("network", network)["Labels"])["dreamtrans.release"]) == c.state.Prefix, "entry network belongs to another installation")
 			return
 		}
 	}
-	c.docker("network", "create", "--label", "dreamtrans.release="+str(c.state["prefix"]), network)
+	c.docker("network", "create", "--label", "dreamtrans.release="+c.state.Prefix, network)
 }
 func (c *controller) deploy(o *options) {
 	c.assertDatabase()
-	phase := str(c.state["phase"])
+	phase := c.state.Phase
 	need(phase == "ready" || phase == "draining", "unfinished release; use resume/abort/rollback")
 	c.syncEntry()
 	ref := o.image
@@ -402,8 +396,8 @@ func (c *controller) deploy(o *options) {
 		ref = c.latest()
 	}
 	image := c.imageID(ref)
-	active := str(c.state["active"])
-	colors := obj(c.state["colors"])
+	active := c.state.Active
+	colors := c.state.Colors
 	if image == str(obj(colors[active])["image"]) && c.environmentMatches(active) {
 		c.progress("✓", "已是该固定版本")
 		if phase == "draining" {
@@ -419,13 +413,13 @@ func (c *controller) deploy(o *options) {
 	c.bundle(image, func(bundle string) {
 		contract = load(filepath.Join(bundle, "release.json"))
 		contractOK(contract, obj(obj(colors[active])["contract"]))
-		if !c.edge() && str(obj(c.state["application_env"])["EDGE_ROUTING_ENABLED"]) != "" {
+		if !c.edge() && str(c.state.ApplicationEnv["EDGE_ROUTING_ENABLED"]) != "" {
 			need(number(contract["edge_configuration"]) >= 1, "candidate cannot preserve separate Edge management/routing settings; use a compatible release")
 		}
 		c.memory(contract)
 		c.migrate(bundle, contract)
 	})
-	c.state["resolved_image"] = ref
+	c.state.ResolvedImage = ref
 	c.persist()
 	c.startColor(color, image, contract)
 	if o.pause {
@@ -441,8 +435,8 @@ func (c *controller) observe(seconds int) {
 	err := attempt(func() {
 		until := time.Now().Add(time.Duration(seconds) * time.Second)
 		for time.Now().Before(until) {
-			c.probe(str(c.state["active"]))
-			need(c.routeColor() == str(c.state["active"]), "route changed during observation")
+			c.probe(c.state.Active)
+			need(c.routeColor() == c.state.Active, "route changed during observation")
 			c.sleep(2 * time.Second)
 		}
 	})
@@ -450,22 +444,22 @@ func (c *controller) observe(seconds int) {
 		c.rollback()
 		fail("observation failed; compatible previous image restored; database writes retained")
 	}
-	c.state["phase"] = "draining"
+	c.state.Phase = "draining"
 	c.persist()
 }
 func (c *controller) drain(seconds int) {
-	old := str(c.state["previous"])
+	old := c.state.Previous
 	if old == "" {
 		return
 	}
-	need(old != str(c.state["active"]), "refusing to drain the active version")
-	release := obj(obj(c.state["colors"])[old])
+	need(old != c.state.Active, "refusing to drain the active version")
+	release := obj(c.state.Colors[old])
 	if !yes(obj(c.inspect("container", c.name(old))["State"])["Running"]) {
 		need(!c.edge() || yes(release["empty_spool"]), "stopped Edge journal has not been acknowledged")
 		if c.yuaction() && c.containerExists(old+"-frontend") {
 			c.docker("stop", "--timeout", "-1", c.name(old+"-frontend"))
 		}
-		c.state["phase"] = "ready"
+		c.state.Phase = "ready"
 		c.persist()
 		return
 	}
@@ -482,7 +476,7 @@ func (c *controller) drain(seconds int) {
 			if c.yuaction() {
 				c.docker("stop", "--timeout", "-1", c.name(old+"-frontend"))
 			}
-			c.state["phase"] = "ready"
+			c.state.Phase = "ready"
 			c.persist()
 			c.progress("8/8", "发布完成；旧镜像保留用于兼容回切")
 			return
@@ -491,14 +485,14 @@ func (c *controller) drain(seconds int) {
 			// Retry offers for streams admitted just before cutover and for a
 			// client whose earlier preflight failed. Never force-close either.
 			_ = attempt(func() {
-				active := str(c.state["active"])
+				active := c.state.Active
 				c.probe(active)
 				need(c.routeColor() == active, "YuAction replacement route not confirmed")
 				c.control(old, "handoff")
 			})
 		}
 		if !time.Now().Before(until) {
-			c.state["phase"] = "draining"
+			c.state.Phase = "draining"
 			c.persist()
 			if yes(c.drainPolicy()["enabled"]) {
 				c.progress("待排空", "保留旧实例与现有转录；后台自动继续检查")
@@ -511,11 +505,11 @@ func (c *controller) drain(seconds int) {
 	}
 }
 func (c *controller) rollback() {
-	old := str(c.state["previous"])
+	old := c.state.Previous
 	need(old != "", "no compatible previous managed release")
 	c.assertDatabase()
-	colors := obj(c.state["colors"])
-	contractOK(obj(obj(colors[old])["contract"]), obj(obj(colors[str(c.state["active"])])["contract"]))
+	colors := c.state.Colors
+	contractOK(obj(obj(colors[old])["contract"]), obj(obj(colors[c.state.Active])["contract"]))
 	if !yes(obj(c.inspect("container", c.name(old))["State"])["Running"]) {
 		c.docker("start", c.name(old))
 	}
@@ -524,18 +518,18 @@ func (c *controller) rollback() {
 	}
 	c.waitReady(old)
 	c.switchColor(old)
-	c.state["phase"] = "draining"
+	c.state.Phase = "draining"
 	c.persist()
 	c.progress("回切", "旧镜像接流；数据库新写入保留；另一实例等待排空")
 }
 func (c *controller) abort() {
-	target := str(c.state["target"])
-	need(str(c.state["phase"]) == "candidate" && target != str(c.state["active"]), "abort is only valid before cutover")
+	target := c.state.Target
+	need(c.state.Phase == "candidate" && target != c.state.Active, "abort is only valid before cutover")
 	present := c.containerExists(target)
 	state := object{}
 	if present {
 		info := c.inspect("container", c.name(target))
-		need(str(info["Image"]) == str(obj(obj(c.state["colors"])[target])["image"]), "candidate image differs from persisted intent")
+		need(str(info["Image"]) == str(obj(c.state.Colors[target])["image"]), "candidate image differs from persisted intent")
 		state = obj(info["State"])
 	}
 	running := yes(state["Running"]) && !yes(state["Restarting"])
@@ -557,7 +551,7 @@ func (c *controller) abort() {
 		}
 	}
 	if c.edge() {
-		obj(obj(c.state["colors"])[target])["empty_spool"] = true
+		obj(c.state.Colors[target])["empty_spool"] = true
 	}
 	if running {
 		c.docker("stop", "--timeout", "-1", c.name(target))
@@ -565,32 +559,32 @@ func (c *controller) abort() {
 	if c.yuaction() && c.containerExists(target+"-frontend") {
 		c.docker("stop", "--timeout", "-1", c.name(target+"-frontend"))
 	}
-	if str(c.state["previous"]) == target {
-		c.state["previous"] = nil
+	if c.state.Previous == target {
+		c.state.Previous = ""
 	}
-	c.state["phase"] = "ready"
-	c.state["target"] = nil
-	if settings, ok := obj(obj(c.state["colors"])[str(c.state["active"])])["application_env"]; ok && !c.edge() {
-		c.state["application_env"] = cloneObject(obj(settings))
+	c.state.Phase = "ready"
+	c.state.Target = ""
+	if settings, ok := obj(c.state.Colors[c.state.Active])["application_env"]; ok && !c.edge() {
+		c.state.ApplicationEnv = cloneObject(obj(settings))
 	}
 	c.persist()
 	c.progress("中止", "候选已停止；原版本与新写入保留")
 }
 func (c *controller) resume(o *options) {
 	c.assertDatabase()
-	phase := str(c.state["phase"])
+	phase := c.state.Phase
 	need(phase != "initializing" && phase != "importing", "initial conversion interrupted; rerun init --maintenance or edge install")
 	switch phase {
 	case "candidate":
 		c.recoverCandidate()
-		c.switchColor(str(c.state["target"]))
+		c.switchColor(c.state.Target)
 	case "switching":
-		c.switchColor(str(c.state["target"]))
+		c.switchColor(c.state.Target)
 	}
-	if str(c.state["phase"]) == "observing" {
+	if c.state.Phase == "observing" {
 		c.observe(o.observe)
 	}
-	if str(c.state["phase"]) == "draining" {
+	if c.state.Phase == "draining" {
 		c.finishRelease(o)
 	}
 }
@@ -599,9 +593,9 @@ func (c *controller) recoverCandidate() {
 		c.recoverYuActionCandidate()
 		return
 	}
-	color := str(c.state["target"])
-	need(color != str(c.state["active"]) && (color == "blue" || color == "green"), "invalid candidate identity")
-	release := obj(obj(c.state["colors"])[color])
+	color := c.state.Target
+	need(color != c.state.Active && (color == "blue" || color == "green"), "invalid candidate identity")
+	release := obj(c.state.Colors[color])
 	if !c.containerExists(color) {
 		if c.edge() {
 			c.verifyStoppedSpool(color)
@@ -614,13 +608,13 @@ func (c *controller) recoverCandidate() {
 	if c.edge() {
 		need(hasMount(info, "/spool", filepath.Join(c.path, color, "spool")), "candidate journal differs from intent")
 	} else {
-		need(c.dataMount(info, "/app/data") == str(c.state["application_volume"]), "candidate application volume differs from intent")
+		need(c.dataMount(info, "/app/data") == c.state.ApplicationVolume, "candidate application volume differs from intent")
 	}
 	if !yes(obj(info["State"])["Running"]) {
 		c.docker("start", c.name(color))
 	}
-	if _, attached := networks(info)[str(c.state["network"])]; !attached {
-		c.docker("network", "connect", str(c.state["network"]), c.name(color))
+	if _, attached := networks(info)[c.state.Network]; !attached {
+		c.docker("network", "connect", c.state.Network, c.name(color))
 	}
 	c.smoke(color)
 }
@@ -630,10 +624,10 @@ func (c *controller) status() object {
 	}
 	s := object{}
 	for _, k := range []string{"phase", "active", "previous", "target", "network", "port", "database_volume", "application_volume", "drain_started_at", "handoff_status"} {
-		s[k] = c.state[k]
+		s[k] = c.state.publicValue(k)
 	}
 	colors := object{}
-	for color, v := range obj(c.state["colors"]) {
+	for color, v := range c.state.Colors {
 		info := object{"image": obj(v)["image"]}
 		if c.yuaction() {
 			info["frontend_image"] = obj(v)["frontend_image"]
@@ -650,7 +644,7 @@ func (c *controller) status() object {
 	s["colors"] = colors
 	s["drain_policy"] = c.drainPolicy()
 	if !c.edge() {
-		s["configuration_pending"] = !c.environmentMatches(str(c.state["active"]))
+		s["configuration_pending"] = !c.environmentMatches(c.state.Active)
 	}
 	return s
 }
@@ -666,6 +660,6 @@ func (c *controller) environmentMatches(color string) bool {
 	if c.edge() {
 		return true
 	}
-	settings, recorded := obj(obj(c.state["colors"])[color])["application_env"]
-	return !recorded || reflect.DeepEqual(obj(settings), obj(c.state["application_env"]))
+	settings, recorded := obj(c.state.Colors[color])["application_env"]
+	return !recorded || reflect.DeepEqual(obj(settings), c.state.ApplicationEnv)
 }

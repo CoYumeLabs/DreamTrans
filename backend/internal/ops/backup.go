@@ -90,8 +90,8 @@ func (c *controller) archiveConfiguration(destination string) {
 }
 func (c *controller) backupLock() (func(), func()) {
 	ctx, cancel := context.WithCancel(c.ctx)
-	a := append([]string{"exec", "-i"}, envArgs(obj(c.state["database_env"]))...)
-	a = append(a, str(c.state["database_id"]), "psql", "-XAt", "-v", "ON_ERROR_STOP=1")
+	a := append([]string{"exec", "-i"}, envArgs(c.state.DatabaseEnv)...)
+	a = append(a, c.state.DatabaseID, "psql", "-XAt", "-v", "ON_ERROR_STOP=1")
 	cmd := exec.CommandContext(ctx, "docker", a...) //nolint:gosec // Fixed executable and explicit Docker/psql arguments, credentials never logged.
 	in, e := cmd.StdinPipe()
 	check(e, "cannot open backup lock input")
@@ -154,8 +154,8 @@ func (c *controller) backupLock() (func(), func()) {
 func (c *controller) snapshot(output string) {
 	need(!c.edge(), "main-site snapshots cannot be run on an Edge")
 	c.assertDatabase()
-	active := str(c.state["active"])
-	_, ok := obj(c.state["colors"])[active]
+	active := c.state.Active
+	_, ok := c.state.Colors[active]
 	need(active != "" && ok, "initial conversion incomplete; preserve pre-conversion backup")
 	destination, e := filepath.Abs(output)
 	check(e, "invalid backup path")
@@ -168,8 +168,8 @@ func (c *controller) snapshot(output string) {
 	defer unlock()
 	assertLock()
 	envfile := filepath.Join(stage, "database.env")
-	atomic(envfile, envBytes(obj(c.state["database_env"])), 0o600)
-	c.docker("run", "--rm", "--network", str(c.state["database_network"]), "--env-file", envfile, "--mount", "type=volume,src="+str(c.state["application_volume"])+",dst=/application,readonly", "--mount", "type=bind,src="+stage+",dst=/snapshot", "--entrypoint", "/bin/sh", str(c.state["database_image"]), "-ec", "pg_dump -Fc > /snapshot/database.dump; tar -C /application -cf /snapshot/application.tar .; pg_restore --list /snapshot/database.dump >/dev/null; tar -tf /snapshot/application.tar >/dev/null")
+	atomic(envfile, envBytes(c.state.DatabaseEnv), 0o600)
+	c.docker("run", "--rm", "--network", c.state.DatabaseNetwork, "--env-file", envfile, "--mount", "type=volume,src="+c.state.ApplicationVolume+",dst=/application,readonly", "--mount", "type=bind,src="+stage+",dst=/snapshot", "--entrypoint", "/bin/sh", c.state.DatabaseImage, "-ec", "pg_dump -Fc > /snapshot/database.dump; tar -C /application -cf /snapshot/application.tar .; pg_restore --list /snapshot/database.dump >/dev/null; tar -tf /snapshot/application.tar >/dev/null")
 	c.archiveConfiguration(filepath.Join(stage, "configuration.tar"))
 	hashes := object{}
 	files := map[string]string{}
@@ -178,7 +178,7 @@ func (c *controller) snapshot(output string) {
 		hashes[name] = hashFile(path)
 		files[name] = path
 	}
-	save(filepath.Join(stage, "manifest.json"), object{"format": 1, "database_volume": c.state["database_volume"], "application_volume": c.state["application_volume"], "active_image": obj(obj(c.state["colors"])[active])["image"], "files": hashes})
+	save(filepath.Join(stage, "manifest.json"), object{"format": 1, "database_volume": c.state.DatabaseVolume, "application_volume": c.state.ApplicationVolume, "active_image": obj(c.state.Colors[active])["image"], "files": hashes})
 	files["manifest.json"] = filepath.Join(stage, "manifest.json")
 	snapshot := filepath.Join(stage, "snapshot.tar")
 	tarFiles(snapshot, files)

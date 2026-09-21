@@ -114,7 +114,8 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		c := newController(ctx, o.root, out, errOut)
 		defer c.httpClient.CloseIdleConnections()
 		unlock := lock(filepath.Join(c.path, "lock"))
-		defer unlock()
+		//nolint:gocritic // Handoff replaces unlock; defer must invoke the current closure.
+		defer func() { unlock() }()
 		if o.action == "install-tools" {
 			need(c.state == nil || (c.edge() == o.edge && c.yuaction() == o.yuaction), "installation role mismatch")
 			if o.edge {
@@ -143,10 +144,22 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		}
 		need(c.state != nil, "no existing installation; run initial conversion or Edge install")
 		need(c.edge() == o.edge && c.yuaction() == o.yuaction, "installation role mismatch; use the appropriate main, edge or yuaction command")
+		if o.action == "upgrade" && !c.edge() && !c.yuaction() {
+			c.prepareUpgrade(o, func(binary, backup, image string) {
+				unlock()
+				unlock = func() {}
+				runPreparedUpgrade(ctx, binary, backup, image, o, out, errOut)
+			})
+			return
+		}
 		c.dispatch(o)
 	})
 }
 func (c *controller) dispatch(o *options) {
+	if o.action == "upgrade-prepared" {
+		c.dispatchPreparedUpgrade(o)
+		return
+	}
 	switch o.action {
 	case "deploy", "upgrade":
 		if c.yuaction() {
@@ -157,9 +170,6 @@ func (c *controller) dispatch(o *options) {
 			c.converge(o)
 		} else {
 			c.deploy(o)
-			if o.action == "upgrade" && !c.edge() {
-				c.upgradeYuActionCompanion(o)
-			}
 		}
 	case "resume":
 		c.resume(o)
@@ -196,17 +206,17 @@ func (c *controller) dispatch(o *options) {
 			c.diagnose()
 		}
 	case "logs":
-		_, _ = fmt.Fprintln(c.out, c.docker("logs", "--tail", "100", c.name(str(c.state["active"]))))
+		_, _ = fmt.Fprintln(c.out, c.docker("logs", "--tail", "100", c.name(c.state.Active)))
 	case "state-field":
 		need(len(o.extra) == 1 && (o.extra[0] == "database_id" || o.extra[0] == "active_image"), "state-field only exposes database_id or active_image")
-		v := c.state[o.extra[0]]
+		v := c.state.publicValue(o.extra[0])
 		if o.extra[0] == "active_image" {
-			v = obj(obj(c.state["colors"])[str(c.state["active"])])["image"]
+			v = obj(c.state.Colors[c.state.Active])["image"]
 		}
 		_, _ = fmt.Fprintln(c.out, str(v))
 	case "pause-releases", "resume-releases":
 		need(c.edge(), "Edge-only operation")
-		c.state["release_paused"] = o.action == "pause-releases"
+		c.state.ReleasePaused = o.action == "pause-releases"
 		c.persist()
 	case "converge":
 		need(c.edge(), "Edge-only operation")
@@ -264,7 +274,7 @@ func (c *controller) installTools(backup string) {
 	}
 	if c.state != nil && c.edge() {
 		need(!strings.ContainsAny(c.root, " \n\r%\"\\"), "unsupported systemd installation path")
-		unit := "dreamtrans-edge-" + str(c.state["prefix"])
+		unit := "dreamtrans-edge-" + c.state.Prefix
 		service := "[Unit]\nDescription=DreamTrans Edge release reconciliation\nAfter=docker.service network-online.target\n[Service]\nType=oneshot\nExecStart=" + destination + " edge --dir " + c.root + " converge\n"
 		timer := "[Unit]\nDescription=Poll authorized Edge release requests\n[Timer]\nOnBootSec=60\nOnUnitActiveSec=60\nUnit=" + unit + ".service\n[Install]\nWantedBy=timers.target\n"
 		atomic("/etc/systemd/system/"+unit+".service", []byte(service), 0o644)

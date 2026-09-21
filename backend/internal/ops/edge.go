@@ -132,7 +132,7 @@ func (c *controller) startEdgeColor(color, image string, contract object) {
 	name := c.name(color)
 	dir := filepath.Join(c.path, color)
 	mkdir(dir)
-	colors := obj(c.state["colors"])
+	colors := c.state.Colors
 	if c.containerExists(color) {
 		_, recorded := colors[color]
 		need(recorded, "candidate name is already owned by an unrecorded container")
@@ -163,10 +163,10 @@ func (c *controller) startEdgeColor(color, image string, contract object) {
 	}
 	limit := fmt.Sprintf("%dm", max(128, memory))
 	colors[color] = object{"image": image, "contract": contract, "empty_spool": false}
-	c.state["phase"] = "candidate"
-	c.state["target"] = color
+	c.state.Phase = "candidate"
+	c.state.Target = color
 	c.persist()
-	c.docker("run", "-d", "--name", name, "--restart", "unless-stopped", "--network", str(c.state["network"]), "--memory", limit, "--memory-swap", limit, "--pids-limit", "128", "--mount", "type=bind,src="+filepath.Join(c.root, "config", "edge.json")+",dst=/config/edge.json,readonly", "--mount", "type=bind,src="+filepath.Join(dir, "spool")+",dst=/spool", "--mount", "type=bind,src="+filepath.Join(dir, "deployment")+",dst=/deployment", "-e", "DREAMTRANS_DEPLOYMENT_MODE=standby", "-e", "DREAMTRANS_DEPLOYMENT_STATE=/deployment/mode", "-e", "APP_VERSION="+image, "--log-opt", "max-size=10m", "--log-opt", "max-file=3", image)
+	c.docker("run", "-d", "--name", name, "--restart", "unless-stopped", "--network", c.state.Network, "--memory", limit, "--memory-swap", limit, "--pids-limit", "128", "--mount", "type=bind,src="+filepath.Join(c.root, "config", "edge.json")+",dst=/config/edge.json,readonly", "--mount", "type=bind,src="+filepath.Join(dir, "spool")+",dst=/spool", "--mount", "type=bind,src="+filepath.Join(dir, "deployment")+",dst=/deployment", "-e", "DREAMTRANS_DEPLOYMENT_MODE=standby", "-e", "DREAMTRANS_DEPLOYMENT_STATE=/deployment/mode", "-e", "APP_VERSION="+image, "--log-opt", "max-size=10m", "--log-opt", "max-file=3", image)
 	c.progress("4/8", "启动 Edge "+color)
 	for range 90 {
 		if attempt(func() { c.probe(color) }) == nil {
@@ -179,10 +179,10 @@ func (c *controller) startEdgeColor(color, image string, contract object) {
 }
 func (c *controller) installEdge(o *options) {
 	if c.state != nil {
-		need(str(c.state["phase"]) != "uninstalled", "uninstalled audit directory retained; use a new --dir and registration")
+		need(c.state.Phase != "uninstalled", "uninstalled audit directory retained; use a new --dir and registration")
 		need(c.edge(), "directory is not an Edge installation")
 		c.assertDatabase()
-		if str(c.state["active"]) == "" {
+		if c.state.Active == "" {
 			c.ensureEntryNetwork()
 			c.finishEdgeInstall(o)
 		}
@@ -245,7 +245,7 @@ func (c *controller) installEdge(o *options) {
 	id := str(config["node_id"])
 	need(len(id) >= 8, "invalid node identity")
 	prefix := "dreamtrans-edge-" + id[:8]
-	c.state = object{"format": 1, "role": "edge", "prefix": prefix, "network": prefix + "-entry", "port": o.port, "bind": "127.0.0.1", "proxy_image": proxy, "active": nil, "previous": nil, "colors": object{}, "phase": "initializing", "initial_image": image, "initial_contract": contract}
+	c.state = stateFromObject(object{"format": 1, "role": "edge", "prefix": prefix, "network": prefix + "-entry", "port": o.port, "bind": "127.0.0.1", "proxy_image": proxy, "active": nil, "previous": nil, "colors": object{}, "phase": "initializing", "initial_image": image, "initial_contract": contract})
 	c.persist()
 	c.ensureEntryNetwork()
 	c.finishEdgeInstall(o)
@@ -253,7 +253,7 @@ func (c *controller) installEdge(o *options) {
 	c.configureDrain(600)
 }
 func (c *controller) finishEdgeInstall(o *options) {
-	c.initialColor(str(c.state["initial_image"]), obj(c.state["initial_contract"]))
+	c.initialColor(c.state.InitialImage, c.state.InitialContract)
 	c.control("blue", "active")
 	c.ensureProxy("blue")
 	if o.tunnelImage != "" {
@@ -272,17 +272,17 @@ func (c *controller) finishEdgeInstall(o *options) {
 				c.docker("start", c.name("tunnel"))
 			}
 		} else {
-			c.docker("run", "-d", "--name", c.name("tunnel"), "--restart", "unless-stopped", "--network", str(c.state["network"]), "--mount", "type=bind,src="+file+",dst=/run/tunnel.token,readonly", "--log-opt", "max-size=10m", "--log-opt", "max-file=3", image, "tunnel", "--no-autoupdate", "run", "--token-file", "/run/tunnel.token")
+			c.docker("run", "-d", "--name", c.name("tunnel"), "--restart", "unless-stopped", "--network", c.state.Network, "--mount", "type=bind,src="+file+",dst=/run/tunnel.token,readonly", "--log-opt", "max-size=10m", "--log-opt", "max-file=3", image, "tunnel", "--no-autoupdate", "run", "--token-file", "/run/tunnel.token")
 		}
-		c.state["tunnel"] = true
+		c.state.Tunnel = true
 	}
-	c.state["active"] = "blue"
-	c.state["phase"] = "ready"
+	c.state.Active = "blue"
+	c.state.Phase = "ready"
 	c.persist()
-	if yes(c.state["tunnel"]) {
+	if c.state.Tunnel {
 		c.progress("✓", "节点已安装；容器 Tunnel 的服务地址为 http://dreamtrans:8080")
 	} else {
-		c.progress("✓", fmt.Sprintf("节点已安装；宿主机上的独立 Tunnel 转发至 http://127.0.0.1:%d", number(c.state["port"])))
+		c.progress("✓", fmt.Sprintf("节点已安装；宿主机上的独立 Tunnel 转发至 http://127.0.0.1:%d", c.state.Port))
 	}
 }
 func openSpool(path, mode string) *sql.DB {
@@ -313,7 +313,7 @@ func (c *controller) verifyStoppedSpool(color string) {
 }
 func (c *controller) drainNode() {
 	c.call(c.edgeConfig(), "self-mode", object{"mode": "draining"})
-	for color := range obj(c.state["colors"]) {
+	for color := range c.state.Colors {
 		if yes(obj(c.inspect("container", c.name(color))["State"])["Running"]) {
 			s := c.control(color, "draining")
 			c.progress("排空", fmt.Sprintf("%s: 连接=%d 任务=%d 已排空=%t", color, number(s["websockets"]), number(s["tasks"]), yes(s["drained"])))
@@ -324,7 +324,7 @@ func (c *controller) drainNode() {
 func (c *controller) uninstall() {
 	config := c.edgeConfig()
 	c.call(config, "self-mode", object{"mode": "draining"})
-	colors := obj(c.state["colors"])
+	colors := c.state.Colors
 	for color, v := range colors {
 		if yes(obj(c.inspect("container", c.name(color))["State"])["Running"]) {
 			need(yes(c.control(color, "draining")["drained"]), "sessions/results remain; uninstall refused")
@@ -333,22 +333,22 @@ func (c *controller) uninstall() {
 		}
 	}
 	c.call(config, "self-mode", object{"mode": "revoked"})
-	unit := "dreamtrans-edge-" + str(c.state["prefix"])
+	unit := "dreamtrans-edge-" + c.state.Prefix
 	if exists("/etc/systemd/system/" + unit + ".timer") {
 		c.command("", "systemctl", "disable", "--now", unit+".timer")
 	}
 	if yes(c.drainPolicy()["enabled"]) {
-		c.command("", "systemctl", "disable", "--now", "dreamtrans-drain-"+str(c.state["prefix"])+".timer")
+		c.command("", "systemctl", "disable", "--now", "dreamtrans-drain-"+c.state.Prefix+".timer")
 	}
 	names := append(keys(colors), "proxy")
-	if yes(c.state["tunnel"]) {
+	if c.state.Tunnel {
 		names = append(names, "tunnel")
 	}
 	for _, name := range names {
 		c.docker("stop", "--timeout", "-1", c.name(name))
 		c.docker("rm", c.name(name))
 	}
-	c.state["phase"] = "uninstalled"
+	c.state.Phase = "uninstalled"
 	c.persist()
 	c.progress("✓", "身份已吊销，容器已卸载；配置、队列与审计保留")
 }
@@ -418,13 +418,16 @@ func (c *controller) reconcileSpool(color string, config object) {
 	c.progress("对账", fmt.Sprintf("%s: 已归档 %d 条，剩余 %d 条", color, len(events), count))
 }
 func (c *controller) reconcile() {
-	phase := str(c.state["phase"])
+	phase := c.state.Phase
 	need(phase == "ready" || phase == "draining", "reconcile requires a stable route")
 	config := c.edgeConfig()
 	c.call(config, "self-mode", object{"mode": "draining"})
-	restore := obj(c.state["reconciliation_restore"])
+	restore := c.state.ReconciliationRestore
+	if restore == nil {
+		restore = object{}
+	}
 	running := []string{}
-	for color := range obj(c.state["colors"]) {
+	for color := range c.state.Colors {
 		info := c.inspect("container", c.name(color))
 		if yes(obj(info["State"])["Running"]) {
 			s := c.control(color, "draining")
@@ -443,14 +446,14 @@ func (c *controller) reconcile() {
 			running = append(running, color)
 		}
 	}
-	c.state["reconciliation_restore"] = restore
+	c.state.ReconciliationRestore = restore
 	c.persist()
 	err := attempt(func() {
 		for _, color := range running {
 			c.docker("update", "--restart=no", c.name(color))
 			c.docker("kill", "--signal=KILL", c.name(color))
 		}
-		for color := range obj(c.state["colors"]) {
+		for color := range c.state.Colors {
 			c.reconcileSpool(color, config)
 		}
 	})
@@ -459,7 +462,7 @@ func (c *controller) reconcile() {
 			fail("reconciliation retained data; retry reconcile to restore containers")
 		}
 	}
-	delete(c.state, "reconciliation_restore")
+	c.state.ReconciliationRestore = nil
 	c.persist()
 	if err != nil {
 		fail(err.Error())
@@ -467,10 +470,10 @@ func (c *controller) reconcile() {
 	c.progress("✓", "归档完成；节点保持排空，请在主站确认后恢复调度")
 }
 func (c *controller) converge(o *options) {
-	if yes(c.state["release_paused"]) || len(obj(c.state["reconciliation_restore"])) > 0 {
+	if c.state.ReleasePaused || len(c.state.ReconciliationRestore) > 0 {
 		return
 	}
-	phase := str(c.state["phase"])
+	phase := c.state.Phase
 	if phase != "ready" && phase != "draining" {
 		return
 	}
@@ -481,7 +484,7 @@ func (c *controller) converge(o *options) {
 	}
 	o.image = str(desired["image"])
 	image := c.imageID(o.image)
-	if image != str(obj(obj(c.state["colors"])[str(c.state["active"])])["image"]) {
+	if image != str(obj(c.state.Colors[c.state.Active])["image"]) {
 		c.deploy(o)
 	} else if phase == "draining" {
 		c.drain(o.drainTimeout)

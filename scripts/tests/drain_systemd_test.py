@@ -76,7 +76,10 @@ def main():
             (root / '.env').write_text('retained-configuration\n')
             state = {'format': 1, 'role': role, 'prefix': prefix, 'active': 'blue', 'previous': 'green',
                      'phase': 'observing', 'database_id': 'db-id', 'database_volume': 'production-pg',
-                     'application_volume': 'production-app', 'colors': {'blue': {}, 'green': {}},
+                     'application_volume': 'production-app',
+                     'colors': {color: {'image': 'fixture-image', 'contract': {
+                         'protocol': 1, 'state_epoch': 1, 'expand_migrations': []
+                     }} for color in ('blue', 'green')},
                      'drain_started_at': '2020-01-01T00:00:00Z'}
             state_file = root / '.bluegreen/state.json'
             state_file.write_text(json.dumps(state))

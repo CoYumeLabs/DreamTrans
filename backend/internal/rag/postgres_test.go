@@ -42,6 +42,13 @@ func TestPostgresLegacyImportAndConcurrentWriters(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
+	db.SetMaxOpenConns(7)
+	if _, err := NewPostgresStoreWithDB(db); err == nil {
+		t.Fatal("borrowed store accepted missing legacy import")
+	}
+	if err := db.PingContext(t.Context()); err != nil {
+		t.Fatal("failed borrowed initialization closed the owner pool")
+	}
 	sqlitePath := filepath.Join(t.TempDir(), "rag.db")
 	original, err := NewStore(sqlitePath)
 	if err != nil {
@@ -59,6 +66,19 @@ func TestPostgresLegacyImportAndConcurrentWriters(t *testing.T) {
 	}
 	if err = ImportLegacy(t.Context(), db, sqlitePath, `{}`); err != nil {
 		t.Fatal(err)
+	}
+	borrowed, err := NewPostgresStoreWithDB(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if borrowed.db != db || db.Stats().MaxOpenConnections != 7 {
+		t.Fatal("RAG replaced or reconfigured the application pool")
+	}
+	if err := borrowed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.PingContext(t.Context()); err != nil {
+		t.Fatal("closing borrowed RAG storage closed the application pool")
 	}
 	blue, err := NewPostgresStore(parsed.String())
 	if err != nil {

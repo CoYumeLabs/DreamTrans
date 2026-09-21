@@ -10,10 +10,12 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	"github.com/dreamtrans/backend/internal/deployment"
 	"image"
 	"regexp"
 	"sort"
+
+	"github.com/dreamtrans/backend/internal/deployment"
+
 	// Register JPEG decoding for knowledge image validation.
 	_ "image/jpeg"
 	// Register PNG decoding for knowledge image validation.

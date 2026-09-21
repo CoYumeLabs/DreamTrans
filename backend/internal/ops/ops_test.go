@@ -22,7 +22,7 @@ func testController(t *testing.T) *controller {
 	t.Helper()
 	c := newController(t.Context(), t.TempDir(), io.Discard, io.Discard)
 	contract := object{"protocol": 1, "state_epoch": 1, "edge_protocol_min": 1, "edge_protocol_max": 2, "expand_migrations": []any{}, "minimum_free_memory_mb": 128}
-	c.state = object{"format": 1, "prefix": "fixture", "network": "entry", "database_network": "original", "database_id": "db-id", "database_volume": "real-pg", "application_volume": "real-app", "proxy_image": "proxy-id", "phase": "ready", "active": "blue", "previous": "green", "target": "blue", "colors": object{"blue": object{"image": "blue-image", "contract": contract}, "green": object{"image": "green-image", "contract": contract}}}
+	c.state = stateFromObject(object{"format": 1, "prefix": "fixture", "network": "entry", "database_network": "original", "database_id": "db-id", "database_volume": "real-pg", "application_volume": "real-app", "proxy_image": "proxy-id", "phase": "ready", "active": "blue", "previous": "green", "target": "blue", "colors": object{"blue": object{"image": "blue-image", "contract": contract}, "green": object{"image": "green-image", "contract": contract}}})
 	c.sleep = func(time.Duration) {}
 	return c
 }
@@ -77,7 +77,7 @@ func requireFailure(t *testing.T, fn func(), part string) {
 
 func TestStateCompatibilityAndExclusiveLock(t *testing.T) {
 	c := testController(t)
-	c.state["unknown_future"] = decode([]byte(`{"counter":9007199254740993,"value":"preserve"}`))
+	c.state.Extra["unknown_future"] = []byte(`{"counter":9007199254740993,"value":"preserve"}`)
 	c.persist()
 	before := load(filepath.Join(c.path, "state.json"))
 	other := newController(t.Context(), c.root, io.Discard, io.Discard)
@@ -101,7 +101,7 @@ func TestDrainRetainsLongRunningWork(t *testing.T) {
 	(*control)["drained"] = false
 	(*control)["websockets"] = 1
 	c.drain(0)
-	if c.state["phase"] != "draining" {
+	if c.state.Phase != "draining" {
 		t.Fatal("lost drain progress")
 	}
 	for _, call := range *calls {
@@ -112,7 +112,7 @@ func TestDrainRetainsLongRunningWork(t *testing.T) {
 	(*control)["websockets"] = 0
 	(*control)["drained"] = true
 	c.drain(0)
-	if c.state["phase"] != "ready" {
+	if c.state.Phase != "ready" {
 		t.Fatal("did not complete drain")
 	}
 	if !strings.Contains(strings.Join(*calls, "\n"), "docker stop --timeout -1 fixture-green") {
@@ -125,10 +125,10 @@ func TestBackgroundDrainDeadlineRecoveryAndCompatibility(t *testing.T) {
 	calls, _, control := testEngine(c)
 	(*control)["drained"] = false
 	(*control)["websockets"] = 1
-	c.state["phase"] = "draining"
+	c.state.Phase = "draining"
 	save(filepath.Join(c.path, "drain-policy.json"), object{"enabled": true, "handoff_after_seconds": 600})
 	c.drainTick() // Adopt a release whose old CLI did not record its deadline.
-	started := str(c.state["drain_started_at"])
+	started := c.state.DrainStartedAt
 	if started == "" {
 		t.Fatal("deadline not persisted")
 	}
@@ -136,12 +136,12 @@ func TestBackgroundDrainDeadlineRecoveryAndCompatibility(t *testing.T) {
 	if strings.Contains(strings.Join(*calls, "\n"), "deploy-control handoff") {
 		t.Fatal("premature handoff")
 	}
-	c.state["drain_started_at"] = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+	c.state.DrainStartedAt = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
 	c.persist()
 	restarted := newController(t.Context(), c.root, io.Discard, io.Discard)
 	restarted.run, restarted.sleep = c.run, c.sleep
 	restarted.drainTick()
-	if restarted.state["handoff_status"] != "old_version_requires_natural_drain" {
+	if restarted.state.HandoffStatus != "old_version_requires_natural_drain" {
 		t.Fatal(restarted.state)
 	}
 	(*control)["handoff_supported"] = true
@@ -154,7 +154,7 @@ func TestBackgroundDrainDeadlineRecoveryAndCompatibility(t *testing.T) {
 	}
 	(*control)["drained"] = true
 	restarted.drainTick()
-	if restarted.state["phase"] != "ready" {
+	if restarted.state.Phase != "ready" {
 		t.Fatal("automatic retirement failed")
 	}
 }
@@ -163,18 +163,18 @@ func TestBackgroundDrainDoesNotMigrateToBrokenRoute(t *testing.T) {
 	c := testController(t)
 	calls, route, control := testEngine(c)
 	(*control)["drained"], (*control)["handoff_supported"] = false, true
-	c.state["phase"] = "draining"
-	c.state["drain_started_at"] = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+	c.state.Phase = "draining"
+	c.state.DrainStartedAt = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
 	save(filepath.Join(c.path, "drain-policy.json"), object{"enabled": true, "handoff_after_seconds": 0})
 	*route = "green"
 	c.drainTick()
-	if c.state["handoff_status"] != "handoff_check_failed_retrying" {
+	if c.state.HandoffStatus != "handoff_check_failed_retrying" {
 		t.Fatal(c.state)
 	}
 	if strings.Contains(strings.Join(*calls, "\n"), "deploy-control handoff") {
 		t.Fatal("offered broken replacement")
 	}
-	c.state["phase"] = "observing"
+	c.state.Phase = "observing"
 	before := len(*calls)
 	c.drainTick()
 	if len(*calls) != before {
@@ -185,7 +185,7 @@ func TestBackgroundDrainDoesNotMigrateToBrokenRoute(t *testing.T) {
 func TestDrainTimerIsRebootPersistentAndRoleSpecific(t *testing.T) {
 	for _, role := range []string{"main", "edge"} {
 		c := testController(t)
-		c.state["role"] = role
+		c.state.Role = role
 		dir := t.TempDir()
 		c.writeDrainUnits(dir, "test-drain")
 		service, _ := os.ReadFile(filepath.Join(dir, "test-drain.service"))
@@ -219,21 +219,21 @@ func TestSwitchFailurePreservesRouteAndResumes(t *testing.T) {
 		return base(ctx, a, in)
 	}
 	requireFailure(t, func() { c.switchColor("green") }, "operation failed")
-	if *route != "blue" || c.state["active"] != "blue" || c.state["phase"] != "switching" {
+	if *route != "blue" || c.state.Active != "blue" || c.state.Phase != "switching" {
 		t.Fatal("failed cutover lost original route or recovery intent")
 	}
 	c.resume(&options{observe: 0, drainTimeout: 0})
-	if *route != "green" || c.state["active"] != "green" || c.state["previous"] != "blue" || c.state["phase"] != "ready" {
+	if *route != "green" || c.state.Active != "green" || c.state.Previous != "blue" || c.state.Phase != "ready" {
 		t.Fatal("resume did not complete intended cutover")
 	}
-	if c.state["database_volume"] != "real-pg" || c.state["application_volume"] != "real-app" {
+	if c.state.DatabaseVolume != "real-pg" || c.state.ApplicationVolume != "real-app" {
 		t.Fatal("production volumes changed")
 	}
 }
 func TestObservationFailureRollsBackWithoutRestoringDatabase(t *testing.T) {
 	c := testController(t)
-	c.state["active"] = "green"
-	c.state["previous"] = "blue"
+	c.state.Active = "green"
+	c.state.Previous = "blue"
 	calls, route, _ := testEngine(c)
 	*route = "green"
 	base := c.run
@@ -248,7 +248,7 @@ func TestObservationFailureRollsBackWithoutRestoringDatabase(t *testing.T) {
 		return base(ctx, a, in)
 	}
 	requireFailure(t, func() { c.observe(1) }, "previous image restored")
-	if c.state["active"] != "blue" || *route != "blue" {
+	if c.state.Active != "blue" || *route != "blue" {
 		t.Fatal("did not restore compatible route")
 	}
 	for _, v := range *calls {
@@ -259,10 +259,10 @@ func TestObservationFailureRollsBackWithoutRestoringDatabase(t *testing.T) {
 }
 func TestProtocolDowngradeAndStoppedEdgeSpoolAreRejected(t *testing.T) {
 	c := testController(t)
-	old := obj(obj(obj(c.state["colors"])["blue"])["contract"])
+	old := obj(obj(c.state.Colors["blue"])["contract"])
 	candidate := object{"protocol": 1, "state_epoch": 1, "edge_protocol_min": 1, "edge_protocol_max": 1, "expand_migrations": []any{}}
 	requireFailure(t, func() { contractOK(candidate, old) }, "already authorized")
-	c.state["role"] = "edge"
+	c.state.Role = "edge"
 	dir := filepath.Join(c.path, "green", "spool")
 	mkdir(dir)
 	c.verifyStoppedSpool("green")
@@ -453,7 +453,7 @@ func TestEdgeUninstallRefusesUnacknowledgedOrActiveWork(t *testing.T) {
 	for _, stopped := range []bool{false, true} {
 		t.Run(fmt.Sprint(stopped), func(t *testing.T) {
 			c := testController(t)
-			c.state["role"] = "edge"
+			c.state.Role = "edge"
 			calls, _, control := testEngine(c)
 			(*control)["drained"] = false
 			(*control)["websockets"] = 1
@@ -494,7 +494,7 @@ func TestEdgeUninstallRefusesUnacknowledgedOrActiveWork(t *testing.T) {
 func TestMainIdentityMismatchBlocksToolReplacement(t *testing.T) {
 	c := testController(t)
 	testEngine(c)
-	c.state["database_volume"] = "unexpected-empty-volume"
+	c.state.DatabaseVolume = "unexpected-empty-volume"
 	path := filepath.Join(c.root, "dreamtransctl")
 	atomic(path, []byte("previous binary"), 0o700)
 	requireFailure(t, func() { c.installTools("") }, "identity or volume changed")

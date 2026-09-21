@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	openai "github.com/dreamtrans/backend/internal/adapters/openai_provider"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	openai "github.com/dreamtrans/backend/internal/adapters/openai_provider"
 
 	"github.com/dreamtrans/backend/internal/store"
 )

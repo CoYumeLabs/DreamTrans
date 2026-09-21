@@ -62,6 +62,7 @@ var requiredSchemaMigrations = []string{
 	"038_signup_risk_defense.sql",
 	"049_consent_and_account_archive.sql",
 	"050_durable_batch.sql",
+	"060_system_settings_revision.sql",
 }
 
 // PostgresStore handles all database operations
@@ -90,6 +91,7 @@ func NewPostgresStore() (*PostgresStore, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
@@ -475,6 +477,8 @@ func (s *PostgresStore) CompleteStaleSessions(
 		WHERE status IN ('active', 'paused')
 		  AND updated_at < NOW() - make_interval(secs => $1)
 		  AND NOT (id = ANY($2::uuid[]))
+ AND NOT EXISTS (SELECT 1 FROM edge_sessions e WHERE e.id=sessions.id
+  AND e.status<>'closed' AND e.lease_until>NOW())
 	`, staleAfter.Seconds(), pq.Array(excluded))
 	if err != nil {
 		return 0, err

@@ -23,14 +23,14 @@ func edgeIngressRoute(enabled bool, fallback http.Handler) http.Handler {
 	})
 }
 
-func registerEdges(mux *http.ServeMux) (*edgecontrol.Service, func()) {
-	if authMw == nil {
+func (app *Application) registerEdges(mux *http.ServeMux) (*edgecontrol.Service, func()) {
+	if app.Auth == nil {
 		return nil, func() {}
 	}
-	ready := os.Getenv("EDGE_SIGNING_SEED") != "" && pgStore != nil
-	mux.Handle("/api/admin/edges/setup", authMw.RequireAuth(edgecontrol.SetupHTTP(ready)))
+	ready := os.Getenv("EDGE_SIGNING_SEED") != "" && app.Store != nil
+	mux.Handle("/api/admin/edges/setup", app.Auth.RequireAuth(edgecontrol.SetupHTTP(ready)))
 	if !ready {
-		unconfigured := authMw.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		unconfigured := app.Auth.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Cache-Control", "no-store")
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -40,17 +40,17 @@ func registerEdges(mux *http.ServeMux) (*edgecontrol.Service, func()) {
 		mux.Handle("/api/admin/edges/", unconfigured)
 		return nil, func() {}
 	}
-	service, err := edgecontrol.New(pgStore.DB(), billingSvc, os.Getenv("EDGE_SIGNING_SEED"))
+	service, err := edgecontrol.New(app.Store.DB(), app.Billing, os.Getenv("EDGE_SIGNING_SEED"))
 	if err != nil {
 		log.Fatalf("initialize edge control: %v", err)
 	}
-	mux.Handle("/api/edges", authMw.RequireAuth(http.HandlerFunc(service.UserHTTP)))
-	mux.Handle("/api/edges/", authMw.RequireAuth(http.HandlerFunc(service.UserHTTP)))
-	mux.Handle("/api/admin/edges", authMw.RequireAuth(http.HandlerFunc(service.AdminHTTP)))
-	mux.Handle("/api/admin/edges/", authMw.RequireAuth(http.HandlerFunc(service.AdminHTTP)))
+	mux.Handle("/api/edges", app.Auth.RequireAuth(http.HandlerFunc(service.UserHTTP)))
+	mux.Handle("/api/edges/", app.Auth.RequireAuth(http.HandlerFunc(service.UserHTTP)))
+	mux.Handle("/api/admin/edges", app.Auth.RequireAuth(http.HandlerFunc(service.AdminHTTP)))
+	mux.Handle("/api/admin/edges/", app.Auth.RequireAuth(http.HandlerFunc(service.AdminHTTP)))
 	mux.HandleFunc("/api/edge-control/installer", service.InstallerHTTP)
 	mux.Handle("/api/edge-control/", http.HandlerFunc(service.NodeHTTP))
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(app.ctx)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)

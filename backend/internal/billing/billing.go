@@ -129,7 +129,9 @@ type UsageRecord struct {
 
 // Service is the billing ledger. It is safe for concurrent use.
 type Service struct {
-	db *sql.DB
+	settingsMu sync.Mutex
+	settings   *SystemSettingsSnapshot
+	db         *sql.DB
 	// pricingViewMu keeps a request's pricing on one immutable catalog view
 	// while catalog writes replace it.
 	pricingViewMu sync.RWMutex
@@ -168,10 +170,7 @@ func (s *Service) TrainingProgramAvailable() bool {
 // TrainingDiscountPercent is the program discount in force, or 0 when the
 // program is not offered or switched off.
 func (s *Service) TrainingDiscountPercent(ctx context.Context) float64 {
-	if !s.TrainingProgramEnabled(ctx) {
-		return 0
-	}
-	return trainingDiscountPercentFrom(ctx, s.db)
+	return s.TrainingSettings(ctx).DiscountPercent
 }
 
 func trainingDiscountPercentFrom(ctx context.Context, queryer queryRower) float64 {
@@ -287,9 +286,7 @@ type queryRower interface {
 }
 
 func (s *Service) GetSystemSetting(ctx context.Context, key string) (string, error) {
-	var value string
-	err := s.db.QueryRowContext(ctx, `SELECT value FROM system_settings WHERE key = $1`, key).Scan(&value)
-	return value, err
+	return s.cachedSystemSetting(ctx, key)
 }
 
 func (s *Service) SetSystemSetting(ctx context.Context, key string, value string, updatedBy *string) error {
@@ -314,7 +311,11 @@ func (s *Service) SetSystemSettings(ctx context.Context, settings map[string]str
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.invalidateSettings()
+	return nil
 }
 
 func boolSettingTx(ctx context.Context, queryer queryRower, key string, fallback bool) (bool, error) {

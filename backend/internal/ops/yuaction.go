@@ -50,7 +50,11 @@ func (c *controller) yuactionContract(image string) object {
 			need(contains(contract["expand_migrations"], name), "YuAction migration lacks expand-only declaration")
 			sums[name] = hashFile(file)
 		}
-		for name, sum := range obj(c.state["yuaction_schema"]) {
+		applied := object{}
+		if c.state != nil {
+			applied = c.state.YuactionSchema
+		}
+		for name, sum := range applied {
 			need(sums[name] == sum, "YuAction migration differs from applied release: "+name)
 		}
 		contract["schema"] = sums
@@ -60,14 +64,14 @@ func (c *controller) yuactionContract(image string) object {
 
 func (c *controller) deployYuAction(o *options) {
 	c.assertDatabase()
-	if str(c.state["active"]) == "" {
+	if c.state.Active == "" {
 		c.resumeYuActionInitial()
 	}
-	phase := str(c.state["phase"])
+	phase := c.state.Phase
 	need(phase == "ready" || phase == "draining", "unfinished YuAction release; use resume/abort/rollback")
 	image, frontend := c.yuactionImages(o)
-	active := str(c.state["active"])
-	previous := obj(obj(c.state["colors"])[active])
+	active := c.state.Active
+	previous := obj(c.state.Colors[active])
 	if str(previous["image"]) == image && str(previous["frontend_image"]) == frontend {
 		if phase == "draining" {
 			c.finishRelease(o)
@@ -80,7 +84,7 @@ func (c *controller) deployYuAction(o *options) {
 	if active == "blue" {
 		target = "green"
 	}
-	c.state["candidate_frontend"] = frontend
+	c.state.CandidateFrontend = frontend
 	c.persist()
 	c.startYuActionColor(target, image, contract)
 	if o.pause {
@@ -132,7 +136,7 @@ http {
 }
 
 func (c *controller) startYuActionColor(color, image string, contract object) {
-	colors := obj(c.state["colors"])
+	colors := c.state.Colors
 	if c.containerExists(color) {
 		release, recorded := colors[color]
 		need(recorded, "unrecorded YuAction container occupies candidate name")
@@ -155,25 +159,25 @@ func (c *controller) startYuActionColor(color, image string, contract object) {
 	check(os.Chown(dir, 10001, 10001), "cannot assign deployment directory")
 	atomic(filepath.Join(dir, "mode"), []byte("standby\n"), 0o600)
 	check(os.Chown(filepath.Join(dir, "mode"), 10001, 10001), "cannot assign deployment state")
-	settings := cloneObject(obj(c.state["application_env"]))
+	settings := cloneObject(c.state.ApplicationEnv)
 	settings["DREAMTRANS_DEPLOYMENT_MODE"] = "standby"
 	settings["DREAMTRANS_DEPLOYMENT_STATE"] = "/deployment/mode"
 	settings["LISTEN_ADDR"] = "0.0.0.0:18083"
 	atomic(filepath.Join(dir, "application.env"), envBytes(settings), 0o600)
-	colors[color] = object{"image": image, "frontend_image": c.state["candidate_frontend"], "contract": contract, "application_env": cloneObject(obj(c.state["application_env"]))}
-	c.state["phase"] = "candidate"
-	c.state["target"] = color
+	colors[color] = object{"image": image, "frontend_image": c.state.CandidateFrontend, "contract": contract, "application_env": cloneObject(c.state.ApplicationEnv)}
+	c.state.Phase = "candidate"
+	c.state.Target = color
 	c.persist()
-	c.docker("run", "-d", "--name", c.name(color), "--restart", "unless-stopped", "--network", str(c.state["database_network"]), "--env-file", filepath.Join(dir, "application.env"), "--mount", "type=bind,src="+dir+",dst=/deployment", "--label", "dreamtrans.release="+str(c.state["prefix"]), image)
-	c.docker("network", "connect", str(c.state["network"]), c.name(color))
+	c.docker("run", "-d", "--name", c.name(color), "--restart", "unless-stopped", "--network", c.state.DatabaseNetwork, "--env-file", filepath.Join(dir, "application.env"), "--mount", "type=bind,src="+dir+",dst=/deployment", "--label", "dreamtrans.release="+c.state.Prefix, image)
+	c.docker("network", "connect", c.state.Network, c.name(color))
 	c.ensureYuActionFrontend(color)
 	c.smoke(color)
-	c.state["yuaction_schema"] = contract["schema"]
+	c.state.YuactionSchema = obj(contract["schema"])
 	c.persist()
 }
 
 func (c *controller) ensureYuActionFrontend(color string) {
-	image := str(obj(obj(c.state["colors"])[color])["frontend_image"])
+	image := str(obj(c.state.Colors[color])["frontend_image"])
 	name := color + "-frontend"
 	if c.containerExists(name) {
 		info := c.inspect("container", c.name(name))
@@ -183,14 +187,14 @@ func (c *controller) ensureYuActionFrontend(color string) {
 		}
 		return
 	}
-	c.docker("run", "-d", "--name", c.name(name), "--restart", "unless-stopped", "--network", str(c.state["network"]), "-e", "YUACTION_BACKEND_HOST="+c.name(color), "--label", "dreamtrans.release="+str(c.state["prefix"]), image)
+	c.docker("run", "-d", "--name", c.name(name), "--restart", "unless-stopped", "--network", c.state.Network, "-e", "YUACTION_BACKEND_HOST="+c.name(color), "--label", "dreamtrans.release="+c.state.Prefix, image)
 }
 func (c *controller) recoverYuActionCandidate() {
-	color := str(c.state["target"])
-	need(color != str(c.state["active"]) && (color == "blue" || color == "green"), "invalid YuAction candidate")
-	release := obj(obj(c.state["colors"])[color])
+	color := c.state.Target
+	need(color != c.state.Active && (color == "blue" || color == "green"), "invalid YuAction candidate")
+	release := obj(c.state.Colors[color])
 	if !c.containerExists(color) {
-		c.state["candidate_frontend"] = release["frontend_image"]
+		c.state.CandidateFrontend = str(release["frontend_image"])
 		c.startYuActionColor(color, str(release["image"]), obj(release["contract"]))
 		return
 	}
@@ -199,8 +203,8 @@ func (c *controller) recoverYuActionCandidate() {
 	if !yes(obj(info["State"])["Running"]) {
 		c.docker("start", c.name(color))
 	}
-	if _, ok := networks(info)[str(c.state["network"])]; !ok {
-		c.docker("network", "connect", str(c.state["network"]), c.name(color))
+	if _, ok := networks(info)[c.state.Network]; !ok {
+		c.docker("network", "connect", c.state.Network, c.name(color))
 	}
 	c.ensureYuActionFrontend(color)
 	c.smoke(color)
@@ -209,7 +213,7 @@ func (c *controller) recoverYuActionCandidate() {
 func (c *controller) initYuAction(o *options) {
 	if c.state != nil {
 		need(c.yuaction(), "installation belongs to another product")
-		if str(c.state["active"]) == "" {
+		if c.state.Active == "" {
 			c.resumeYuActionInitial()
 			return
 		}
@@ -253,7 +257,7 @@ func (c *controller) initYuAction(o *options) {
 		}
 	}
 	prefix := fmt.Sprintf("yuaction-%x", sha256.Sum256([]byte(c.root)))[:21]
-	c.state = object{"format": 1, "role": "yuaction", "prefix": prefix, "network": prefix + "-entry", "database_network": network, "database_id": db["Id"], "database_volume": c.dataMount(db, "/var/lib/postgresql/data"), "database_env": databaseEnv, "application_env": settings, "legacy_id": app["Id"], "legacy_frontend": front["Id"], "proxy_image": proxy, "bind": obj(bindings[0])["HostIp"], "port": o.port, "colors": object{}, "phase": "initializing", "initial_image": image, "initial_contract": contract, "candidate_frontend": frontend}
+	c.state = stateFromObject(object{"format": 1, "role": "yuaction", "prefix": prefix, "network": prefix + "-entry", "database_network": network, "database_id": db["Id"], "database_volume": c.dataMount(db, "/var/lib/postgresql/data"), "database_env": databaseEnv, "application_env": settings, "legacy_id": app["Id"], "legacy_frontend": front["Id"], "proxy_image": proxy, "bind": obj(bindings[0])["HostIp"], "port": o.port, "colors": object{}, "phase": "initializing", "initial_image": image, "initial_contract": contract, "candidate_frontend": frontend})
 	c.persist()
 	c.resumeYuActionInitial()
 }
@@ -262,25 +266,25 @@ func (c *controller) resumeYuActionInitial() {
 	// Fail closed: this one-time conversion must never kill a pre-protocol
 	// browser recording. Subsequent upgrade/rollback uses cooperative migration.
 	schema := "public"
-	if strings.Contains(str(obj(c.state["application_env"])["DATABASE_URL"]), "search_path=yuaction") {
+	if strings.Contains(str(c.state.ApplicationEnv["DATABASE_URL"]), "search_path=yuaction") {
 		schema = "yuaction"
 	}
 	need(c.pg("SELECT count(*) FROM "+schema+".rooms WHERE state->>'transcription'='recording';") == "0", "legacy recording exists; kept both existing containers running; finish legacy recording before initial conversion")
 	c.ensureEntryNetwork()
 	if !c.containerExists("blue") {
-		c.startYuActionColor("blue", str(c.state["initial_image"]), obj(c.state["initial_contract"]))
+		c.startYuActionColor("blue", c.state.InitialImage, c.state.InitialContract)
 	} else {
-		c.state["target"] = "blue"
+		c.state.Target = "blue"
 		c.recoverYuActionCandidate()
 	}
 	for _, key := range []string{"legacy_frontend", "legacy_id"} {
-		c.docker("update", "--restart=no", str(c.state[key]))
-		c.docker("stop", "--timeout", "-1", str(c.state[key]))
+		c.docker("update", "--restart=no", str(c.state.publicValue(key)))
+		c.docker("stop", "--timeout", "-1", str(c.state.publicValue(key)))
 	}
 	c.control("blue", "active")
 	c.ensureProxy("blue")
-	c.state["active"] = "blue"
-	c.state["phase"] = "ready"
+	c.state.Active = "blue"
+	c.state.Phase = "ready"
 	c.persist()
 	c.progress("✓", "YuAction 固定端口入口已采用蓝绿；后续升级与回滚保持录音采集")
 }
@@ -292,7 +296,7 @@ func (c *controller) upgradeYuActionCompanion(o *options) {
 	if !exists(filepath.Join(root, ".bluegreen", "state.json")) {
 		return
 	}
-	active := obj(obj(c.state["colors"])[str(c.state["active"])])
+	active := obj(c.state.Colors[c.state.Active])
 	labels := obj(obj(c.inspect("image", str(active["image"]))["Config"])["Labels"])
 	revision := str(labels["org.opencontainers.image.revision"])
 	need(regexp.MustCompile(`^[a-f0-9]{40}$`).MatchString(revision) && str(labels["org.opencontainers.image.source"]) == "https://github.com/CoYumeLabs/DreamTrans", "linked YuAction requires a verified official main revision; use its independent command for custom releases")

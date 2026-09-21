@@ -40,7 +40,7 @@ COMMIT;
 `
 
 func (c *controller) diagnose() {
-	need(!c.edge() && str(c.state["active"]) != "", "requires a converted main site")
+	need(!c.edge() && c.state.Active != "", "requires a converted main site")
 	c.assertDatabase()
 	_, _ = fmt.Fprintln(c.out, "[1/4] Host resources (current sample; not EC2 credit history)", time.Now().UTC().Format(time.RFC3339))
 	for _, file := range []string{"/proc/loadavg", "/proc/meminfo"} {
@@ -60,12 +60,12 @@ func (c *controller) diagnose() {
 		_, _ = fmt.Fprintln(c.out, c.command("", "vmstat", "1", "3"))
 	}
 	_, _ = fmt.Fprintln(c.out, "[2/4] Active application, proxy and database resources")
-	_, _ = fmt.Fprintln(c.out, c.docker("stats", "--no-stream", "--format", "{{.Name}} CPU={{.CPUPerc}} MEMORY={{.MemUsage}} BLOCK_IO={{.BlockIO}} PIDS={{.PIDs}}", str(c.state["database_id"]), c.name(str(c.state["active"])), c.name("proxy")))
+	_, _ = fmt.Fprintln(c.out, c.docker("stats", "--no-stream", "--format", "{{.Name}} CPU={{.CPUPerc}} MEMORY={{.MemUsage}} BLOCK_IO={{.BlockIO}} PIDS={{.PIDs}}", c.state.DatabaseID, c.name(c.state.Active), c.name("proxy")))
 	_, _ = fmt.Fprintln(c.out, "[3/4] Local entry latency (does not measure browser/Cloudflare)")
 	transport := &http.Transport{Proxy: nil}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
-	host := str(c.state["bind"])
+	host := c.state.Bind
 	if host == "" || host == "0.0.0.0" {
 		host = "127.0.0.1"
 	}
@@ -76,7 +76,7 @@ func (c *controller) diagnose() {
 		for sample := 1; sample <= 2; sample++ {
 			start := time.Now()
 			status := "failed/timeout"
-			req, e := http.NewRequestWithContext(c.ctx, http.MethodGet, fmt.Sprintf("http://%s:%d%s", host, number(c.state["port"]), path), http.NoBody)
+			req, e := http.NewRequestWithContext(c.ctx, http.MethodGet, fmt.Sprintf("http://%s:%d%s", host, c.state.Port, path), http.NoBody)
 			check(e, "invalid local entrance")
 			response, e := client.Do(req)
 			if e == nil {

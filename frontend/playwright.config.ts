@@ -14,6 +14,9 @@ export default defineConfig({
     : 'list',
   use: {
     baseURL: `http://127.0.0.1:${port}`,
+    // Some virtualized hosts do not deliver headless compositor frames. Run
+    // the same assertions under Xvfb with PLAYWRIGHT_HEADED=1 on those hosts.
+    headless: process.env.PLAYWRIGHT_HEADED !== '1',
     // The specs assert Chinese copy; the interface follows the browser language.
     locale: 'zh-CN',
     trace: 'retain-on-failure',

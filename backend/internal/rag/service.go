@@ -2,6 +2,7 @@ package rag
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"math"
 	"os"
@@ -109,6 +110,12 @@ type IngestResult struct {
 
 // NewServiceFromEnv builds a RAG service from environment variables.
 func NewServiceFromEnv() (*Service, error) {
+	return NewServiceWithDatabase(nil)
+}
+
+// NewServiceWithDatabase uses the main application's pool for PostgreSQL RAG.
+// Standalone callers retain the existing environment-backed storage behavior.
+func NewServiceWithDatabase(db *sql.DB) (*Service, error) {
 	// Validate the provider before opening SQLite. Otherwise a missing API key
 	// would leak one database handle on every WebSocket connection attempt.
 	emb, err := NewOpenAIEmbeddingFromEnv()
@@ -121,7 +128,11 @@ func NewServiceFromEnv() (*Service, error) {
 	}
 	var st *Store
 	if os.Getenv("RAG_STORAGE") == "postgres" {
-		st, err = NewPostgresStore(os.Getenv("DATABASE_URL"))
+		if db != nil {
+			st, err = NewPostgresStoreWithDB(db)
+		} else {
+			st, err = NewPostgresStore(os.Getenv("DATABASE_URL"))
+		}
 	} else {
 		st, err = NewStore(dbPath)
 	}

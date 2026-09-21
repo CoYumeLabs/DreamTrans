@@ -26,3 +26,8 @@ vendor/
 *.log
 *.logs
 .claude/
+
+# Local application binaries and browser test state
+/backend/dreamtrans
+/backend/test-results/
+**/__pycache__/

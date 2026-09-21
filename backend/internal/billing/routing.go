@@ -67,14 +67,7 @@ func (d RouteDecision) fundingLabel() string {
 // must have the no-training account and the administrator switch must not be
 // off. When off, nobody reaches the training account and the UI hides it.
 func (s *Service) TrainingProgramEnabled(ctx context.Context) bool {
-	if !s.trainingProgram {
-		return false
-	}
-	enabled, err := boolSettingTx(ctx, s.db, trainingProgramEnabledKey, true)
-	if err != nil {
-		return false
-	}
-	return enabled
+	return s.TrainingSettings(ctx).Enabled
 }
 
 // GiftTrainingDiscount reports the administrator override that lets gift
@@ -312,7 +305,8 @@ type TrainingProgramStats struct {
 
 // TrainingProgramStatistics computes the program counters.
 func (s *Service) TrainingProgramStatistics(ctx context.Context) (*TrainingProgramStats, error) {
-	stats := &TrainingProgramStats{Enabled: s.TrainingProgramEnabled(ctx), DiscountPercent: s.TrainingDiscountPercent(ctx)}
+	settings := s.TrainingSettings(ctx)
+	stats := &TrainingProgramStats{Enabled: settings.Enabled, DiscountPercent: settings.DiscountPercent}
 	err := s.db.QueryRowContext(ctx, `SELECT
         (SELECT COUNT(*) FROM users WHERE training_opt_in),
         (SELECT COUNT(*) FROM users WHERE training_opt_in=false),
