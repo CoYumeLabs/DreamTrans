@@ -76,3 +76,33 @@ sudo /opt/dreamtrans-edge/dreamtransctl edge upgrade
 完整备份格式未改变：`manifest.json`、`database.dump`、`application.tar`、`configuration.tar`，并沿用原加密口令、远端回读校验与保留策略。接管后应运行一次完整 R2 备份并做隔离恢复演练，不能只看 `--dry-run`。
 
 CI 使用 Go race 测试覆盖状态/锁、排空、回切、身份边界和回执核对；真实 Docker 生命周期覆盖旧形态卷转换、升级、候选暂停恢复、写入保留、快照恢复和稳定入口。Python 仅用作 CI 测试驱动与历史行为对比。
+
+## 首次启用 Edge：先管理，后切换转录
+
+升级主站应用和 Go 工具到支持 `edge_configuration: 1` 的发行后，在主站运行：
+
+```bash
+sudo /root/dreamtrans/dreamtransctl --dir /root/dreamtrans configure-edge
+```
+
+此命令不需要 Cloudflare API Key。它复用 `APP_BASE_URL`（可用 `--main https://主站域名` 指定）、在服务器上生成签名密钥或保留已有密钥，自动解析与当前主站提交对应的 Edge 镜像并记录不可变 digest，复用当前固定代理发行。首次配置显式设置 `EDGE_ROUTING_ENABLED=false`：管理接口、节点注册和心跳可用，普通用户仍走主站。已有区域部署未设置该开关时保留原来开启调度的行为，不会因升级突然改变接入方式。
+
+配置在原安装目录 `.bluegreen/state.json` 的生产环境记录中管理，权限 0600；更新前保留 `configuration.previous.json`，完整备份包含这些文件。不会重写 `.env`、Compose、R2 凭证、数据库密码或卷名。发布记录保存各颜色实际配置；即使镜像没有变化，环境变化也会启动候选并通过健康、功能检查后切换。重复配置不轮换签名密钥、不重建已生效的实例。失败后保留旧服务，使用 `resume` / `abort`；若失败发生在候选创建前，可执行 `upgrade --image 当前固定镜像` 重试。`rollback` 回切对应颜色和配置，不恢复数据库快照。
+
+管理页面显示初始化状态。创建节点后，选择“复用机器上的 Tunnel”（默认），在 Cloudflare 自行创建独立域名和独立 Tunnel，在 Edge 宿主机运行 Tunnel 并指向 `http://127.0.0.1:16003`。DreamTrans 安装器不索要任何 Cloudflare 凭证。已有 Docker Tunnel 需要接入 Edge 入口网络并指向该网络的 `http://dreamtrans:8080`，不要用容器自己的 `127.0.0.1`。
+
+另一种方式是先在主站配置 `configure-edge --tunnel-image cloudflare/cloudflared@sha256:固定版本`，然后在管理页面选择安装 Tunnel 客户端。安装器只在 Edge 隐藏输入节点专用 Token，并运行该节点 Tunnel；它不需要主站 Cloudflare API Key。账号级自动创建 Tunnel/DNS 的 API 保留兼容已有部署，但不属于默认安装流程，也不是必填项。
+
+复制页面的安装命令到新机器执行，隐藏输入一次性注册凭证和独立 Speechmatics Key。命令自动携带所选节点的并发上限、训练账号选项，并校验安装脚本。新节点默认不参与调度；新安装自动启用 600 秒后台排空。等待心跳、检测入口后启用节点，并开启“本浏览器管理员试用 Edge”进行真实转录、历史保存和账本核验。试用仍正常计费，只有主站认证的 super_admin 可为新会话申请试用；前端开关不能绕过角色、容量或预算检查。
+
+测试通过后在主站执行：
+
+```bash
+sudo /root/dreamtrans/dreamtransctl --dir /root/dreamtrans configure-edge --routing on
+```
+
+命令要求存在心跳新鲜、健康、支持协议 2、有空余容量的不训练节点，再通过蓝绿发布启用普通用户调度。训练账号用户还需要配置健康的训练节点。此预检不是实时音频、供应商或计费验收的替代。
+
+暂停新会话使用 Edge，可执行同一命令加 `--routing off`。节点控制与用量回传继续工作；已有 Edge 会话保持 Edge 接入，并在原权限、租约和预算规则内恢复。刚完成供应商收尾的会话保留两分钟恢复窗口；更早结束的会话不能借旧编号绕过关闭的新会话调度。不会因关闭新会话调度而丢弃回传队列。管理员试用是本浏览器偏好，测试完应关闭。
+
+高级参数 `--image EDGE_REPOSITORY@sha256:DIGEST` 与 `--proxy-image PROXY_REPOSITORY@sha256:DIGEST` 覆盖自动选择。不应把主站镜像填写为 Edge 镜像；控制器检查 Edge 清单及 Go 安装工具。正式发布前应完成主站备份，现有自动备份计划保持不变。

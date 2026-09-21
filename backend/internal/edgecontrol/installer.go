@@ -1,6 +1,7 @@
 package edgecontrol
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"net/http"
@@ -27,7 +28,19 @@ func (s *Service) InstallerHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(data)
 }
-func (s *Service) installerInfo() (map[string]string, error) {
+func (s *Service) nodeInstallerInfo(ctx context.Context, node, tunnelMode string) (map[string]string, error) {
+	if tunnelMode == "" {
+		tunnelMode = "existing"
+	}
+	if tunnelMode != "existing" && tunnelMode != "install" {
+		return nil, fmt.Errorf("invalid Tunnel mode")
+	}
+	maximum, training := 8, false
+	if node != "" {
+		if err := s.DB.QueryRowContext(ctx, `SELECT max_connections,training FROM edge_nodes WHERE id=$1 AND mode<>'revoked'`, node).Scan(&maximum, &training); err != nil {
+			return nil, err
+		}
+	}
 	base := strings.TrimRight(os.Getenv("APP_BASE_URL"), "/")
 	image := os.Getenv("EDGE_RELEASE_IMAGE")
 	proxy := os.Getenv("EDGE_PROXY_IMAGE")
@@ -38,10 +51,25 @@ func (s *Service) installerInfo() (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	tunnel := ""
+	if tunnelMode == "install" {
+		tunnel = os.Getenv("EDGE_CLOUDFLARED_IMAGE")
+		if !immutableImage.MatchString(tunnel) {
+			return nil, fmt.Errorf("configure a pinned Tunnel client or use an existing Tunnel")
+		}
+	}
+	return installerCommand(base, image, proxy, tunnel, data, maximum, training), nil
+}
+
+func installerCommand(base, image, proxy, tunnel string, data []byte, maximum int, training bool) map[string]string {
 	sum := fmt.Sprintf("%x", sha256.Sum256(data))
-	command := "(d=$(mktemp -d); curl -fsSL " + shellLiteral(base+"/api/edge-control/installer") + " -o \"$d/install.sh\" && printf '%s  %s\\n' " + shellLiteral(sum) + " \"$d/install.sh\" | sha256sum -c - && bash \"$d/install.sh\" " + shellLiteral(image) + " --main " + shellLiteral(base) + " --proxy-image " + shellLiteral(proxy) + ")"
-	if tunnel := os.Getenv("EDGE_CLOUDFLARED_IMAGE"); immutableImage.MatchString(tunnel) {
+	command := "(d=$(mktemp -d); curl -fsSL " + shellLiteral(base+"/api/edge-control/installer") + " -o \"$d/install.sh\" && printf '%s  %s\\n' " + shellLiteral(sum) + " \"$d/install.sh\" | sha256sum -c - && sudo bash \"$d/install.sh\" " + shellLiteral(image) + " --main " + shellLiteral(base) + " --proxy-image " + shellLiteral(proxy) + ")"
+	command = strings.TrimSuffix(command, ")") + fmt.Sprintf(" --maximum %d", maximum) + ")"
+	if training {
+		command = strings.TrimSuffix(command, ")") + " --training)"
+	}
+	if tunnel != "" {
 		command = strings.TrimSuffix(command, ")") + " --tunnel-image " + shellLiteral(tunnel) + ")"
 	}
-	return map[string]string{"command": command, "sha256": sum, "image": image}, nil
+	return map[string]string{"command": command, "sha256": sum, "image": image}
 }

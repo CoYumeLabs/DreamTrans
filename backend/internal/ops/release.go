@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -183,6 +184,9 @@ func (c *controller) switchColor(color string) {
 		fail(err.Error())
 	}
 	c.state["active"] = color
+	if settings, ok := obj(obj(c.state["colors"])[color])["application_env"]; ok && !c.edge() {
+		c.state["application_env"] = cloneObject(obj(settings))
+	}
 	c.state["previous"] = nullable(old)
 	c.state["phase"] = "observing"
 	c.state["drain_started_at"] = time.Now().UTC().Format(time.RFC3339Nano)
@@ -232,7 +236,7 @@ func (c *controller) startColor(color, image string, contract object) {
 	}
 	envFile := filepath.Join(dir, "application.env")
 	atomic(envFile, envBytes(settings), 0o600)
-	colors[color] = object{"image": image, "contract": contract}
+	colors[color] = object{"image": image, "contract": contract, "application_env": cloneObject(obj(c.state["application_env"]))}
 	c.state["phase"] = "candidate"
 	c.state["target"] = color
 	c.persist()
@@ -385,7 +389,7 @@ func (c *controller) deploy(o *options) {
 	image := c.imageID(ref)
 	active := str(c.state["active"])
 	colors := obj(c.state["colors"])
-	if image == str(obj(colors[active])["image"]) {
+	if image == str(obj(colors[active])["image"]) && c.environmentMatches(active) {
 		c.progress("✓", "已是该固定版本")
 		if phase == "draining" {
 			c.finishRelease(o)
@@ -400,6 +404,9 @@ func (c *controller) deploy(o *options) {
 	c.bundle(image, func(bundle string) {
 		contract = load(filepath.Join(bundle, "release.json"))
 		contractOK(contract, obj(obj(colors[active])["contract"]))
+		if !c.edge() && str(obj(c.state["application_env"])["EDGE_ROUTING_ENABLED"]) != "" {
+			need(number(contract["edge_configuration"]) >= 1, "candidate cannot preserve separate Edge management/routing settings; use a compatible release")
+		}
 		c.memory(contract)
 		c.migrate(bundle, contract)
 	})
@@ -526,6 +533,9 @@ func (c *controller) abort() {
 	}
 	c.state["phase"] = "ready"
 	c.state["target"] = nil
+	if settings, ok := obj(obj(c.state["colors"])[str(c.state["active"])])["application_env"]; ok && !c.edge() {
+		c.state["application_env"] = cloneObject(obj(settings))
+	}
 	c.persist()
 	c.progress("中止", "候选已停止；原版本与新写入保留")
 }
@@ -595,5 +605,23 @@ func (c *controller) status() object {
 	}
 	s["colors"] = colors
 	s["drain_policy"] = c.drainPolicy()
+	if !c.edge() {
+		s["configuration_pending"] = !c.environmentMatches(str(c.state["active"]))
+	}
 	return s
+}
+
+func cloneObject(source object) object {
+	result := object{}
+	for k, v := range source {
+		result[k] = v
+	}
+	return result
+}
+func (c *controller) environmentMatches(color string) bool {
+	if c.edge() {
+		return true
+	}
+	settings, recorded := obj(obj(c.state["colors"])[color])["application_env"]
+	return !recorded || reflect.DeepEqual(obj(settings), obj(c.state["application_env"]))
 }

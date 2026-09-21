@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/dreamtrans/backend/internal/auth"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -17,6 +18,26 @@ func TestRegionalModeRequiresSharedAdmission(t *testing.T) {
 		}
 		if !enabled && (!called || response.Code != http.StatusNoContent) {
 			t.Fatal("legacy deployment changed")
+		}
+	}
+}
+
+func TestUnconfiguredEdgeAdminRoutesRemainDiscoverable(t *testing.T) {
+	old := authMw
+	t.Cleanup(func() { authMw = old })
+	manager, err := auth.NewJWTManagerWithSecrets("0123456789abcdef0123456789abcdef", "fedcba9876543210fedcba9876543210")
+	if err != nil {
+		t.Fatal(err)
+	}
+	authMw = auth.NewAuthMiddleware(manager)
+	t.Setenv("EDGE_SIGNING_SEED", "")
+	mux := http.NewServeMux()
+	registerEdges(mux)()
+	for _, path := range []string{"/api/admin/edges", "/api/admin/edges/setup", "/api/admin/edges/installer"} {
+		res := httptest.NewRecorder()
+		mux.ServeHTTP(res, httptest.NewRequest(http.MethodGet, path, nil))
+		if res.Code != http.StatusUnauthorized {
+			t.Fatalf("%s returned %d", path, res.Code)
 		}
 	}
 }

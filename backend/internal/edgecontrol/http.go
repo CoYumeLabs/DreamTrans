@@ -71,12 +71,15 @@ func (s *Service) UserHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodPost && r.URL.Path == "/api/edges/authorize" {
-		var req AuthorizeRequest
+		var req struct {
+			AuthorizeRequest
+			Preview bool `json:"preview,omitempty"`
+		}
 		if !decode(w, r, &req) {
 			return
 		}
 		req.Origin = r.Header.Get("Origin")
-		result, err := s.Authorize(r.Context(), claims.UserID, claims.TenantID, req)
+		result, err := s.authorize(r.Context(), claims.UserID, claims.TenantID, req.AuthorizeRequest, RoutingEnabled() || (req.Preview && claims.Role == "super_admin"))
 		respond(w, result, err)
 		return
 	}
@@ -117,7 +120,7 @@ func (s *Service) AdminHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if path == "/installer" && r.Method == http.MethodGet {
-		info, err := s.installerInfo()
+		info, err := s.nodeInstallerInfo(r.Context(), r.URL.Query().Get("node"), r.URL.Query().Get("tunnel"))
 		respond(w, info, err)
 		return
 	}

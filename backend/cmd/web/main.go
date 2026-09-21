@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/dreamtrans/backend/internal/deployment"
+	"github.com/dreamtrans/backend/internal/edgecontrol"
 	"log"
 	"net/http"
 	"net/mail"
@@ -344,7 +345,7 @@ func buildHandler() (http.Handler, func()) {
 
 	// Speechmatics token endpoint (legacy - for classic UI)
 	tokenRoute := http.Handler(http.HandlerFunc(tokenHandler.HandleTokenRequest))
-	edgeEnabled := os.Getenv("EDGE_SIGNING_SEED") != "" && pgStore != nil && authMw != nil
+	edgeEnabled := edgecontrol.RoutingEnabled() && pgStore != nil && authMw != nil
 	mux.Handle("/api/token/rt", protect(edgeIngressRoute(edgeEnabled, tokenRoute)))
 
 	// WebSocket handler with billing support
@@ -398,7 +399,8 @@ func buildHandler() (http.Handler, func()) {
 			"email_verification_required": emailVerificationRequired,
 			"rag_enabled":                 ragHandler != nil,
 			"rag_stateless_supported":     true,
-			"edge_enabled":                os.Getenv("EDGE_SIGNING_SEED") != "" && pgStore != nil,
+			"edge_enabled":                edgecontrol.RoutingEnabled() && pgStore != nil,
+			"edge_control_enabled":        os.Getenv("EDGE_SIGNING_SEED") != "" && pgStore != nil,
 			// The training program is offered only with a no-training
 			// provider account; joining earns this transcription discount.
 			"training_program_available": trainingProgram,

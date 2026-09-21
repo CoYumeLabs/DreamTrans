@@ -24,7 +24,20 @@ func edgeIngressRoute(enabled bool, fallback http.Handler) http.Handler {
 }
 
 func registerEdges(mux *http.ServeMux) func() {
-	if os.Getenv("EDGE_SIGNING_SEED") == "" || pgStore == nil || authMw == nil {
+	if authMw == nil {
+		return func() {}
+	}
+	ready := os.Getenv("EDGE_SIGNING_SEED") != "" && pgStore != nil
+	mux.Handle("/api/admin/edges/setup", authMw.RequireAuth(edgecontrol.SetupHTTP(ready)))
+	if !ready {
+		unconfigured := authMw.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":"Edge 尚未初始化，请在主站运行 dreamtransctl configure-edge","code":"edge_not_configured"}`))
+		}))
+		mux.Handle("/api/admin/edges", unconfigured)
+		mux.Handle("/api/admin/edges/", unconfigured)
 		return func() {}
 	}
 	service, err := edgecontrol.New(pgStore.DB(), billingSvc, os.Getenv("EDGE_SIGNING_SEED"))
