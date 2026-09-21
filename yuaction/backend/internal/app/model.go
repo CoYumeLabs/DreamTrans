@@ -31,6 +31,7 @@ type Segment struct {
 }
 
 type Room struct {
+	HandoffUntil  time.Time  `json:"handoffUntil,omitempty"`
 	Code          string     `json:"code"`
 	Title         string     `json:"title"`
 	Kind          string     `json:"kind"`

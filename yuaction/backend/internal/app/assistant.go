@@ -75,6 +75,11 @@ func (s *Server) privateHost(r *http.Request) (Room, error) {
 		s.aiMu.Lock()
 		s.aiHosts[room.Code] = a
 		s.aiMu.Unlock()
+		if a.id != "" && rec.Link.AuthSessionID != a.id {
+			if err := s.changeRecord(r.Context(), room.Code, func(_ *Room, row *storage.Record) error { row.Link.AuthSessionID = a.id; return nil }); err != nil {
+				return room, err
+			}
+		}
 	}
 	return room, nil
 }
@@ -153,7 +158,7 @@ func (s *Server) assistantInfo(w http.ResponseWriter, r *http.Request) {
 		}
 		d.Text = ""
 		d.Chunks = nil
-		if d.Status == "processing" && s.aiJobs[jobKey(room.Code, "document", d.ID)] == nil {
+		if d.Status == "processing" && !s.jobActive(jobKey(room.Code, "document", d.ID)) {
 			d.Status = "interrupted"
 			d.Error = "处理被中断，请重新索引"
 		}
@@ -182,7 +187,7 @@ func (s *Server) assistantInfo(w http.ResponseWriter, r *http.Request) {
 		if !known[a.QuestionID] {
 			continue
 		}
-		if s.aiJobs[jobKey(room.Code, "answer", a.QuestionID)] == nil {
+		if !s.jobActive(jobKey(room.Code, "answer", a.QuestionID)) {
 			for _, p := range []*draftPart{&a.Generic, &a.Knowledge} {
 				if p.Status == "processing" {
 					p.Status = "interrupted"
@@ -306,6 +311,16 @@ func (s *Server) uploadDocument(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) indexDocumentLocked(rec storage.PrivateRecord, doc knowledgeDocument) error {
 	key := jobKey(rec.Code, "document", rec.ID)
+	releaseJob, claimErr := s.claimJob(key)
+	if claimErr != nil {
+		return claimErr
+	}
+	launched := false
+	defer func() {
+		if !launched {
+			releaseJob()
+		}
+	}()
 	if s.aiJobs[key] != nil {
 		return fail(409, "此资料正在索引")
 	}
@@ -326,7 +341,9 @@ func (s *Server) indexDocumentLocked(rec storage.PrivateRecord, doc knowledgeDoc
 	}
 	rec.Revision++
 	s.aiJobs[key] = cancel
+	launched = true
 	go func() {
+		defer releaseJob()
 		defer cancel()
 		chunks := documentChunks(doc.Text)
 		vectors, err := s.cfg.AI.embed(ctx, chunks)
@@ -482,6 +499,16 @@ func (s *Server) startAnswer(code, id string) error {
 	s.aiMu.Lock()
 	defer s.aiMu.Unlock()
 	key := jobKey(code, "answer", id)
+	releaseJob, claimErr := s.claimJob(key)
+	if claimErr != nil {
+		return claimErr
+	}
+	launched := false
+	defer func() {
+		if !launched {
+			releaseJob()
+		}
+	}()
 	if s.aiJobs[key] != nil {
 		return fail(409, "此问题正在生成，请稍候")
 	}
@@ -528,7 +555,9 @@ func (s *Server) startAnswer(code, id string) error {
 	if question.QuotedText != "" {
 		questionText += "\n\n提问引用的课堂字幕：\n" + question.QuotedText
 	}
+	launched = true
 	go func() {
+		defer releaseJob()
 		defer cancel()
 		generic := make(chan draftPart, 1)
 		go func() {

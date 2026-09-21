@@ -293,9 +293,13 @@ jobs:
       - name: Build YuAction backend
         uses: docker/build-push-action@v5
         with:
-          context: ./yuaction/backend
+          context: .
+          file: yuaction/backend/Dockerfile
           load: true
           tags: yuaction-backend-ci:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/CoYumeLabs/DreamTrans
           cache-from: type=gha,scope=yuaction-backend
           cache-to: type=gha,mode=max,scope=yuaction-backend
       - name: Build YuAction frontend
@@ -305,10 +309,18 @@ jobs:
           file: yuaction/frontend/Dockerfile
           load: true
           tags: yuaction-frontend-ci:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/CoYumeLabs/DreamTrans
           cache-from: type=gha,scope=yuaction-frontend
           cache-to: type=gha,mode=max,scope=yuaction-frontend
       - name: Verify independent port, persistence and container recreation
         run: python3 yuaction/scripts/tests/runtime_test.py "yuaction-backend-ci:${GITHUB_SHA}" "yuaction-frontend-ci:${GITHUB_SHA}"
+      - name: Verify YuAction live blue/green upgrade and rollback
+        run: |
+          (cd yuaction/backend && CGO_ENABLED=0 go test -c -tags=e2e -o "${RUNNER_TEMP}/yuaction-upstream.test" ./internal/app)
+          sudo env YUACTION_RUNTIME_FIXTURE_BINARY="${RUNNER_TEMP}/yuaction-upstream.test" python3 yuaction/scripts/tests/bluegreen_runtime_test.py "yuaction-backend-ci:${GITHUB_SHA}" "yuaction-frontend-ci:${GITHUB_SHA}"
+
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

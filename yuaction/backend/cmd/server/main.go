@@ -12,9 +12,30 @@ import (
 
 	"github.com/CoYumeLabs/YuAction/backend/internal/app"
 	"github.com/CoYumeLabs/YuAction/backend/internal/storage"
+	"github.com/dreamtrans/backend/pkg/deployment"
 )
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "deploy-control" {
+		if err := deployment.Control(os.Args[2], os.Stdout); err != nil {
+			slog.Error("deployment control failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if err := os.Setenv("DREAMTRANS_ROLE", "yuaction"); err != nil {
+		panic(err)
+	}
+	if err := deployment.Configure(); err != nil {
+		slog.Error("deployment configuration failed", "error", err)
+		os.Exit(1)
+	}
+	closeControl, err := deployment.Default().ServeControl()
+	if err != nil {
+		slog.Error("deployment control failed", "error", err)
+		os.Exit(1)
+	}
+	defer closeControl()
 	yufoloURL := os.Getenv("YUFOLO_URL")
 	if yufoloURL != "" {
 		u, err := url.Parse(yufoloURL)

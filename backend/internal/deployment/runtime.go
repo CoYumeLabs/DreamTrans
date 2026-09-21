@@ -50,7 +50,11 @@ func Configure() error {
 	if mode == "" {
 		return nil
 	}
-	if os.Getenv("DREAMTRANS_ROLE") != "edge" && (os.Getenv("RAG_STORAGE") != "postgres" || os.Getenv("DATABASE_URL") == "" || strings.EqualFold(os.Getenv("ALLOW_ANONYMOUS_API"), "true")) {
+	role := os.Getenv("DREAMTRANS_ROLE")
+	if role == "yuaction" && os.Getenv("DATABASE_URL") == "" {
+		return errors.New("YuAction blue/green requires PostgreSQL")
+	}
+	if role != "edge" && role != "yuaction" && (os.Getenv("RAG_STORAGE") != "postgres" || os.Getenv("DATABASE_URL") == "" || strings.EqualFold(os.Getenv("ALLOW_ANONYMOUS_API"), "true")) {
 		return errors.New("blue/green requires PostgreSQL RAG, DATABASE_URL and disabled anonymous API")
 	}
 	path := os.Getenv("DREAMTRANS_DEPLOYMENT_STATE")

@@ -151,7 +151,8 @@ jobs:
         id: yuaction-backend
         uses: docker/build-push-action@v5
         with:
-          context: ./yuaction/backend
+          context: .
+          file: yuaction/backend/Dockerfile
           push: true
           tags: ${{ steps.yuaction-backend-meta.outputs.tags }}
           labels: ${{ steps.yuaction-backend-meta.outputs.labels }}

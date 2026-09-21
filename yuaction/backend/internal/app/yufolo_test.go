@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"hash"
+	"hash/fnv"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -22,6 +24,10 @@ import (
 // Contract fixture for DreamTrans's existing auth, session and Speechmatics proxy APIs.
 // It cannot call a speech provider or incur real charges.
 type fakeYufolo struct {
+	audioHash                      hash.Hash64
+	audioBytes                     int64
+	connections, maxConnections    atomic.Int32
+	endDelay                       time.Duration
 	server                         *httptest.Server
 	mu                             sync.Mutex
 	sessions                       map[string]string
@@ -39,7 +45,7 @@ type fakeYufolo struct {
 
 func newFakeYufolo(t *testing.T) *fakeYufolo {
 	t.Helper()
-	f := &fakeYufolo{sessions: map[string]string{}, archives: map[string]map[string]any{}, sessionStatus: map[string]string{}}
+	f := &fakeYufolo{audioHash: fnv.New64a(), sessions: map[string]string{}, archives: map[string]map[string]any{}, sessionStatus: map[string]string{}}
 	f.server = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.server.Close)
 	return f
@@ -168,6 +174,13 @@ func (f *fakeYufolo) handle(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.lastStart = start
 		f.mu.Unlock()
+		n := f.connections.Add(1)
+		defer f.connections.Add(-1)
+		for previous := f.maxConnections.Load(); n > previous; previous = f.maxConnections.Load() {
+			if f.maxConnections.CompareAndSwap(previous, n) {
+				break
+			}
+		}
 		f.starts.Add(1)
 		_ = c.WriteJSON(map[string]string{"message": "RecognitionStarted"})
 		emitted := false
@@ -180,6 +193,10 @@ func (f *fakeYufolo) handle(w http.ResponseWriter, r *http.Request) {
 			if kind == websocket.BinaryMessage {
 				frames++
 				f.audioFrames.Add(1)
+				f.mu.Lock()
+				_, _ = f.audioHash.Write(data)
+				f.audioBytes += int64(len(data))
+				f.mu.Unlock()
 				if !emitted {
 					emitted = true
 					if start["translation_config"] != nil {
@@ -207,6 +224,7 @@ func (f *fakeYufolo) handle(w http.ResponseWriter, r *http.Request) {
 					_ = c.WriteJSON(map[string]string{"message": "Error", "reason": "incorrect audio sequence"})
 					return
 				}
+				time.Sleep(f.endDelay)
 				_ = c.WriteJSON(map[string]string{"message": "EndOfTranscript"})
 				return
 			}

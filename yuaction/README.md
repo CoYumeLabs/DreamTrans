@@ -29,7 +29,7 @@ YuAction 面向教师与演讲者，把活动、现场提问、大屏与共享�
 
 ## 合仓后的部署边界
 
-YuAction 保留独立容器、域名和端口（默认 `11452`）。本次统一代码、CI 和发行版本；DreamTrans 的 `dreamtransctl upgrade` 尚不升级 YuAction，后者仍通过自己的安装器原地更新。已有安装首次迁移请使用下方新地址，保留原 `--dir` 或 `--dreamtrans-dir` 参数。原数据库、房间、密钥和端口均保留。详见 [合仓说明](../docs/deployment/yuaction-monorepo.md)。
+YuAction 保留独立容器、域名和端口（默认 `11452`）。统一代码、CI 和发行版本；采用蓝绿后，DreamTrans 的 `dreamtransctl upgrade` 会把其 `yuaction` 子目录升级到同一提交。独立安装也可单独升级。已有安装首次迁移请使用下方新地址，保留原 `--dir` 或 `--dreamtrans-dir` 参数。原数据库、房间、密钥和端口均保留。详见 [合仓说明](../docs/deployment/yuaction-monorepo.md)。
 
 ## 一键安装 / 更新
 
@@ -47,7 +47,7 @@ curl -fsSL https://raw.githubusercontent.com/CoYumeLabs/DreamTrans/main/yuaction
 curl -fsSL https://raw.githubusercontent.com/CoYumeLabs/DreamTrans/main/yuaction/scripts/install.sh | bash -s -- --update
 ```
 
-更新保留配置和数据，先备份数据库，再替换服务。通过 `bash ~/yuaction/install.sh --show-key` 查看创建活动所需的密钥。直接通过服务器 IP 访问时，安装命令末尾改为 `bash -s -- --bind 0.0.0.0`；公网使用请配置 HTTPS。自定义目录、端口和备份恢复见 [安装说明](docs/INSTALL.md)。
+更新先备份数据库，再验证候选、切换固定入口并迁移录音。新页面保持麦克风采集、缓存交接音频并自动接续，登录态和录音归属在 PostgreSQL 共享。首次将旧 Compose 安装转换为蓝绿需先结束旧页面录音，再添加 `--adopt-bluegreen`；旧页面无法自动获得新版浏览器协议。通过 `bash ~/yuaction/install.sh --show-key` 查看创建活动所需的密钥。直接通过服务器 IP 访问时，安装命令末尾改为 `bash -s -- --bind 0.0.0.0`；公网使用请配置 HTTPS。自定义目录、端口和备份恢复见 [安装说明](docs/INSTALL.md)。
 
 如果 DreamTrans 已安装在 `/dreamtrans`，可直接安装到它的子目录，读取现有 `.env` 并复用同一个 PostgreSQL 容器和数据库：
 

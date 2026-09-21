@@ -1,0 +1,14 @@
+**
+!backend/
+!backend/**
+!yuaction/
+!yuaction/backend/
+!yuaction/backend/**
+!yuaction/deploy/
+!yuaction/deploy/release.json
+**/.env*
+**/*_test.go
+**/*.test
+**/*.out
+**/node_modules
+backend/server

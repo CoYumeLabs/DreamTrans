@@ -55,7 +55,10 @@ func (s *Server) requestTranslations(w http.ResponseWriter, r *http.Request) {
 	s.aiMu.Lock()
 	defer s.aiMu.Unlock()
 	if a == nil {
-		a = s.aiHosts[code]
+		a = s.hostSession(r.Context(), code)
+		if a == nil {
+			a = s.aiHosts[code]
+		}
 	}
 	if a == nil || a.user.ID != rec.Link.OwnerID {
 		writeError(w, fail(503, "主持人需要登录并保持工作台在线，才能生成新译文"))
@@ -89,10 +92,27 @@ func (s *Server) requestTranslations(w http.ResponseWriter, r *http.Request) {
 		if !s.allow(code+":translation", 30) {
 			break
 		}
+		releaseJob, claimErr := s.claimJob(key)
+		if claimErr != nil {
+			continue
+		}
+		// The previous owner may have committed after this request's snapshot.
+		latest, _, readErr := s.read(r.Context(), code)
+		cached := false
+		for _, v := range latest.Segments {
+			if v.ID == seg.ID && v.Text == seg.Text && v.Translations[in.Language] != "" {
+				cached = true
+			}
+		}
+		if readErr != nil || cached {
+			releaseJob()
+			continue
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
 		s.aiJobs[key] = cancel
 		started++
 		go func(seg Segment, target, key string) {
+			defer releaseJob()
 			defer cancel()
 			text := ""
 			var translationErr error

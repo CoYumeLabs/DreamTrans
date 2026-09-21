@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type Room } from "../api";
+import { RecordingTransport } from "../RecordingTransport";
 import { Button, ErrorNote, Pill } from "./ui";
 import { AudioLines, Mic, Pause } from "lucide-react";
 
@@ -14,7 +15,7 @@ type Capture = {
   stream?: MediaStream;
   context?: AudioContext;
   worklet?: AudioWorkletNode;
-  socket?: WebSocket;
+  transport?: RecordingTransport;
   flush?: () => void;
   timer?: ReturnType<typeof setTimeout>;
 };
@@ -53,7 +54,7 @@ export default function TranscriptionPanel({
     const c = capture.current;
     clearTimeout(c.timer);
     releaseMic(c);
-    c.socket?.close();
+    c.transport?.close();
     capture.current = {};
   }
   useEffect(() => {
@@ -118,10 +119,6 @@ export default function TranscriptionPanel({
         return;
       }
       setLink(next);
-      const socket = new WebSocket(
-        `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/rooms/${room.code}/audio?sampleRate=${context.sampleRate}`,
-      );
-      c.socket = socket;
       const fail = (message: string) => {
         if (generation.current !== own) return;
         generation.current++;
@@ -129,15 +126,20 @@ export default function TranscriptionPanel({
         setState("idle");
         setError(message);
       };
-      c.timer = setTimeout(
-        () => fail("转录启动超时，请检查 Yufolo 连接、余额和并发限制。"),
-        30000,
-      );
-      socket.onmessage = (e) => {
-        if (generation.current !== own) return;
-        const msg = JSON.parse(e.data) as { type: string; message?: string };
-        if (msg.type === "ready") {
-          clearTimeout(c.timer);
+      c.transport = new RecordingTransport({
+        url: `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/rooms/${room.code}/audio?sampleRate=${context.sampleRate}&protocol=1&capture=${crypto.randomUUID()}`,
+        sampleRate: context.sampleRate,
+        preflight: () =>
+          api<Link>(`/rooms/${room.code}/transcription`, { key: hostKey }),
+        error: fail,
+        stopped: () => {
+          if (generation.current !== own) return;
+          generation.current++;
+          cleanup();
+          setState("idle");
+        },
+        ready: () => {
+          if (generation.current !== own) return;
           try {
             const worklet = new AudioWorkletNode(context, "yuaction-pcm");
             c.worklet = worklet;
@@ -148,16 +150,8 @@ export default function TranscriptionPanel({
                 c.flush?.();
                 return;
               }
-              if (
-                !(event.data instanceof ArrayBuffer) ||
-                socket.readyState !== WebSocket.OPEN
-              )
-                return;
-              if (socket.bufferedAmount > 256 * 1024) {
-                fail("网络发送过慢，已停止录音。请恢复网络后重新开始。");
-                return;
-              }
-              socket.send(event.data);
+              if (event.data instanceof ArrayBuffer)
+                c.transport?.send(event.data);
             };
             const silent = context.createGain();
             silent.gain.value = 0;
@@ -173,20 +167,8 @@ export default function TranscriptionPanel({
           } catch (e) {
             fail((e as Error).message);
           }
-        } else if (msg.type === "error") {
-          fail(msg.message || "转录中断，请重试。");
-        } else if (msg.type === "stopped") {
-          generation.current++;
-          cleanup();
-          setState("idle");
-        }
-      };
-      socket.onerror = () =>
-        fail(
-          "无法连接转录服务，请检查登录状态、余额和房间是否已在另一端录音。",
-        );
-      socket.onclose = () =>
-        fail("转录连接已断开。已确认字幕保留在房间，点击开始可继续。");
+        },
+      });
     } catch (e) {
       if (generation.current === own) {
         generation.current++;
@@ -209,19 +191,7 @@ export default function TranscriptionPanel({
         c.worklet!.port.postMessage("flush");
       });
     releaseMic(c);
-    if (c.socket?.readyState === WebSocket.OPEN) {
-      c.socket.send(JSON.stringify({ type: "stop" }));
-      c.timer = setTimeout(() => {
-        generation.current++;
-        cleanup();
-        setState("idle");
-        setError("转录停止超时，已释放麦克风；请检查最后一段字幕。");
-      }, 25000);
-    } else {
-      generation.current++;
-      cleanup();
-      setState("idle");
-    }
+    c.transport?.stop();
   }
   const working = state !== "idle";
   const recordingElsewhere =

@@ -21,6 +21,9 @@ type Record struct {
 
 // Link is private: never included in room snapshots or participant responses.
 type Link struct {
+	RecordingID    string  `json:"recordingId,omitempty"`
+	AuthSessionID  string  `json:"authSessionId,omitempty"`
+	StopRequested  bool    `json:"stopRequested,omitempty"`
 	OwnerID        string  `json:"ownerId,omitempty"`
 	SessionID      string  `json:"sessionId,omitempty"`
 	SourceLanguage string  `json:"sourceLanguage,omitempty"`
@@ -30,6 +33,9 @@ type Link struct {
 }
 
 type Store interface {
+	MutateShared(context.Context, string, func([]byte) ([]byte, error)) error
+	TryLock(context.Context, string) (func(), error)
+	Locked(context.Context, string) (bool, error)
 	Create(context.Context, Record) error
 	Get(context.Context, string) (Record, error)
 	Save(context.Context, int64, Record) error
@@ -42,13 +48,16 @@ type Store interface {
 }
 
 type Memory struct {
-	mu      sync.RWMutex
-	rooms   map[string]Record
-	private map[string]PrivateRecord
+	mu       sync.RWMutex
+	rooms    map[string]Record
+	private  map[string]PrivateRecord
+	sharedMu sync.Mutex
+	shared   map[string][]byte
+	locks    map[string]bool
 }
 
 func NewMemory() *Memory {
-	return &Memory{rooms: make(map[string]Record), private: make(map[string]PrivateRecord)}
+	return &Memory{rooms: make(map[string]Record), private: make(map[string]PrivateRecord), shared: make(map[string][]byte), locks: make(map[string]bool)}
 }
 func clone(r Record) Record { r.Data = append([]byte(nil), r.Data...); return r }
 func (m *Memory) Create(_ context.Context, r Record) error {

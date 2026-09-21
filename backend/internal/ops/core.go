@@ -242,6 +242,7 @@ func (c *controller) inspect(kind, name string) object {
 }
 func (c *controller) persist()                 { save(filepath.Join(c.path, "state.json"), c.state) }
 func (c *controller) name(color string) string { return str(c.state["prefix"]) + "-" + color }
+func (c *controller) yuaction() bool           { return str(c.state["role"]) == "yuaction" }
 func (c *controller) edge() bool               { return str(c.state["role"]) == "edge" }
 func (c *controller) progress(step, message string) {
 	bar := ""
@@ -310,7 +311,9 @@ func (c *controller) assertDatabase() {
 	d := c.inspect("container", str(c.state["database_id"]))
 	need(str(d["Id"]) == str(c.state["database_id"]) && c.dataMount(d, "/var/lib/postgresql/data") == str(c.state["database_volume"]), "production database identity or volume changed")
 	need(yes(obj(d["State"])["Running"]), "existing database is not running; it will not be recreated")
-	c.inspect("volume", str(c.state["application_volume"]))
+	if !c.yuaction() {
+		c.inspect("volume", str(c.state["application_volume"]))
+	}
 }
 
 var immutable = regexp.MustCompile(`^(?:[\w./:-]+@)?sha256:[0-9a-f]{64}$`)
@@ -365,11 +368,20 @@ func (c *controller) memory(contract object) {
 	c.progress("2/8", fmt.Sprintf("内存检查 %d MiB 可用，需要 %d MiB", available, required))
 }
 func (c *controller) control(color, action string) object {
-	return obj(decode([]byte(c.docker("exec", c.name(color), "/app/server", "deploy-control", action))))
+	binary := "/app/server"
+	if c.yuaction() {
+		binary = "/app/yuaction"
+	}
+	return obj(decode([]byte(c.docker("exec", c.name(color), binary, "deploy-control", action))))
 }
 func (c *controller) probe(color string) {
 	need(yes(obj(c.inspect("container", c.name(color))["State"])["Running"]), "candidate exited")
-	c.docker("exec", c.name(color), "wget", "-qO-", "http://127.0.0.1:8080/readyz")
+	port := "8080"
+	if c.yuaction() {
+		port = "18083"
+		c.docker("exec", c.name(color+"-frontend"), "wget", "-qO-", "http://127.0.0.1/")
+	}
+	c.docker("exec", c.name(color), "wget", "-qO-", "http://127.0.0.1:"+port+"/readyz")
 	need(number(c.control(color, "status")["protocol"]) == 1, "control protocol mismatch")
 }
 func (c *controller) waitReady(color string) {

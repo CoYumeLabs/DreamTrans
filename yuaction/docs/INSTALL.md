@@ -131,3 +131,19 @@ bash /tmp/yuaction-install.sh --no-docker-install
 `database.dump` 是 PostgreSQL custom 格式，可用 PostgreSQL 16 的 `pg_restore --list` 检查，用 `pg_restore` 恢复到单独的空数据库验证。恢复生产数据前先停止写入并核对备份时间。回退应用版本时参考 [Docker 发布与回退说明](DOCKER_RELEASE.md)，不要用 `docker compose down -v`，该选项会删除数据库卷。
 
 此脚本负责命令触发的安装和更新，没有后台自动更新定时任务。
+
+## 蓝绿发布和录音接续
+
+新版安装器使用 Go 运维工具管理蓝绿，入口端口保持不变。已采用蓝绿的安装不要再使用 `docker compose up` 重建应用；Compose 继续保留原数据库定义与备份工具。
+
+旧 Compose 安装首次转换前，结束旧页面的录音，在原安装命令增加 `--adopt-bluegreen`；转换后重新打开新版页面并登录一次。旧页面和旧内存登录态不具备迁移协议，首次转换不承诺无感。之后升级与回滚会保持同一次麦克风授权和采音，自动缓存并接续交接期间的音频。
+
+```bash
+bash ~/yuaction/install.sh --update
+~/yuaction/dreamtransctl yuaction --dir ~/yuaction status
+~/yuaction/dreamtransctl yuaction --dir ~/yuaction rollback
+~/yuaction/dreamtransctl yuaction --dir ~/yuaction resume
+~/yuaction/dreamtransctl yuaction --dir ~/yuaction drain
+```
+
+`rollback` 保留数据库里的新录音、字幕与提问。升级失败不会停止仍持有录音或后台任务的旧实例。创建密钥用于加密共享登录态，保持原 `YUACTION_CREATOR_KEY`；不要在版本更新时轮换它。完整恢复需要保留原数据库、`.env` 与 `.bluegreen` 状态，不能只恢复镜像标签。

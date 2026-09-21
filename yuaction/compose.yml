@@ -15,7 +15,9 @@ services:
       retries: 15
     restart: unless-stopped
   backend:
-    build: ./backend
+    build:
+      context: ..
+      dockerfile: yuaction/backend/Dockerfile
     environment:
       DATABASE_URL: postgres://yuaction:${POSTGRES_PASSWORD}@db:5432/yuaction?sslmode=disable
       LISTEN_ADDR: 0.0.0.0:18083

@@ -19,9 +19,11 @@ import (
 	"unicode/utf8"
 
 	"github.com/CoYumeLabs/YuAction/backend/internal/storage"
+	"github.com/dreamtrans/backend/pkg/deployment"
 )
 
 type Config struct {
+	Deployment *deployment.Runtime
 	Demo       bool
 	CreatorKey string
 	IngestKey  string
@@ -30,6 +32,7 @@ type Config struct {
 	AI         AIConfig
 }
 type Server struct {
+	deploy   *deployment.Runtime
 	store    storage.Store
 	cfg      Config
 	hub      *hub
@@ -59,6 +62,10 @@ func fail(status int, message string) error { return apiError{status, message} }
 
 func New(store storage.Store, cfg Config) *Server {
 	s := &Server{store: store, cfg: cfg, hub: newHub(), limits: make(map[string]limit), sessions: make(map[string]*loginSession), streams: make(map[string]*liveStream), controls: make(map[string]bool)}
+	s.deploy = cfg.Deployment
+	if s.deploy == nil {
+		s.deploy = deployment.Default()
+	}
 	s.aiJobs = make(map[string]context.CancelFunc)
 	s.aiHosts = make(map[string]*loginSession)
 	if cfg.YufoloURL != "" {
@@ -69,6 +76,8 @@ func New(store storage.Store, cfg Config) *Server {
 func (s *Server) Handler() http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /api/health", s.health)
+	m.HandleFunc("GET /healthz", s.health)
+	m.HandleFunc("GET /readyz", s.health)
 	m.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, 200, map[string]any{"demo": s.cfg.Demo, "creatorKeyRequired": s.cfg.CreatorKey != "" && s.yufolo == nil, "yufoloConnected": s.yufolo != nil})
 	})
@@ -100,7 +109,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("PATCH /api/rooms/{code}", s.roomStatus)
 	m.HandleFunc("POST /api/rooms/{code}/demo-segments", s.demoSegment)
 	m.HandleFunc("POST /api/internal/rooms/{code}/segments", s.ingest)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return s.deploy.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Cache-Control", "no-store")
@@ -153,7 +162,7 @@ func (s *Server) Handler() http.Handler {
 			r = r.WithContext(context.WithValue(r.Context(), accountContextKey{}, session))
 		}
 		m.ServeHTTP(w, r)
-	})
+	}))
 }
 func (s *Server) allow(key string, max int) bool {
 	s.mu.Lock()
@@ -561,6 +570,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	controller := http.NewResponseController(w)
 	last := int64(0)
+	lastTranscription := ""
 	send := func() bool {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
@@ -569,8 +579,9 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			return false
 		}
 		_ = controller.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		if room.Revision != last {
-			data, err := json.Marshal(s.publicRoom(room))
+		visible := s.publicRoom(room)
+		if room.Revision != last || visible.Transcription != lastTranscription {
+			data, err := json.Marshal(visible)
 			if err != nil {
 				return false
 			}
@@ -578,6 +589,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 				return false
 			}
 			last = room.Revision
+			lastTranscription = visible.Transcription
 		} else {
 			if _, err = fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
 				return false
@@ -589,7 +601,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	if !send() {
 		return
 	}
-	ticker := time.NewTicker(15 * time.Second)
+	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
 		select {
@@ -600,6 +612,12 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-ticker.C:
+			if s.deploy.Status().Mode == "draining" {
+				_ = controller.SetWriteDeadline(time.Now().Add(5 * time.Second))
+				_, _ = fmt.Fprint(w, "event: handoff\ndata: 1\n\n")
+				f.Flush()
+				return
+			}
 			if !send() {
 				return
 			}

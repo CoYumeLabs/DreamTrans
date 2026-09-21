@@ -14,7 +14,10 @@ import (
 //go:embed schema.sql
 var schema string
 
-type Postgres struct{ db *sql.DB }
+type Postgres struct {
+	db    *sql.DB
+	locks *sql.DB
+}
 
 func OpenPostgres(ctx context.Context, dsn string) (*Postgres, error) {
 	db, err := sql.Open("pgx", dsn)
@@ -40,9 +43,20 @@ func OpenPostgres(ctx context.Context, dsn string) (*Postgres, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Postgres{db: db}, nil
+	if _, err = db.ExecContext(ctx, coordinationMigration); err != nil {
+		db.Close()
+		return nil, err
+	}
+	locks, err := sql.Open("pgx", dsn)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	locks.SetMaxOpenConns(64)
+	locks.SetMaxIdleConns(0)
+	return &Postgres{db: db, locks: locks}, nil
 }
-func (p *Postgres) Close() error                   { return p.db.Close() }
+func (p *Postgres) Close() error                   { _ = p.locks.Close(); return p.db.Close() }
 func (p *Postgres) Ping(ctx context.Context) error { return p.db.PingContext(ctx) }
 func (p *Postgres) Create(ctx context.Context, r Record) error {
 	link, err := json.Marshal(r.Link)
@@ -113,3 +127,6 @@ var integrationMigration string
 
 //go:embed migrations/002_assistant.sql
 var assistantMigration string
+
+//go:embed migrations/003_coordination.sql
+var coordinationMigration string
