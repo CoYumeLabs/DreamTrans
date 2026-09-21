@@ -129,6 +129,15 @@ func TestRunArchivesFencedEventsAndUnblocksDrain(t *testing.T) {
 	if q.Pending() != 0 || archives.Load() != 1 {
 		t.Fatalf("fenced queue did not drain: pending=%d archives=%d", q.Pending(), archives.Load())
 	}
+	// Pending counts durable events, not completion of the worker's subsequent
+	// counter retirement. Join Run as the real shutdown path does before asserting
+	// its cleanup; otherwise a busy CI runner can observe the two writes between.
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(8 * time.Second):
+		t.Fatal("archive worker did not finish shutdown")
+	}
 	var counters int
 	if err = q.db.QueryRow(`SELECT count(*) FROM counters`).Scan(&counters); err != nil || counters != 0 {
 		t.Fatal("counter leaked after archival")
