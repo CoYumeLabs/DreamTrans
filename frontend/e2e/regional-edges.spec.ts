@@ -14,7 +14,7 @@ test('administrator creates an Edge, drains it and requests a pinned release', a
     let body: unknown = {}
     if (path === '/api/user/profile') body = { user }
     if (path === '/api/admin/access') body = { allowed: true, super: true, tenant_admin: false, role_id: 'super', role_key: 'super', permissions: [], channels: [] }
-    if (path === '/api/admin/edges/setup') body = { control_ready: true, routing_enabled: false, installer_ready: true, missing: [], release_image: 'example/edge@sha256:' + 'b'.repeat(64), tunnel_install_available: false }
+    if (path === '/api/admin/edges/setup') body = { provider_ready: true, training_provider_ready: true, control_ready: true, routing_enabled: false, installer_ready: true, missing: [], release_image: 'example/edge@sha256:' + 'b'.repeat(64), tunnel_install_available: false }
     if (path === '/api/admin/edges') {
       if (request.method() === 'POST') {
         const node = request.postDataJSON()
@@ -39,6 +39,9 @@ test('administrator creates an Edge, drains it and requests a pinned release', a
   await page.getByRole('button', { name: '地区转录节点', exact: true }).click()
   const panel = page.getByRole('region', { name: '地区转录节点' })
   await panel.getByRole('button', { name: '添加节点' }).click()
+  await expect(panel.getByText('此账号由主站管理，安装后自动领取短期授权。')).toBeVisible()
+  await panel.getByLabel('地区', { exact: true }).selectOption('ap-southeast-2')
+  await expect(panel.getByLabel('地区', { exact: true })).toHaveValue('ap-southeast-2')
   await panel.getByLabel('名称', { exact: true }).fill('Tokyo One')
   await panel.getByLabel('地区', { exact: true }).selectOption('ap-northeast-1')
   await panel.getByLabel('独立 HTTPS 地址', { exact: true }).fill('https://edge-tokyo-1.example.test')

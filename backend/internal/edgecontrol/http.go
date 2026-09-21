@@ -31,6 +31,9 @@ func respond(w http.ResponseWriter, value any, err error) {
 		case errors.Is(err, ErrUnauthorized):
 			code = 401
 			message = "identity rejected"
+		case errors.Is(err, ErrRateLimited):
+			code = 429
+			message = "provider credential rate limit"
 		case errors.Is(err, ErrConflict):
 			code = 409
 			message = "stale generation or conflicting event"
@@ -171,13 +174,20 @@ func (s *Service) NodeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/edge-control/")
 	if path == "register" {
+		// Older installers copy every registration field but still prompt for a key.
+		// Enable JWT mode only after an explicit capability request.
+		w.Header().Set("DreamTrans-Provider-Credentials", "1")
 		var req struct {
-			Token string `json:"token"`
+			ProviderCredentials int    `json:"provider_credentials,omitempty"`
+			Token               string `json:"token"`
 		}
 		if !decode(w, r, &req) {
 			return
 		}
 		value, err := s.Register(r.Context(), req.Token)
+		if err == nil && req.ProviderCredentials == 1 && speechmaticsAccount(value.Training) != "" {
+			value.ProviderAuth = "main"
+		}
 		respond(w, value, err)
 		return
 	}
@@ -188,6 +198,13 @@ func (s *Service) NodeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch path {
+	case "provider-credential":
+		var req edgeprotocol.ProviderCredentialRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		value, err := s.ProviderCredential(r.Context(), node, identity, req)
+		respond(w, value, err)
 	case "deployment":
 		value, err := s.NodeDeployment(r.Context(), node)
 		respond(w, value, err)

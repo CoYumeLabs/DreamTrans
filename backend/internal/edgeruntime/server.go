@@ -24,10 +24,10 @@ import (
 )
 
 type Config struct {
-	NodeID, PublicKey, ProviderKey, ProviderURL, Version string
-	Origins                                              []string
-	Maximum                                              int
-	Training                                             bool
+	NodeID, PublicKey, ProviderKey, ProviderURL, ProviderAuth, Version string
+	Origins                                                            []string
+	Maximum                                                            int
+	Training                                                           bool
 }
 type Server struct {
 	config              Config
@@ -73,8 +73,20 @@ func New(config *Config, main *MainClient, queue *Queue) (*Server, error) {
 	if err != nil || len(key) != ed25519.PublicKeySize {
 		return nil, errors.New("invalid main-site verification key")
 	}
-	if config.Maximum < 1 || config.Maximum > 4096 || len(config.Origins) == 0 || config.ProviderKey == "" {
-		return nil, errors.New("edge capacity, origins and independent provider key are required")
+	if config.Maximum < 1 || config.Maximum > 4096 || len(config.Origins) == 0 {
+		return nil, errors.New("edge capacity and origins are required")
+	}
+	if config.ProviderAuth == "" {
+		config.ProviderAuth = "manual"
+	}
+	if config.ProviderAuth != "main" && config.ProviderAuth != "manual" {
+		return nil, errors.New("invalid provider authentication mode")
+	}
+	if config.ProviderAuth == "manual" && config.ProviderKey == "" {
+		return nil, errors.New("independent provider key required in manual mode")
+	}
+	if config.ProviderAuth == "main" && config.ProviderKey != "" {
+		return nil, errors.New("central provider authentication refuses a local provider key")
 	}
 	if config.ProviderURL == "" {
 		config.ProviderURL = "wss://global.rt.speechmatics.com/v2"
@@ -202,8 +214,7 @@ func (s *Server) accept(w http.ResponseWriter, r *http.Request) {
 	st.grant = *authoritative
 	st.mu.Unlock()
 	start := time.Now()
-	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
-	provider, response, err := dialer.DialContext(ctx, s.config.ProviderURL, http.Header{"Authorization": []string{"Bearer " + s.config.ProviderKey}})
+	provider, response, err := s.dialProvider(ctx, edgeprotocol.ProviderCredentialRequest{SessionID: authoritative.SessionID, Generation: authoritative.Generation})
 	if response != nil && response.Body != nil {
 		_ = response.Body.Close()
 	}
@@ -660,11 +671,10 @@ func (s *Server) heartbeats(ctx context.Context) {
 		connections := len(s.connections)
 		s.mu.Unlock()
 		bytes, oldest := s.queue.Stats()
-		// Provider handshake verifies the independent credential without sending audio.
+		// Readiness verifies a short-lived or explicitly configured credential without audio.
 		if !s.providerHealthy.Load() {
-			dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
 			start := time.Now()
-			c, response, err := dialer.DialContext(ctx, s.config.ProviderURL, http.Header{"Authorization": []string{"Bearer " + s.config.ProviderKey}})
+			c, response, err := s.dialProvider(ctx, edgeprotocol.ProviderCredentialRequest{Probe: true})
 			if response != nil && response.Body != nil {
 				_ = response.Body.Close()
 			}

@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/dreamtrans/backend/internal/edgehttp"
 )
 
 type MainClient struct {
@@ -24,7 +26,7 @@ func NewMainClient(base, identity string) (*MainClient, error) {
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return nil, fmt.Errorf("main-site URL must be HTTPS")
 	}
-	return &MainClient{URL: strings.TrimRight(base, "/"), Identity: identity, HTTP: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+	return &MainClient{URL: strings.TrimRight(base, "/"), Identity: identity, HTTP: edgehttp.NewClient(10 * time.Second)}, nil
 }
 func (c *MainClient) Call(ctx context.Context, path string, input, output any) error {
 	data, err := json.Marshal(input)
@@ -39,7 +41,7 @@ func (c *MainClient) Call(ctx context.Context, path string, input, output any) e
 	req.Header.Set("Authorization", "Edge "+c.Identity)
 	response, err := c.HTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("main-site connection failed")
+		return fmt.Errorf("main-site connection failed (%s)", edgehttp.ErrorKind(err))
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != 200 {

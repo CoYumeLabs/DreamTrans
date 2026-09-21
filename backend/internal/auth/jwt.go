@@ -14,6 +14,7 @@ import (
 
 type TokenGenerator struct {
 	apiKey string
+	client *http.Client
 }
 
 // NewTokenGenerator mints temporary realtime keys from the default provider
@@ -43,9 +44,17 @@ func (tg *TokenGenerator) GenerateToken() (string, error) {
 
 // GenerateTokenContext calls Speechmatics while observing caller cancellation.
 func (tg *TokenGenerator) GenerateTokenContext(ctx context.Context) (string, error) {
-	// Create request body for RT temporary key with 10 minute TTL
+	return tg.GenerateTokenTTLContext(ctx, 600)
+}
+
+// GenerateTokenTTLContext mints a provider credential for connection establishment.
+// Its expiry does not enforce a running session's budget.
+func (tg *TokenGenerator) GenerateTokenTTLContext(ctx context.Context, ttl int) (string, error) {
+	if ttl < 60 || ttl > 86400 {
+		return "", fmt.Errorf("invalid Speechmatics temporary key TTL")
+	}
 	requestBody := map[string]interface{}{
-		"ttl": 600, // 10 minutes in seconds
+		"ttl": ttl,
 	}
 
 	jsonBody, err := json.Marshal(requestBody)
@@ -69,6 +78,9 @@ func (tg *TokenGenerator) GenerateTokenContext(ctx context.Context) (string, err
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
+	}
+	if tg.client != nil {
+		client = tg.client
 	}
 	resp, err := client.Do(req)
 	if err != nil {

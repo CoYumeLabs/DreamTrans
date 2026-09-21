@@ -104,6 +104,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 			return
 		}
 		c := newController(ctx, o.root, out, errOut)
+		defer c.httpClient.CloseIdleConnections()
 		unlock := lock(filepath.Join(c.path, "lock"))
 		defer unlock()
 		if o.action == "install-tools" {

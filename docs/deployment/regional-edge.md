@@ -103,7 +103,7 @@ Nginx 平滑重载让旧 worker 继续处理已有连接，见 [Nginx 官方控�
 
 主站启用区域功能需要独立 `EDGE_SIGNING_SEED`（32 字节随机值的 raw base64）；配置 `APP_BASE_URL`、`EDGE_RELEASE_IMAGE`、`EDGE_PROXY_IMAGE` 为正确 HTTPS 主站与不可变镜像。可选 `EDGE_CLOUDFLARED_IMAGE`。这些设置必须在应用环境中生效，不能误写到 Edge。
 
-管理员节点页面创建节点，获得 15 分钟注册凭证与安装命令。注册凭证、供应商独立密钥通过隐藏输入或受保护文件传入。命令验证下载脚本 SHA-256，再从不可变镜像提取控制器。Edge 自动安装依赖支持 Ubuntu 24.04/26.04，以兼容 Lightsail 官方 Ubuntu 24 蓝图；主站仍须完成 Ubuntu 26.04 EC2 实机验证。
+管理员节点页面创建节点，获得 15 分钟注册凭证与安装命令。注册凭证通过隐藏输入或受保护文件传入；主站已配置对应 Speechmatics 账号时自动下发短期 JWT，手动模式才需要节点独立密钥。详见 [临时授权及版本兼容](go-operations.md#主站管理-speechmatics-临时授权)。命令验证下载脚本 SHA-256，再从不可变镜像提取控制器。Edge 自动安装依赖支持 Ubuntu 24.04/26.04，以兼容 Lightsail 官方 Ubuntu 24 蓝图；主站仍须完成 Ubuntu 26.04 EC2 实机验证。
 
 ```bash
 /opt/dreamtrans-edge/dreamtransctl edge status

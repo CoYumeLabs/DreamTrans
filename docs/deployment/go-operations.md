@@ -69,6 +69,8 @@ sudo /opt/dreamtrans-edge/dreamtransctl edge upgrade
 
 新 Edge 继续使用管理页面生成的单行安装命令；引导脚本从指定不可变 Edge 镜像提取 Go 工具，无需安装 Python。注册和供应商凭证仍通过隐藏输入或 0600 文件传入。
 
+Edge 到主站的控制请求统一使用 HTTPS / HTTP/1.1，包括安装注册、心跳、授权消费、结果回传和部署命令，以兼容部分地区 HTTP/2 GET 正常而 POST 请求无响应的入口链路。仍校验证书、复用连接并拒绝携带凭证跟随重定向；不修改浏览器音频 WebSocket 或供应商连接。安装失败会显示脱敏的 DNS、证书、超时等错误类别。修复此类安装问题需要使用包含修复的 Edge 发行镜像；只升级主站不会替换后台已固定的 `EDGE_RELEASE_IMAGE`。
+
 创建新节点前，主站的 `EDGE_RELEASE_IMAGE` 必须指向包含 Go 工具的新 Edge 发行 digest。主站升级不会擅自修改已固定的节点发行配置；若仍指定旧的 Python 发行镜像，新引导脚本会拒绝安装，而不会回退到 Python。
 
 ## 验证与备份
@@ -93,7 +95,7 @@ sudo /root/dreamtrans/dreamtransctl --dir /root/dreamtrans configure-edge
 
 另一种方式是先在主站配置 `configure-edge --tunnel-image cloudflare/cloudflared@sha256:固定版本`，然后在管理页面选择安装 Tunnel 客户端。安装器只在 Edge 隐藏输入节点专用 Token，并运行该节点 Tunnel；它不需要主站 Cloudflare API Key。账号级自动创建 Tunnel/DNS 的 API 保留兼容已有部署，但不属于默认安装流程，也不是必填项。
 
-复制页面的安装命令到新机器执行，隐藏输入一次性注册凭证和独立 Speechmatics Key。命令自动携带所选节点的并发上限、训练账号选项，并校验安装脚本。新节点默认不参与调度；新安装自动启用 600 秒后台排空。等待心跳、检测入口后启用节点，并开启“本浏览器管理员试用 Edge”进行真实转录、历史保存和账本核验。试用仍正常计费，只有主站认证的 super_admin 可为新会话申请试用；前端开关不能绕过角色、容量或预算检查。
+复制页面的安装命令到新机器执行，隐藏输入一次性注册凭证；主站已配置对应 Speechmatics 账号时自动使用短期 JWT，否则提示输入独立 Speechmatics Key。节点配置由注册响应确认，命令校验安装脚本。新节点默认不参与调度；新安装自动启用 600 秒后台排空。等待心跳、检测入口后启用节点，并开启“本浏览器管理员试用 Edge”进行真实转录、历史保存和账本核验。试用仍正常计费，只有主站认证的 super_admin 可为新会话申请试用；前端开关不能绕过角色、容量或预算检查。
 
 测试通过后在主站执行：
 
@@ -106,3 +108,17 @@ sudo /root/dreamtrans/dreamtransctl --dir /root/dreamtrans configure-edge --rout
 暂停新会话使用 Edge，可执行同一命令加 `--routing off`。节点控制与用量回传继续工作；已有 Edge 会话保持 Edge 接入，并在原权限、租约和预算规则内恢复。刚完成供应商收尾的会话保留两分钟恢复窗口；更早结束的会话不能借旧编号绕过关闭的新会话调度。不会因关闭新会话调度而丢弃回传队列。管理员试用是本浏览器偏好，测试完应关闭。
 
 高级参数 `--image EDGE_REPOSITORY@sha256:DIGEST` 与 `--proxy-image PROXY_REPOSITORY@sha256:DIGEST` 覆盖自动选择。不应把主站镜像填写为 Edge 镜像；控制器检查 Edge 清单及 Go 安装工具。正式发布前应完成主站备份，现有自动备份计划保持不变。
+
+## 主站管理 Speechmatics 临时授权
+
+新版本注册响应包含节点的并发上限、训练账号路由和 `provider_auth`。安装器先用无凭证探测协商能力；旧主站或旧安装器继续采用手动模式，避免旧安装器把 JWT 模式与长期 Key 混存。主站已配置对应 Speechmatics 账号时，新节点自动使用 `main` 模式：长期 Key 留在主站，Edge 安装不再索要供应商 Key。主站使用现有 `SM_API_KEY` / `SM_API_KEY_NO_TRAINING` 账号分流规则；训练节点要求两个独立账号均已配置。账号未配置时返回 `manual`，保留隐藏输入独立 Key 的方式。显式 `--provider-key-file`（权限 600）也选择手动模式；不向 Edge 下发主站长期 Key。既有安装重复执行保留身份、配置和队列，已有手动配置不会被静默替换。
+
+Edge 通过独立节点身份调用 `POST /api/edge-control/provider-credential`。真实转录先消费会话授权，再提交会话编号和代次；主站核对节点、训练账号、有效租约、未耗尽预算及当前写入权。就绪检查使用单独的 `probe` 请求，允许尚未启用调度的节点验证供应商握手。签发尝试在 PostgreSQL 中按节点串行限流，跨蓝绿实例生效；每分钟最多 `4 × 最大并发 + 16` 次，探测最多 16 次，每会话代次最多 3 次。失败签发也占次数，审计仅存请求元数据。迁移 057 只增加审计查询索引，不修改现有业务数据。
+
+主站向 Speechmatics 申请 60 秒 RT JWT。JWT 仅用于 Edge 到供应商的握手，保存在内存中，不写入 Edge 配置、回传队列、浏览器授权或日志。每次新供应商连接重新申请，不在音频分片路径调用主站。主站不可用时新连接失败，已有连接仍按既定租约和预算退出。
+
+**供应商边界：**Speechmatics RT JWT 在有效期内可发起多次连接，不能绑定 DreamTrans 节点、会话、用量预算；`client_ref` 对 RT 无效。节点仍是受信任的音频执行端，JWT 缩短泄露窗口，不能完全阻止被攻陷节点滥用已取得的 JWT。节点吊销会阻止后续签发，已经签发的 JWT 仍可能在剩余有效期内建连。JWT 过期也不是关闭运行中供应商连接的机制，限额由应用租约和预算执行。企业账号可能需要供应商开通临时密钥权限。依据 [Speechmatics 身份认证](https://docs.speechmatics.com/get-started/authentication)。
+
+**升级顺序：**先升级主站及宿主机 Go CLI，再更新 `EDGE_RELEASE_IMAGE` 为包含此能力的固定 Edge digest，再创建/安装新节点。新主站继续兼容旧 Edge 的手动凭证模式；旧主站没有临时授权接口，不能服务 `main` 模式的新节点。发行清单新增 `provider_credentials: 1`，新版控制器拒绝回切到缺失该能力的主站或 Edge 镜像。回切须选择同样支持该能力的发行版本；迁移和生产写入均保留。
+
+**OpenAI：**本阶段 Edge 仍只承担 Speechmatics 实时转录，OpenAI 现有调用留在主站，无需复制 Key。后续接入 OpenAI Realtime 可由主站通过 `/v1/realtime/client_secrets` 创建短期 `ek_` 凭证，支持实时/转录会话；它同样可在过期前多次建连，不能代替主站额度控制。普通 OpenAI API 另有 Workload Identity Federation，可将配置好的受信任外部身份兑换为短期访问令牌，但需要配置身份提供方和服务账号，不接受任意自签 JWT。本次未实现 OpenAI Edge 适配器或 WIF；没有对应机制的供应商继续使用手动独立凭证。官方资料：[Realtime client secrets](https://developers.openai.com/api/reference/resources/realtime/subresources/client_secrets/methods/create)、[Workload Identity Federation](https://developers.openai.com/api/reference/workload-identity-federation)。

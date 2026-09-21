@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dreamtrans/backend/internal/edgehttp"
 	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite" // Existing Edge-owned durable queue; never the main-site rag.db.
 )
@@ -25,24 +26,53 @@ func secureOrigin(raw string) bool {
 	u, e := url.Parse(raw)
 	return e == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && (u.Path == "" || u.Path == "/")
 }
-func (c *controller) callRaw(config object, path string, payload []byte) object {
+func (c *controller) requestMain(config object, path string, payload []byte) *http.Response {
 	base := str(config["main_url"])
 	need(secureOrigin(base), "main URL must be an HTTPS origin")
 	req, e := http.NewRequestWithContext(c.ctx, http.MethodPost, strings.TrimRight(base, "/")+"/api/edge-control/"+path, bytes.NewReader(payload))
 	check(e, "cannot construct main-site request")
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Edge "+str(config["identity"]))
-	req.Header.Set("User-Agent", "DreamTrans-Edge/1.0")
-	client := &http.Client{Timeout: 15 * time.Second}
-	if c.httpClient != nil {
-		clone := *c.httpClient
-		client = &clone
+	if identity := str(config["identity"]); identity != "" {
+		req.Header.Set("Authorization", "Edge "+identity)
 	}
+	req.Header.Set("User-Agent", "DreamTrans-Edge/1.0")
+	clone := *c.httpClient
+	client := &clone
 	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
 	response, e := client.Do(req)
-	check(e, "main HTTPS unavailable; request credentials withheld")
+	check(e, "main HTTPS unavailable ("+edgehttp.ErrorKind(e)+"); credentials omitted from logs")
+	return response
+}
+func mainStatus(status int) string {
+	switch status {
+	case 401:
+		return "注册凭证或节点身份被拒绝；检查凭证是否完整或过期，在原节点重新生成注册凭证，不必重复创建节点"
+	case 403:
+		return "主站拒绝访问；检查 Cloudflare Access/WAF 对节点控制接口的规则"
+	case 404:
+		return "主站节点接口未开启或地址错误；检查主站节点管理配置"
+	case 429:
+		return "主站请求限流，请稍后重试"
+	}
+	if status >= 300 && status < 400 {
+		return fmt.Sprintf("主站返回重定向 HTTP %d；请使用最终 HTTPS 地址并检查 Access 登录拦截", status)
+	}
+	return fmt.Sprintf("主站请求失败 HTTP %d；检查主站服务状态后重试", status)
+}
+func (c *controller) registrationPreflight(config object) bool {
+	response := c.requestMain(config, "register", []byte(`{"token":""}`))
 	defer func() { _ = response.Body.Close() }()
-	need(response.StatusCode >= 200 && response.StatusCode < 300, fmt.Sprintf("main request rejected, HTTP %d", response.StatusCode))
+	need(response.StatusCode == 401, mainStatus(response.StatusCode))
+	b, e := io.ReadAll(io.LimitReader(response.Body, 4096))
+	check(e, "cannot read registration preflight response")
+	need(str(obj(decode(b))["error"]) == "identity rejected", "主站注册接口返回异常；请检查是否被代理登录页拦截")
+	c.progress("检查", "主站注册接口 HTTPS 连通正常")
+	return response.Header.Get("DreamTrans-Provider-Credentials") == "1"
+}
+func (c *controller) callRaw(config object, path string, payload []byte) object {
+	response := c.requestMain(config, path, payload)
+	defer func() { _ = response.Body.Close() }()
+	need(response.StatusCode >= 200 && response.StatusCode < 300, mainStatus(response.StatusCode))
 	if date := response.Header.Get("Date"); date != "" {
 		at, e := http.ParseTime(date)
 		check(e, "invalid main server clock")
@@ -179,17 +209,20 @@ func (c *controller) installEdge(o *options) {
 		config = load(configPath)
 		need(str(config["main_url"]) == o.mainURL && str(config["node_id"]) != "" && str(config["identity"]) != "", "pending registration differs from requested main site")
 	} else {
+		central := c.registrationPreflight(config)
 		token := c.secret(o.registrationFile, "一次性注册凭证")
-		registration := c.call(config, "register", object{"token": token})
+		payload := object{"token": token}
+		if central {
+			payload["provider_credentials"] = 1
+		}
+		registration := c.call(config, "register", payload)
 		for k, v := range registration {
 			config[k] = v
 		}
 		need(str(config["node_id"]) != "" && str(config["identity"]) != "", "registration did not return a node identity")
 		save(configPath, config)
 	}
-	if str(config["provider_key"]) == "" {
-		config["provider_key"] = c.secret(o.providerKeyFile, "节点独立 Speechmatics Key")
-	}
+	c.configureProvider(config, o)
 	origins := []any{strings.TrimRight(o.mainURL, "/")}
 	if o.origins != "" {
 		origins = nil
@@ -199,8 +232,13 @@ func (c *controller) installEdge(o *options) {
 		}
 	}
 	config["origins"] = origins
-	config["maximum"] = o.maximum
-	config["training"] = o.training
+	// New main registrations carry the authoritative node capacity and account route.
+	if _, present := config["maximum"]; !present {
+		config["maximum"] = o.maximum
+	}
+	if _, present := config["training"]; !present {
+		config["training"] = o.training
+	}
 	save(configPath, config)
 	check(os.Chown(configPath, 10001, 10001), "cannot assign Edge configuration")
 	check(os.Chmod(configPath, 0o400), "cannot protect Edge configuration")
@@ -241,7 +279,11 @@ func (c *controller) finishEdgeInstall(o *options) {
 	c.state["active"] = "blue"
 	c.state["phase"] = "ready"
 	c.persist()
-	c.progress("✓", "节点已安装；在主站启用前确认独立 Tunnel 指向 http://dreamtrans:8080")
+	if yes(c.state["tunnel"]) {
+		c.progress("✓", "节点已安装；容器 Tunnel 的服务地址为 http://dreamtrans:8080")
+	} else {
+		c.progress("✓", fmt.Sprintf("节点已安装；宿主机上的独立 Tunnel 转发至 http://127.0.0.1:%d", number(c.state["port"])))
+	}
 }
 func openSpool(path, mode string) *sql.DB {
 	u := url.URL{Scheme: "file", Path: path}
@@ -444,4 +486,25 @@ func (c *controller) converge(o *options) {
 	} else if phase == "draining" {
 		c.drain(o.drainTimeout)
 	}
+}
+
+func (c *controller) configureProvider(config object, o *options) {
+	mode := str(config["provider_auth"])
+	if mode == "" {
+		mode = "manual"
+	}
+	// An explicit protected key file opts into local credentials. Existing installs
+	// retain their recorded mode/key; no long-lived key is ever copied from main.
+	if o.providerKeyFile != "" {
+		mode = "manual"
+	}
+	need(mode == "main" || mode == "manual", "unsupported provider authentication mode; update the installer")
+	if mode == "main" {
+		need(str(config["provider_key"]) == "", "central provider mode conflicts with a local key; configuration retained")
+		c.progress("授权", "Speechmatics 由主站签发短期 JWT，无需在 Edge 输入或保存供应商 Key")
+	} else if str(config["provider_key"]) == "" {
+		c.progress("授权", "主站未提供临时授权，使用节点独立供应商凭证；可先在主站配置 Speechmatics 账号")
+		config["provider_key"] = c.secret(o.providerKeyFile, "节点独立 Speechmatics Key")
+	}
+	config["provider_auth"] = mode
 }

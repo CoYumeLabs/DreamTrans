@@ -3,8 +3,8 @@ import { authFetch } from '../api/auth'
 import type { EdgeNode } from '../../unified/workspace/edgeSelection'
 import { ErrorBanner, Modal } from './ui'
 
-type Setup = { control_ready: boolean; routing_enabled: boolean; installer_ready: boolean; missing: string[]; release_image: string; tunnel_install_available: boolean }
-const regions = [['ap-southeast-1', '新加坡'], ['ap-northeast-1', '东京'], ['eu-west-2', '伦敦'], ['us-west-2', '美国西部'], ['custom', '其他地区']]
+type Setup = { provider_ready?: boolean; training_provider_ready?: boolean; control_ready: boolean; routing_enabled: boolean; installer_ready: boolean; missing: string[]; release_image: string; tunnel_install_available: boolean }
+const regions = [['ap-southeast-1', '新加坡'], ['ap-southeast-2', '悉尼'], ['ap-northeast-1', '东京'], ['eu-west-2', '伦敦'], ['us-west-2', '美国西部'], ['custom', '其他地区']]
 const modes: Record<string, string> = { enabled: '参与调度', disabled: '暂停调度', draining: '正在排空', revoked: '身份已吊销' }
 const configureCommand = 'sudo /root/dreamtrans/dreamtransctl --dir /root/dreamtrans configure-edge'
 const routingCommand = configureCommand + ' --routing on'
@@ -95,12 +95,13 @@ export function EdgesPage() {
         <label><span>最大并发</span><input required type="number" min="1" max="4096" value={draft.max_connections} onChange={e => setDraft({ ...draft, max_connections: Number(e.target.value) })} /></label>
         <label className="pa-edge-wide"><span>独立 HTTPS 地址</span><input required type="url" placeholder="https://edge-london-01.yufolo.com" value={draft.endpoint} onChange={e => setDraft({ ...draft, endpoint: e.target.value })} /></label>
       </div>
-      <label className="pa-switch"><input type="checkbox" checked={draft.training} onChange={e => setDraft({ ...draft, training: e.target.checked })} /><span>使用允许训练的独立供应商账号</span></label>
+      <label className="pa-switch"><input type="checkbox" checked={draft.training} onChange={e => setDraft({ ...draft, training: e.target.checked })} /><span>使用允许训练的独立供应商账号（仅接收已同意训练计划的用户）</span></label>
+      <p>{(draft.training ? setup.training_provider_ready : setup.provider_ready) ? '此账号由主站管理，安装后自动领取短期授权。' : '主站尚未配置对应账号。安装时需输入节点独立 Speechmatics Key，或先完善主站供应商配置。'}</p>
       <div className="pa-button-row"><button className="pa-button pa-button--primary" disabled={busy}>创建并生成注册凭证</button><button type="button" className="pa-button" onClick={() => setCreating(false)}>取消</button></div>
     </form>}
     {token && <div className="pa-card pa-edge-panel">
       <h3>2 · 在新机器安装</h3>
-      <p>注册凭证 15 分钟有效。安装时分别隐藏输入注册凭证和节点独立 Speechmatics Key，无需主站数据库密码或 Cloudflare API Key。</p>
+      <p>注册凭证 15 分钟有效，安装时隐藏输入。主站已配置对应 Speechmatics 账号时，自动下发短期 JWT，Edge 无需保存长期供应商 Key。未配置时可使用节点独立 Key；无需主站数据库密码或 Cloudflare API Key。</p>
       <label className="pa-field"><span>Tunnel 接入方式</span><select aria-label="Tunnel 接入方式" value={tunnelMode} disabled={busy} onChange={e => {
         setTunnelMode(e.target.value); void action(() => installer(installNode, e.target.value))
       }}><option value="existing">复用机器上的 Tunnel</option>{setup?.tunnel_install_available && <option value="install">安装 Tunnel 客户端，输入节点 Token</option>}</select></label>
