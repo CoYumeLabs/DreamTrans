@@ -1,9 +1,10 @@
 {
   "protocol": 1,
+  "provider_credentials": 1,
   "edge_configuration": 1,
   "state_epoch": 1,
   "edge_protocol_min": 1,
   "edge_protocol_max": 2,
-  "expand_migrations": ["053_blue_green_state.sql", "054_regional_edges.sql", "055_edge_durable_audio.sql", "056_edge_fenced_archive.sql"],
+  "expand_migrations": ["053_blue_green_state.sql", "054_regional_edges.sql", "055_edge_durable_audio.sql", "056_edge_fenced_archive.sql", "057_edge_provider_audit.sql"],
   "minimum_free_memory_mb": 1536
 }

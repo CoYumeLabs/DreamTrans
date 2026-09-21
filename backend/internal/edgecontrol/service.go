@@ -26,9 +26,10 @@ var ErrUnavailable = errors.New("no eligible edge capacity")
 var ErrUnauthorized = errors.New("node identity rejected")
 
 type Service struct {
-	DB      *sql.DB
-	Billing *billing.Service
-	Key     ed25519.PrivateKey
+	DB           *sql.DB
+	Billing      *billing.Service
+	Key          ed25519.PrivateKey
+	mintProvider func(context.Context, bool) (string, error)
 }
 
 func New(db *sql.DB, b *billing.Service, encodedKey string) (*Service, error) {
@@ -36,7 +37,7 @@ func New(db *sql.DB, b *billing.Service, encodedKey string) (*Service, error) {
 	if err != nil || len(seed) != ed25519.SeedSize {
 		return nil, errors.New("EDGE_SIGNING_SEED must be a base64 Ed25519 seed (32 bytes)")
 	}
-	return &Service{DB: db, Billing: b, Key: ed25519.NewKeyFromSeed(seed)}, nil
+	return &Service{DB: db, Billing: b, Key: ed25519.NewKeyFromSeed(seed), mintProvider: mintSpeechmatics}, nil
 }
 func (s *Service) PublicKey() string {
 	return base64.RawStdEncoding.EncodeToString(s.Key.Public().(ed25519.PublicKey))
@@ -136,11 +137,14 @@ func (s *Service) SetNode(ctx context.Context, actor, id, mode string) error {
 }
 
 type Registration struct {
-	TunnelToken string `json:"tunnel_token,omitempty"`
-	NodeID      string `json:"node_id"`
-	Identity    string `json:"identity"`
-	PublicKey   string `json:"public_key"`
-	Endpoint    string `json:"endpoint"`
+	ProviderAuth string `json:"provider_auth"`
+	Maximum      int    `json:"maximum"`
+	Training     bool   `json:"training"`
+	TunnelToken  string `json:"tunnel_token,omitempty"`
+	NodeID       string `json:"node_id"`
+	Identity     string `json:"identity"`
+	PublicKey    string `json:"public_key"`
+	Endpoint     string `json:"endpoint"`
 }
 
 func (s *Service) Register(ctx context.Context, token string) (Registration, error) {
@@ -154,13 +158,14 @@ func (s *Service) Register(ctx context.Context, token string) (Registration, err
 	}
 	// Deterministic identity makes a lost registration response retryable until the first authenticated heartbeat consumes the registration.
 	identity := parts[0] + "." + edgeprotocol.Hash("edge-identity:"+token)
-	err := s.DB.QueryRowContext(ctx, `UPDATE edge_nodes SET identity_hash=$2 WHERE id=$1 AND registration_hash=$3 AND registration_until>now() AND mode<>'revoked' RETURNING endpoint`, parts[0], edgeprotocol.Hash(identity), edgeprotocol.Hash(token)).Scan(&result.Endpoint)
+	err := s.DB.QueryRowContext(ctx, `UPDATE edge_nodes SET identity_hash=$2 WHERE id=$1 AND registration_hash=$3 AND registration_until>now() AND mode<>'revoked' RETURNING endpoint,max_connections,training`, parts[0], edgeprotocol.Hash(identity), edgeprotocol.Hash(token)).Scan(&result.Endpoint, &result.Maximum, &result.Training)
 	if err != nil {
 		return result, ErrUnauthorized
 	}
 	result.NodeID = parts[0]
 	result.Identity = identity
 	result.PublicKey = s.PublicKey()
+	result.ProviderAuth = "manual"
 	var sealed string
 	if err := s.DB.QueryRowContext(ctx, `SELECT tunnel_token FROM edge_nodes WHERE id=$1`, result.NodeID).Scan(&sealed); err != nil {
 		return result, err

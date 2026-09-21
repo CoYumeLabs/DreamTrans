@@ -19,14 +19,15 @@ import (
 )
 
 type localConfig struct {
-	NodeID      string   `json:"node_id"`
-	Identity    string   `json:"identity"`
-	PublicKey   string   `json:"public_key"`
-	MainURL     string   `json:"main_url"`
-	Origins     []string `json:"origins"`
-	ProviderKey string   `json:"provider_key"`
-	Training    bool     `json:"training"`
-	Maximum     int      `json:"maximum"`
+	NodeID       string   `json:"node_id"`
+	Identity     string   `json:"identity"`
+	PublicKey    string   `json:"public_key"`
+	MainURL      string   `json:"main_url"`
+	Origins      []string `json:"origins"`
+	ProviderAuth string   `json:"provider_auth"`
+	ProviderKey  string   `json:"provider_key"`
+	Training     bool     `json:"training"`
+	Maximum      int      `json:"maximum"`
 }
 
 func main() {
@@ -83,7 +84,7 @@ func run() error {
 		return err
 	}
 	defer func() { _ = queue.Close() }()
-	server, err := edgeruntime.New(&edgeruntime.Config{NodeID: cfg.NodeID, PublicKey: cfg.PublicKey, ProviderKey: cfg.ProviderKey, Version: os.Getenv("APP_VERSION"), Origins: cfg.Origins, Maximum: cfg.Maximum, Training: cfg.Training}, client, queue)
+	server, err := edgeruntime.New(&edgeruntime.Config{NodeID: cfg.NodeID, PublicKey: cfg.PublicKey, ProviderKey: cfg.ProviderKey, ProviderAuth: cfg.ProviderAuth, Version: os.Getenv("APP_VERSION"), Origins: cfg.Origins, Maximum: cfg.Maximum, Training: cfg.Training}, client, queue)
 	if err != nil {
 		return err
 	}

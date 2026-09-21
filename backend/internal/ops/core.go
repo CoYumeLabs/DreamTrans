@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dreamtrans/backend/internal/edgehttp"
 	"golang.org/x/sys/unix"
 )
 
@@ -209,6 +210,7 @@ func newController(ctx context.Context, root string, out, errOut io.Writer) *con
 		path = resolved
 	}
 	c := &controller{ctx: ctx, root: path, path: filepath.Join(path, ".bluegreen"), run: execute, out: out, errOut: errOut}
+	c.httpClient = edgehttp.NewClient(15 * time.Second)
 	c.sleep = func(d time.Duration) {
 		select {
 		case <-ctx.Done():
@@ -335,6 +337,7 @@ func contractOK(next, old object) {
 	need(next["expand_migrations"] != nil, "release lacks reviewed expand-only migration manifest")
 	_ = list(next["expand_migrations"])
 	if old != nil {
+		need(number(next["provider_credentials"]) >= number(old["provider_credentials"]), "candidate cannot preserve central provider credentials; use a compatible release")
 		need(number(old["state_epoch"]) == number(next["state_epoch"]), "data epochs are not rollback compatible")
 		lo := func(v any) int {
 			if v == nil {

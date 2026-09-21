@@ -135,3 +135,15 @@ func Verify(key ed25519.PublicKey, token, node, origin string) (*Grant, error) {
 
 // ValidSampleRate accepts the PCM clocks used by browser audio contexts.
 func ValidSampleRate(rate int) bool { return rate == 16000 || rate == 44100 || rate == 48000 }
+
+// ProviderCredential is node-only and must never enter browser grants, logs or journals.
+type ProviderCredential struct {
+	JWT       string `json:"jwt"`
+	ExpiresAt int64  `json:"expires_at"`
+	Training  bool   `json:"training"`
+}
+type ProviderCredentialRequest struct {
+	SessionID  string `json:"session_id,omitempty"`
+	Generation int64  `json:"generation,omitempty"`
+	Probe      bool   `json:"probe,omitempty"`
+}

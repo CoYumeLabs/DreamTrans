@@ -24,10 +24,11 @@ import (
 
 func TestAudioBypassesMainAndOutboxSurvivesNetworkPartitionAndDrain(t *testing.T) {
 	for _, protocol := range []int{1, 2} {
-		t.Run(fmt.Sprintf("protocol_%d", protocol), func(t *testing.T) { testAudioPartitionAndDrain(t, protocol) })
+		t.Run(fmt.Sprintf("protocol_%d", protocol), func(t *testing.T) { testAudioPartitionAndDrain(t, protocol, false) })
 	}
 }
-func testAudioPartitionAndDrain(t *testing.T, protocol int) {
+func TestCentralJWTLiveAudioPartitionAndDrain(t *testing.T) { testAudioPartitionAndDrain(t, 2, true) }
+func testAudioPartitionAndDrain(t *testing.T, protocol int, central bool) {
 	oldRuntime := deployment.Default
 	deployment.Default = &deployment.Runtime{}
 	t.Cleanup(func() { deployment.Default = oldRuntime })
@@ -46,10 +47,13 @@ func testAudioPartitionAndDrain(t *testing.T, protocol int) {
 	}
 	var partition atomic.Bool
 	partition.Store(true)
-	var saved atomic.Int64
+	var saved, minted atomic.Int64
 	main := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
+		case "/api/edge-control/provider-credential":
+			minted.Add(1)
+			_ = json.NewEncoder(w).Encode(edgeprotocol.ProviderCredential{JWT: "short-lived-fixture", ExpiresAt: time.Now().Add(time.Minute).Unix()})
 		case "/api/edge-control/connect", "/api/edge-control/renew":
 			_ = json.NewEncoder(w).Encode(edgeprotocol.Authorization{Token: token, Grant: grant})
 		case "/api/edge-control/heartbeat":
@@ -82,6 +86,9 @@ func testAudioPartitionAndDrain(t *testing.T, protocol int) {
 	client.HTTP = main.Client()
 	var audioFrames atomic.Int64
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if central && (r.URL.Query().Get("jwt") != "short-lived-fixture" || r.Header.Get("Authorization") != "") {
+			t.Error("central JWT missing from live handshake")
+		}
 		upgrade := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 		ws, err := upgrade.Upgrade(w, r, nil)
 		if err != nil {
@@ -113,7 +120,11 @@ func testAudioPartitionAndDrain(t *testing.T, protocol int) {
 		t.Fatal(err)
 	}
 	defer func() { _ = queue.Close() }()
-	server, err := New(&Config{NodeID: node, PublicKey: base64.RawStdEncoding.EncodeToString(public), ProviderKey: "independent", ProviderURL: "ws" + strings.TrimPrefix(upstream.URL, "http"), Origins: []string{grant.Origin}, Maximum: 2, Version: "test"}, client, queue)
+	providerMode, providerKey := "manual", "independent"
+	if central {
+		providerMode, providerKey = "main", ""
+	}
+	server, err := New(&Config{ProviderAuth: providerMode, NodeID: node, PublicKey: base64.RawStdEncoding.EncodeToString(public), ProviderKey: providerKey, ProviderURL: "ws" + strings.TrimPrefix(upstream.URL, "http"), Origins: []string{grant.Origin}, Maximum: 2, Version: "test"}, client, queue)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,6 +226,9 @@ func testAudioPartitionAndDrain(t *testing.T, protocol int) {
 	}
 	if audioFrames.Load() != 1 {
 		t.Fatal("replayed audio billed provider twice")
+	}
+	if central && minted.Load() != 1 {
+		t.Fatal("audio loop requested additional provider tokens")
 	}
 }
 

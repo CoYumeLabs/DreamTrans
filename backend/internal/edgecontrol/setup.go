@@ -41,7 +41,9 @@ func SetupHTTP(controlReady bool) http.HandlerFunc {
 			}
 		}
 		respond(w, map[string]any{
-			"control_ready": controlReady, "routing_enabled": controlReady && RoutingEnabled(),
+			"provider_auth": "main", "provider_ready": speechmaticsAccount(false) != "",
+			"training_provider_ready": speechmaticsAccount(true) != "",
+			"control_ready":           controlReady, "routing_enabled": controlReady && RoutingEnabled(),
 			"installer_ready": len(missing) == 0, "missing": missing,
 			"release_image":            os.Getenv("EDGE_RELEASE_IMAGE"),
 			"tunnel_install_available": immutableImage.MatchString(os.Getenv("EDGE_CLOUDFLARED_IMAGE")),

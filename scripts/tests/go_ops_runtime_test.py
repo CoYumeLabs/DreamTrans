@@ -5,6 +5,7 @@ Python is only the test harness: all lifecycle operations run dreamtransctl.
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -208,25 +209,29 @@ def main():
 
             # Forward-only SQL: a committed expansion remains after the next SQL fails.
             contract = json.loads((root / 'bundle/release.json').read_text())
-            contract['expand_migrations'] += ['057_ops_fixture.sql', '058_ops_failure.sql']
+            latest = max(int(path.name[:3]) for path in (root / 'bundle/migrations').glob('[0-9][0-9][0-9]_*.sql'))
+            expansion = f'{latest + 1:03d}_ops_fixture.sql'
+            failure = f'{latest + 2:03d}_ops_failure.sql'
+            contract['expand_migrations'] += [expansion, failure]
             (root / 'release.json').write_text(json.dumps(contract))
-            (root / '057_ops_fixture.sql').write_text('CREATE TABLE ops_expansion(id integer);\n')
-            (root / '058_ops_failure.sql').write_text('SELECT definitely_missing_ops_fixture();\n')
+            (root / expansion).write_text('CREATE TABLE ops_expansion(id integer);\n')
+            (root / failure).write_text('SELECT definitely_missing_ops_fixture();\n')
             runner = (root / 'bundle/migrate.sh').read_text()
-            assert 'expected_latest_prefix=056' in runner
-            (root / 'migrate.sh').write_text(runner.replace('expected_latest_prefix=056', 'expected_latest_prefix=058'))
+            marker = re.search(r'^expected_latest_prefix=(\d{3})$', runner, re.MULTILINE)
+            assert marker and int(marker.group(1)) == latest
+            (root / 'migrate.sh').write_text(runner.replace(marker.group(0), f'expected_latest_prefix={latest + 2:03d}'))
             (root / 'Dockerfile').write_text(
                 f'FROM {source}\nCOPY release.json /usr/share/dreamtrans/release.json\n'
                 'COPY migrate.sh /usr/share/dreamtrans/migrate.sh\n'
-                'COPY 057_ops_fixture.sql 058_ops_failure.sql /usr/share/dreamtrans/migrations/\n')
+                f'COPY {expansion} {failure} /usr/share/dreamtrans/migrations/\n')
             broken = fixture + ':migration-failure'
             images.append(broken)
             run('docker', 'build', '-t', broken, directory)
             failed = subprocess.run([binary, '--dir', directory, 'deploy', '--image', inspect(broken)['Id']],
                                     capture_output=True, timeout=180)
             assert failed.returncode != 0 and state()['active'] == 'blue' and state()['phase'] == 'ready'
-            assert sql("SELECT count(*) FROM schema_migrations WHERE version='057_ops_fixture.sql'") == '1'
-            assert sql("SELECT count(*) FROM schema_migrations WHERE version='058_ops_failure.sql'") == '0'
+            assert sql(f"SELECT count(*) FROM schema_migrations WHERE version='{expansion}'") == '1'
+            assert sql(f"SELECT count(*) FROM schema_migrations WHERE version='{failure}'") == '0'
             assert sql('SELECT count(*) FROM ops_marker') == '2'
             cli('snapshot', '--output', str(root / 'complete.tar'))
             assert (root / 'complete.tar').stat().st_mode & 0o777 == 0o600
