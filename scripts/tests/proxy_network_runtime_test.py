@@ -37,7 +37,10 @@ def main():
                '-e', 'POSTGRES_USER=fixture', '-e', 'POSTGRES_DB=fixture',
                '-e', 'POSTGRES_HOST_AUTH_METHOD=trust', database_image)
         for _ in range(60):
-            ready = subprocess.run(['docker', 'exec', database, 'pg_isready', '-U', 'fixture'], capture_output=True)
+            # The image first starts a socket-only initialization server, then
+            # restarts PostgreSQL. Wait for the final TCP listener before SQL.
+            ready = subprocess.run(['docker', 'exec', database, 'pg_isready',
+                                    '-h', '127.0.0.1', '-U', 'fixture'], capture_output=True)
             if ready.returncode == 0:
                 break
             time.sleep(1)
