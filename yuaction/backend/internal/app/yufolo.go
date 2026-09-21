@@ -109,6 +109,8 @@ type authResponse struct {
 	ExpiresIn int         `json:"expires_in"`
 }
 type loginSession struct {
+	server            *Server
+	id                string
 	mu                sync.Mutex
 	user              accountUser
 	access, refresh   string
@@ -151,9 +153,11 @@ func (s *Server) sessionFor(r *http.Request) *loginSession {
 	if err != nil {
 		return nil
 	}
-	s.authMu.Lock()
-	defer s.authMu.Unlock()
-	return s.sessions[digest(cookie.Value)]
+	a, err := s.loadSession(r.Context(), digest(cookie.Value))
+	if err != nil {
+		return nil
+	}
+	return a
 }
 
 // Refresh is serialized, but slow AI calls must not hold the login mutex and
@@ -161,21 +165,26 @@ func (s *Server) sessionFor(r *http.Request) *loginSession {
 func (c *yufoloClient) accessToken(ctx context.Context, a *loginSession, rejected string) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.revoked || time.Now().After(a.deadline) {
-		return "", fail(401, "请重新登录 Yufolo")
-	}
-	if time.Until(a.expires) < 30*time.Second || (rejected != "" && rejected == a.access) {
-		var next authResponse
-		if err := c.call(ctx, "POST", "/api/auth/refresh", "", map[string]string{"refresh_token": a.refresh}, &next); err != nil {
-			return "", upstreamFailure(err)
+	var access string
+	err := a.mutate(ctx, func() error {
+		if a.revoked || time.Now().After(a.deadline) {
+			return fail(401, "请重新登录 Yufolo")
 		}
-		if next.User.ID != a.user.ID || next.Access == "" || next.Refresh == "" {
-			return "", fail(502, "Yufolo 登录响应不正确")
+		if time.Until(a.expires) < 30*time.Second || (rejected != "" && rejected == a.access) {
+			var next authResponse
+			if err := c.call(ctx, "POST", "/api/auth/refresh", "", map[string]string{"refresh_token": a.refresh}, &next); err != nil {
+				return upstreamFailure(err)
+			}
+			if next.User.ID != a.user.ID || next.Access == "" || next.Refresh == "" {
+				return fail(502, "Yufolo 登录响应不正确")
+			}
+			a.access, a.refresh = next.Access, next.Refresh
+			a.expires = time.Now().Add(time.Duration(next.ExpiresIn) * time.Second)
 		}
-		a.access, a.refresh = next.Access, next.Refresh
-		a.expires = time.Now().Add(time.Duration(next.ExpiresIn) * time.Second)
-	}
-	return a.access, nil
+		access = a.access
+		return nil
+	})
+	return access, err
 }
 func (c *yufoloClient) request(ctx context.Context, a *loginSession, method, path string, body, out any) error {
 	access, err := c.accessToken(ctx, a, "")
@@ -248,7 +257,13 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, fail(503, "登录连接已满，请稍后重试"))
 		return
 	}
-	s.sessions[digest(key)] = a
+	a.server, a.id = s, digest(key)
+	if err := s.persistSession(r.Context(), a); err != nil {
+		s.authMu.Unlock()
+		writeError(w, err)
+		return
+	}
+	s.sessions[a.id] = a
 	s.authMu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: authCookie, Value: key, Path: "/api", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: r.TLS != nil || (s.cfg.TrustProxy && r.Header.Get("X-Forwarded-Proto") == "https"), MaxAge: 7 * 24 * 3600})
 	respond(w, 200, result.User)
@@ -258,13 +273,18 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	if a != nil {
 		s.streamMu.Lock()
 		for _, v := range s.streams {
-			if v.auth == a {
+			if v.auth == a || (a.id != "" && v.auth.id == a.id) {
 				v.cancel()
 			}
 		}
 		s.streamMu.Unlock()
 		a.mu.Lock()
-		a.revoked = true
+		err := a.mutate(r.Context(), func() error { a.revoked = true; return nil })
+		if err != nil {
+			a.mu.Unlock()
+			writeError(w, err)
+			return
+		}
 		if s.yufolo != nil {
 			_ = s.yufolo.call(r.Context(), "POST", "/api/auth/logout", a.access, map[string]string{"refresh_token": a.refresh}, nil)
 		}

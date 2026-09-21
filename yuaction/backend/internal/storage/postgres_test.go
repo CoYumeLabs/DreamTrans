@@ -3,9 +3,11 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -120,4 +122,72 @@ func TestMigrationPreservesLegacyRooms(t *testing.T) {
 			t.Fatalf("migration changed old room: %+v %v", r, err)
 		}
 	}
+}
+
+func TestSharedCredentialsAndRecordingOwnershipAcrossPools(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL required")
+	}
+	first, err := OpenPostgres(t.Context(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := OpenPostgres(t.Context(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	key := fmt.Sprintf("coordination-test-%d", time.Now().UnixNano())
+	defer first.db.ExecContext(context.Background(), "DELETE FROM shared_state WHERE key=$1", key)
+	var wg sync.WaitGroup
+	for i := 0; i < 30; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			p := first
+			if i%2 == 1 {
+				p = second
+			}
+			err := p.MutateShared(t.Context(), key, func(value []byte) ([]byte, error) {
+				n := 0
+				if len(value) > 0 {
+					if err := json.Unmarshal(value, &n); err != nil {
+						return nil, err
+					}
+				}
+				return json.Marshal(n + 1)
+			})
+			if err != nil {
+				t.Error(err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if err := first.MutateShared(t.Context(), key, func(value []byte) ([]byte, error) {
+		if string(value) != "30" {
+			t.Errorf("concurrent credential updates lost: %s", value)
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	release, err := first.TryLock(t.Context(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done, err := second.TryLock(t.Context(), key); err == nil {
+		done()
+		t.Fatal("two recording owners admitted")
+	}
+	if locked, err := second.Locked(t.Context(), key); err != nil || !locked {
+		t.Fatalf("remote owner invisible: %v %v", locked, err)
+	}
+	release()
+	release, err = second.TryLock(t.Context(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
 }

@@ -57,8 +57,16 @@ elif tool=='docker':
         else: print(os.environ['MOCK_OTHER_OWNER'])
         sys.exit(0)
     if args[:2]==['volume','inspect']: sys.exit(0 if os.environ.get('MOCK_VOLUME') else 1)
+    if args[0]=='create': print('extract-container'); sys.exit(0)
+    if args[0]=='cp':
+        target=pathlib.Path(args[-1])
+        target.write_text(pathlib.Path(os.environ['MOCK_CLI']).read_text())
+        target.chmod(0o700)
+        sys.exit(0)
+    if args[0]=='rm': sys.exit(0)
     if args[0]=='pull': sys.exit(1 if os.environ.get('MOCK_FAIL_PULL') else 0)
     if args[:2]==['image','inspect']:
+        if '{{.Id}}' in args: print('sha256:'+revision+'0'*24); sys.exit(0)
         if os.environ.get('MOCK_MISMATCH') and '-frontend:' in args[-1]: print('b'*40)
         else: print(revision)
         sys.exit(0)
@@ -72,9 +80,25 @@ elif tool=='docker':
         if 'pg_dump' in args:
             if os.environ.get('MOCK_FAIL_BACKUP'): sys.exit(1)
             sys.stdout.buffer.write(b'PGDMP-fake-test-backup'); sys.exit(0)
+        if 'ps' in args and '-q' in args: print('legacy-'+args[-1]); sys.exit(0)
         if 'up' in args or 'ps' in args or 'logs' in args: sys.exit(0)
     sys.exit('unexpected Docker invocation: '+repr(args))
 else: sys.exit('unexpected mock command')
+'''
+
+
+MOCK_CLI = r'''#!/usr/bin/env python3
+import json, os, pathlib, shutil, sys
+args=sys.argv[1:]
+with open(os.environ['MOCK_LOG'],'a') as f: f.write(json.dumps({'tool':'dreamtransctl','args':args,'ambient_password':False})+'\n')
+root=pathlib.Path(args[args.index('--dir')+1])
+if 'init' in args:
+    (root/'.bluegreen').mkdir(exist_ok=True)
+    (root/'.bluegreen/state.json').write_text('{"role":"yuaction"}')
+if 'install-tools' in args:
+    shutil.copyfile(sys.argv[0],root/'dreamtransctl')
+    (root/'dreamtransctl').chmod(0o700)
+if os.environ.get('MOCK_FAIL_DEPLOY') and 'upgrade' in args: sys.exit(1)
 '''
 
 
@@ -91,8 +115,10 @@ class InstallerTests(unittest.TestCase):
             path.write_text(MOCK)
             path.chmod(0o755)
         self.log = self.root / "commands.jsonl"
+        cli = self.root / "mock-cli"
+        cli.write_text(MOCK_CLI)
         self.env = dict(os.environ, PATH=str(self.bin) + ":" + os.environ["PATH"],
-                        MOCK_REPO=str(ROOT), MOCK_LOG=str(self.log))
+                        MOCK_REPO=str(ROOT), MOCK_LOG=str(self.log), MOCK_CLI=str(cli))
 
     def run_installer(self, *args, ok=True, **env):
         result = subprocess.run(["bash", str(SCRIPT), "--dir", str(self.install),
@@ -140,6 +166,27 @@ class InstallerTests(unittest.TestCase):
         backup = next((self.install / 'backups').iterdir())
         self.assertEqual((backup / '.env').read_text(), old)
 
+    def test_legacy_adoption_is_explicit_and_never_recreates_running_app(self):
+        self.run_installer()
+        import shutil
+        shutil.rmtree(self.install / '.bluegreen')
+        self.log.write_text('')
+        result = self.run_installer('--update', ok=False)
+        self.assertIn('--adopt-bluegreen', result.stderr)
+        self.assertFalse(any('--no-build' in c['args'] for c in self.calls()))
+        self.log.write_text('')
+        self.run_installer('--update', '--adopt-bluegreen')
+        self.assertFalse(any('--no-build' in c['args'] for c in self.calls()))
+        self.assertTrue(any(c['tool']=='dreamtransctl' and 'init' in c['args'] for c in self.calls()))
+
+    def test_bluegreen_updates_do_not_recreate_frontend_or_backend(self):
+        self.run_installer()
+        original=(self.install/'.env').read_bytes()
+        self.log.write_text('')
+        self.run_installer('--update', ok=False, MOCK_FAIL_DEPLOY='1', MOCK_REVISION='c'*40)
+        self.assertEqual((self.install/'.env').read_bytes(),original)
+        self.assertFalse(any('--no-build' in c['args'] for c in self.calls()))
+
     def test_custom_image_prefix_is_preserved(self):
         self.run_installer()
         config = self.install / '.env'
@@ -173,7 +220,7 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue((backups[0] / "database.dump").read_bytes().startswith(b"PGDMP"))
         calls = self.calls()
         backup = next(i for i, c in enumerate(calls) if "pg_dump" in c["args"])
-        recreate = next(i for i, c in enumerate(calls) if "--no-build" in c["args"])
+        recreate = next(i for i, c in enumerate(calls) if c["tool"] == "dreamtransctl" and "upgrade" in c["args"])
         self.assertLess(backup, recreate)
         for c in calls:
             self.assertNotIn("down", c["args"])

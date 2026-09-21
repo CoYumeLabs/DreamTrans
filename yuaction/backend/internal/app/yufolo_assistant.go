@@ -181,7 +181,7 @@ func (s *Server) yufoloAssistantInfo(w http.ResponseWriter, r *http.Request, roo
 		if !known[a.QuestionID] {
 			continue
 		}
-		if s.aiJobs[jobKey(room.Code, "answer", a.QuestionID)] == nil {
+		if !s.jobActive(jobKey(room.Code, "answer", a.QuestionID)) {
 			for _, part := range []*draftPart{&a.Generic, &a.Knowledge} {
 				if part.Status == "processing" {
 					part.Status = "interrupted"
@@ -351,11 +351,24 @@ func (s *Server) assistantIndex(w http.ResponseWriter, r *http.Request) {
 func (s *Server) startYufoloAnswer(code, id string) error {
 	s.aiMu.Lock()
 	defer s.aiMu.Unlock()
-	a := s.aiHosts[code]
+	a := s.hostSession(context.Background(), code)
+	if a == nil {
+		a = s.aiHosts[code]
+	}
 	if a == nil {
 		return fail(401, "主持人需要先登录 Yufolo 并打开工作台")
 	}
 	key := jobKey(code, "answer", id)
+	releaseJob, claimErr := s.claimJob(key)
+	if claimErr != nil {
+		return claimErr
+	}
+	launched := false
+	defer func() {
+		if !launched {
+			releaseJob()
+		}
+	}()
 	if s.aiJobs[key] != nil {
 		return fail(409, "此问题正在生成")
 	}
@@ -418,7 +431,9 @@ func (s *Server) startYufoloAnswer(code, id string) error {
 		question += "\n\n引用的字幕：\n" + q.QuotedText
 	}
 	requestID := token(16)
+	launched = true
 	go func() {
+		defer releaseJob()
 		defer cancel()
 		generic := make(chan draftPart, 1)
 		go func() {

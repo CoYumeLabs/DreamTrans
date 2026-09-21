@@ -3,7 +3,9 @@ class YuActionPCM extends AudioWorkletProcessor {
     super();
     this.samples = new Int16Array(2048);
     this.used = 0;
+    this.stopped = false;
     this.port.onmessage = () => {
+      this.stopped = true;
       this.flush();
       this.port.postMessage("flushed");
     };
@@ -18,6 +20,7 @@ class YuActionPCM extends AudioWorkletProcessor {
     this.used = 0;
   }
   process(inputs) {
+    if (this.stopped) return false;
     const channels = inputs[0];
     if (channels?.length)
       for (let i = 0; i < channels[0].length; i++) {

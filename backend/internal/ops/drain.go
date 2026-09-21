@@ -36,6 +36,9 @@ func (c *controller) writeDrainUnits(directory, unit string) {
 	if c.edge() {
 		role = " edge"
 	}
+	if c.yuaction() {
+		role = " yuaction"
+	}
 	service := "[Unit]\nDescription=DreamTrans automatic safe drain\nAfter=docker.service network-online.target\n[Service]\nType=oneshot\nTimeoutStartSec=120\nExecStart=" + filepath.Join(c.root, "dreamtransctl") + role + " --dir " + c.root + " drain-tick\n"
 	timer := "[Unit]\nDescription=Check DreamTrans release drain\n[Timer]\nOnBootSec=20\nOnUnitActiveSec=15\nAccuracySec=1\nUnit=" + unit + ".service\n[Install]\nWantedBy=timers.target\n"
 	atomic(filepath.Join(directory, unit+".service"), []byte(service), 0o644)
@@ -43,6 +46,18 @@ func (c *controller) writeDrainUnits(directory, unit string) {
 }
 
 func (c *controller) finishRelease(o *options) {
+	if c.yuaction() {
+		active, old := str(c.state["active"]), str(c.state["previous"])
+		if old != "" && str(c.state["phase"]) == "draining" {
+			c.probe(active)
+			need(c.routeColor() == active, "active YuAction route not confirmed")
+			if yes(obj(c.inspect("container", c.name(old))["State"])["Running"]) {
+				c.control(old, "draining")
+				c.control(old, "handoff")
+			}
+		}
+	}
+
 	if yes(c.drainPolicy()["enabled"]) {
 		c.drainTick()
 		if str(c.state["phase"]) == "draining" {

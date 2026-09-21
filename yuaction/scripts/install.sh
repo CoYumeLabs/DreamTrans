@@ -16,6 +16,8 @@ requested_tag="latest"
 requested_port=""
 requested_bind=""
 allow_docker_install=true
+adopt_bluegreen=false
+dreamtrans_database=""
 work_dir=""
 backup_dir=""
 
@@ -39,6 +41,7 @@ YuAction 一键安装 / 更新
   --bind ADDRESS    首次安装绑定地址，默认 127.0.0.1；对外访问可用 0.0.0.0
   --project NAME    Docker Compose 项目名，默认 yuaction；安装后不可变更
   --version TAG     latest、完整 sha-提交号 或版本标签；默认跟随 latest
+  --adopt-bluegreen  首次将旧 Compose 安装转换为蓝绿；请先结束旧协议录音
   --no-docker-install  Docker 缺失时直接报错，不安装系统软件
   --help            显示帮助
 
@@ -51,6 +54,7 @@ USAGE
 parse_args() {
   while (($#)); do
     case "$1" in
+      --adopt-bluegreen) adopt_bluegreen=true; shift ;;
       --update) action="update"; shift ;;
       --status) action="status"; shift ;;
       --logs) action="logs"; shift ;;
@@ -185,6 +189,7 @@ discover_dreamtrans() {
     candidate="$id"
   done < <(docker ps -q --filter label=com.docker.compose.project.working_dir)
   [[ -n "$candidate" ]] || die "未找到此目录下运行中的 DreamTrans 数据库（db / postgres 服务）；请先启动 DreamTrans"
+  dreamtrans_database="$candidate"
   networks=$(docker inspect --format '{{range $name, $network := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$candidate")
   network=""
   while IFS= read -r id; do
@@ -295,6 +300,13 @@ ENV
       printf 'IMAGE_PREFIX=ghcr.io/coyumelabs/dreamtrans-yuaction\n' >> "$work_dir/.env"
     fi
   fi
+  if $existing && [[ ! -f "$install_dir/.bluegreen/state.json" ]] && ! $adopt_bluegreen; then
+    die "旧安装尚未采用录音交接协议；当前服务保持不变。首次转换请先结束旧页面的录音，再添加 --adopt-bluegreen。转换后更新与回滚自动迁移录音。"
+  fi
+  if $existing && [[ -f "$install_dir/.bluegreen/state.json" ]]; then
+    [[ -z "$requested_port" || "$requested_port" == "$(env_value APP_PORT "$install_dir/.env")" ]] || die "蓝绿更新保留固定入口端口"
+    [[ -z "$requested_bind" || "$requested_bind" == "$(env_value APP_BIND "$install_dir/.env")" ]] || die "蓝绿更新保留固定入口绑定地址"
+  fi
   [[ -z "$requested_port" ]] || set_env_value APP_PORT "$requested_port" "$work_dir/.env"
   [[ -z "$requested_bind" ]] || set_env_value APP_BIND "$requested_bind" "$work_dir/.env"
   validate_config "$work_dir/.env"
@@ -361,15 +373,54 @@ ENV
     printf '%s\n' "$dreamtrans_dir" > "$install_dir/.dreamtrans-dir"
   fi
 
+  local backend_image frontend_image extracted port
+  backend_image=$(docker image inspect --format '{{.Id}}' "${prefix}-backend:sha-$revision")
+  frontend_image=$(docker image inspect --format '{{.Id}}' "${prefix}-frontend:sha-$revision")
+  extracted=$(docker create "$backend_image")
+  if ! docker cp "$extracted:/usr/share/dreamtrans/dreamtransctl" "$work_dir/dreamtransctl"; then
+    docker rm -v "$extracted" >/dev/null
+    die "候选镜像缺少蓝绿运维工具，当前服务保持不变"
+  fi
+  docker rm -v "$extracted" >/dev/null
+  chmod 0700 "$work_dir/dreamtransctl"
+  port=$(env_value APP_PORT "$work_dir/.env"); port="${port:-11452}"
+  if [[ -f "$install_dir/.bluegreen/state.json" ]]; then
+    log "蓝绿更新 YuAction，录音自动接续…"
+    "$work_dir/dreamtransctl" yuaction --dir "$install_dir" upgrade --image "$backend_image" --frontend-image "$frontend_image"
+  else
+    # A fresh install briefly uses Compose for database/bootstrap discovery.
+    # Existing legacy processes are never recreated by Compose during adoption.
+    if ! $existing; then
+      install -m 0600 "$work_dir/.env" "$install_dir/.env"
+      install -m 0600 "$work_dir/compose.ghcr.yml" "$install_dir/compose.ghcr.yml"
+      compose_at "$install_dir" up -d --no-build --wait --wait-timeout 120
+      wait_for_api
+    fi
+    local backend_container frontend_container database_container proxy_image
+    backend_container=$(compose_at "$install_dir" ps -q backend)
+    frontend_container=$(compose_at "$install_dir" ps -q frontend)
+    if [[ -n "$dreamtrans_dir" ]]; then database_container="$dreamtrans_database"; else database_container=$(compose_at "$install_dir" ps -q db); fi
+    [[ -n "$backend_container" && -n "$frontend_container" && -n "$database_container" ]] || die "无法识别原应用与数据库，停止转换"
+    # Pin the entrance independently; application upgrades never recreate it.
+    proxy_image=nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+    "$work_dir/dreamtransctl" yuaction --dir "$install_dir" init --app "$backend_container" --frontend "$frontend_container" --database "$database_container" --port "$port" --image "$backend_image" --frontend-image "$frontend_image" --proxy-image "$proxy_image" --maintenance
+  fi
+  "$work_dir/dreamtransctl" yuaction --dir "$install_dir" install-tools
+  if [[ -n "$dreamtrans_dir" && -f "$dreamtrans_dir/.bluegreen/state.json" ]]; then
+    # Adopt the shared CLI capability on the parent as well. Existing main
+    # containers, configuration, backup helper and volumes are preserved.
+    "$work_dir/dreamtransctl" --dir "$dreamtrans_dir" install-tools
+  fi
+  if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system && "$install_dir" != *[[:space:]]* ]]; then
+    "$install_dir/dreamtransctl" yuaction --dir "$install_dir" configure-drain --handoff-after 0
+  fi
   install -m 0600 "$work_dir/.env" "$install_dir/.env"
   install -m 0600 "$work_dir/compose.ghcr.yml" "$install_dir/compose.ghcr.yml"
   install -m 0700 "$work_dir/install.sh" "$install_dir/install.sh"
   printf '%s\n' "$project" > "$install_dir/.project"
-  log "启动 YuAction…"
-  compose_at "$install_dir" up -d --no-build --wait --wait-timeout 120
   wait_for_api
   log "安装 / 更新成功：${revision:0:7}"
-  local bind port
+  local bind
   bind=$(env_value APP_BIND "$install_dir/.env"); bind="${bind:-127.0.0.1}"
   port=$(env_value APP_PORT "$install_dir/.env"); port="${port:-11452}"
   if [[ "$bind" == 0.0.0.0 || "$bind" == :: ]]; then
@@ -438,7 +489,9 @@ main() {
   case "$action" in
     status|logs)
       [[ -f "$install_dir/.env" && -f "$install_dir/compose.ghcr.yml" ]] || die "此目录尚未安装"
-      if [[ "$action" == status ]]; then compose_at "$install_dir" ps; else compose_at "$install_dir" logs --tail 100; fi ;;
+      if [[ -f "$install_dir/.bluegreen/state.json" && -x "$install_dir/dreamtransctl" ]]; then
+        "$install_dir/dreamtransctl" yuaction --dir "$install_dir" "$action"
+      elif [[ "$action" == status ]]; then compose_at "$install_dir" ps; else compose_at "$install_dir" logs --tail 100; fi ;;
     install|update) install_or_update ;;
   esac
 }

@@ -8,9 +8,11 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/CoYumeLabs/YuAction/backend/internal/storage"
@@ -27,21 +29,24 @@ type liveStream struct {
 // Serialize lifecycle changes per room, including the gap between stopping an
 // upstream stream and committing the local ended state.
 func (s *Server) beginControl(code string) (func(), error) {
-	s.streamMu.Lock()
-	defer s.streamMu.Unlock()
-	if s.controls[code] {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	release, err := s.store.TryLock(ctx, "control:"+code)
+	if errors.Is(err, storage.ErrConflict) {
 		return nil, fail(409, "此活动正在更新，请稍后重试")
 	}
-	s.controls[code] = true
-	return func() { s.streamMu.Lock(); delete(s.controls, code); s.streamMu.Unlock() }, nil
+	return release, err
 }
 
 func (s *Server) publicRoom(room Room) Room {
 	if room.Transcription == "recording" {
-		s.streamMu.Lock()
-		active := s.streams[room.Code] != nil
-		s.streamMu.Unlock()
-		if !active {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		active, err := s.store.Locked(ctx, "recording:"+room.Code)
+		cancel()
+		if err != nil {
+			return room.Public()
+		}
+		if !active && time.Now().After(room.HandoffUntil) {
 			room.Transcription = "interrupted"
 		}
 	}
@@ -150,7 +155,7 @@ func (s *Server) prepareTranscription(w http.ResponseWriter, r *http.Request) {
 			}
 			return nil
 		}
-		rec.Link = storage.Link{OwnerID: a.user.ID, SessionID: uuidToken(), SourceLanguage: in.Source, TargetLanguage: in.Target}
+		rec.Link = storage.Link{AuthSessionID: a.id, OwnerID: a.user.ID, SessionID: uuidToken(), SourceLanguage: in.Source, TargetLanguage: in.Target}
 		room.Transcription = "paused"
 		return nil
 	})
@@ -195,9 +200,11 @@ func (s *Server) transcriptionInfo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, fail(403, "需要此活动的主持权限"))
 		return
 	}
-	s.streamMu.Lock()
-	active := s.streams[rec.Code] != nil
-	s.streamMu.Unlock()
+	active, err := s.store.Locked(r.Context(), "recording:"+rec.Code)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	respond(w, 200, map[string]any{"sessionId": rec.Link.SessionID, "sourceLanguage": transcriptionLanguage(rec.Link.SourceLanguage), "targetLanguage": transcriptionLanguage(rec.Link.TargetLanguage), "active": active, "linked": rec.Link.Created})
 }
 func (s *Server) archiveSegment(ctx context.Context, a *loginSession, code string, link storage.Link, seg Segment) error {
@@ -226,25 +233,23 @@ func (s *Server) endTranscription(r *http.Request, rec storage.Record) error {
 	if a == nil || s.yufolo == nil {
 		return fail(401, "请登录 Yufolo 后结束转录")
 	}
-	s.streamMu.Lock()
-	active := s.streams[rec.Code]
-	var stop func()
-	if active != nil {
-		stop = active.stop
+	if err := s.changeRecord(r.Context(), rec.Code, func(_ *Room, row *storage.Record) error { row.Link.StopRequested = true; return nil }); err != nil {
+		return err
 	}
-	s.streamMu.Unlock()
-	if active != nil {
-		if stop != nil {
-			stop()
-		} else {
-			active.cancel()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		active, err := s.store.Locked(r.Context(), "recording:"+rec.Code)
+		if err != nil {
+			return err
 		}
-	}
-	if active != nil {
+		if !active {
+			break
+		}
 		select {
-		case <-active.done:
 		case <-r.Context().Done():
 			return fail(409, "转录正在停止，请稍后重试")
+		case <-ticker.C:
 		}
 	}
 	// A previously interrupted stream may still have durable finals awaiting
@@ -308,16 +313,34 @@ func (s *Server) audio(w http.ResponseWriter, r *http.Request) {
 		writeError(w, fail(409, "请先关联一个活动中的 Yufolo 会话"))
 		return
 	}
+	captureID := r.URL.Query().Get("capture")
+	if r.URL.Query().Get("protocol") == "1" && !regexp.MustCompile(`^[a-zA-Z0-9-]{16,64}$`).MatchString(captureID) {
+		writeError(w, fail(400, "录音标识不正确"))
+		return
+	}
 	rate, err := strconv.Atoi(r.URL.Query().Get("sampleRate"))
 	if err != nil || rate < 8000 || rate > 96000 {
 		writeError(w, fail(400, "音频采样率不正确"))
 		return
 	}
+	control, err := s.beginControl(code)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	releaseOwner, err := s.store.TryLock(r.Context(), "recording:"+code)
+	if err != nil {
+		control()
+		writeError(w, fail(409, "此活动已有主持端正在转录"))
+		return
+	}
+	defer releaseOwner()
+	defer control()
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	active := &liveStream{auth: a, cancel: cancel, done: make(chan struct{})}
 	s.streamMu.Lock()
-	if s.streams[code] != nil || s.controls[code] {
+	if s.streams[code] != nil {
 		s.streamMu.Unlock()
 		writeError(w, fail(409, "此活动已有主持端正在转录"))
 		return
@@ -336,6 +359,18 @@ func (s *Server) audio(w http.ResponseWriter, r *http.Request) {
 		writeError(w, fail(409, "活动状态已变化，请刷新后重试"))
 		return
 	}
+	if err = s.changeRecord(ctx, code, func(room *Room, row *storage.Record) error {
+		if time.Now().Before(room.HandoffUntil) && row.Link.RecordingID != "" && row.Link.RecordingID != captureID {
+			return fail(409, "原主持端正在自动接续录音")
+		}
+		row.Link.RecordingID = captureID
+		row.Link.StopRequested = false
+		row.Link.AuthSessionID = a.id
+		return nil
+	}); err != nil {
+		writeError(w, err)
+		return
+	}
 	// Replay durable, unarchived finals before starting another paid stream.
 	for _, seg := range room.Segments {
 		if seg.Source == "yufolo" && !seg.Archived && strings.HasPrefix(seg.ID, "live-") {
@@ -350,11 +385,7 @@ func (s *Server) audio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	duration := rec.Link.Offset
-	defer func() {
-		cleanup, done := context.WithTimeout(context.Background(), 10*time.Second)
-		defer done()
-		_ = s.yufolo.request(cleanup, a, "PATCH", "/api/sessions/"+rec.Link.SessionID, map[string]any{"status": "paused", "duration_seconds": int(math.Ceil(duration))}, nil)
-	}()
+
 	upstreamURL := s.yufolo.base + "/ws/speechmatics?session_id=" + url.QueryEscape(rec.Link.SessionID)
 	upstreamURL = strings.Replace(strings.Replace(upstreamURL, "https://", "wss://", 1), "http://", "ws://", 1)
 	a.mu.Lock()
@@ -376,6 +407,10 @@ func (s *Server) audio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer down.Close()
+	handoffCapable := r.URL.Query().Get("protocol") == "1"
+	var migrating atomic.Bool
+	var completed bool
+
 	// Heartbeats detect a vanished microphone browser without leaving a paid stream open.
 	_ = down.SetReadDeadline(time.Now().Add(75 * time.Second))
 	down.SetReadLimit(64 << 10)
@@ -387,6 +422,22 @@ func (s *Server) audio(w http.ResponseWriter, r *http.Request) {
 		defer outMu.Unlock()
 		_ = down.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		_ = down.WriteJSON(value)
+	}
+	defer func() {
+		if !completed {
+			return
+		}
+		_ = up.Close()
+		releaseOwner()
+		if migrating.Load() {
+			send(map[string]any{"type": "migrated", "version": 1})
+		} else {
+			send(map[string]string{"type": "stopped"})
+		}
+	}()
+	if handoffCapable {
+		unregister := s.deploy.NotifyHandoff(func(_ any) error { send(map[string]any{"type": "handoff", "version": 1}); return nil })
+		defer unregister()
 	}
 	var frames int
 	var stopped bool
@@ -405,20 +456,33 @@ func (s *Server) audio(w http.ResponseWriter, r *http.Request) {
 	go func() { <-ctx.Done(); _ = up.Close(); _ = down.Close() }()
 	endState := "interrupted"
 	defer func() {
-		cancel()
 		cleanup, done := context.WithTimeout(context.Background(), 10*time.Second)
 		defer done()
 		upMu.Lock()
 		offset := rec.Link.Offset + float64(bytesSent)/float64(rate*2)
 		upMu.Unlock()
 		duration = offset
-		_ = s.changeRecord(cleanup, code, func(room *Room, row *storage.Record) error {
+		cleanupErr := s.changeRecord(cleanup, code, func(room *Room, row *storage.Record) error {
 			if offset > row.Link.Offset {
 				row.Link.Offset = offset
 			}
-			room.Transcription = endState
+			if !migrating.Load() {
+				room.Transcription = endState
+			}
+			// Keep the public recording state during a successful handoff.
+			if migrating.Load() && completed {
+				room.HandoffUntil = time.Now().Add(time.Minute)
+			}
+			if migrating.Load() && !completed {
+				room.Transcription = "interrupted"
+			}
 			return nil
 		})
+		if cleanupErr != nil {
+			completed = false
+			send(map[string]string{"type": "error", "message": "录音交接保存失败，请检查连接"})
+		}
+		_ = s.yufolo.request(cleanup, a, "PATCH", "/api/sessions/"+rec.Link.SessionID, map[string]any{"status": "paused", "duration_seconds": int(math.Ceil(duration))}, nil)
 	}()
 	config := map[string]any{"message": "StartRecognition", "audio_format": map[string]any{"type": "raw", "encoding": "pcm_s16le", "sample_rate": rate}, "transcription_config": map[string]any{"language": transcriptionLanguage(rec.Link.SourceLanguage), "enable_partials": true, "max_delay": 2}}
 	if rec.Link.TargetLanguage != "" {
@@ -433,6 +497,7 @@ func (s *Server) audio(w http.ResponseWriter, r *http.Request) {
 	s.streamMu.Lock()
 	active.stop = stop
 	s.streamMu.Unlock()
+	control()
 	go func() {
 		for {
 			kind, data, e := down.ReadMessage()
@@ -444,9 +509,12 @@ func (s *Server) audio(w http.ResponseWriter, r *http.Request) {
 				var cmd struct {
 					Type string `json:"type"`
 				}
-				if json.Unmarshal(data, &cmd) != nil || cmd.Type != "stop" {
+				if json.Unmarshal(data, &cmd) != nil || (cmd.Type != "stop" && !(handoffCapable && cmd.Type == "handoff")) {
 					cancel()
 					return
+				}
+				if cmd.Type == "handoff" {
+					migrating.Store(true)
 				}
 				stop()
 				continue
@@ -474,13 +542,26 @@ func (s *Server) audio(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	go func() {
-		ticker := time.NewTicker(20 * time.Second)
+		ticker := time.NewTicker(time.Second)
+		ticks := 0
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				_, latest, readErr := s.read(ctx, code)
+				if readErr != nil {
+					cancel()
+					return
+				}
+				if latest.Link.StopRequested {
+					stop()
+				}
+				ticks++
+				if ticks%20 != 0 {
+					continue
+				}
 				if err := down.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
 					cancel()
 					return
@@ -553,6 +634,7 @@ func (s *Server) audio(w http.ResponseWriter, r *http.Request) {
 					return fail(409, "活动已结束")
 				}
 				room.Transcription = "recording"
+				room.HandoffUntil = time.Time{}
 				return nil
 			}); err != nil {
 				return
@@ -643,9 +725,13 @@ func (s *Server) audio(w http.ResponseWriter, r *http.Request) {
 			endState = "error"
 			send(map[string]string{"type": "error", "message": "Yufolo：" + event.Reason})
 			return
+		case "DeploymentHandoff":
+			if handoffCapable {
+				send(map[string]any{"type": "handoff", "version": 1})
+			}
 		case "EndOfTranscript":
 			endState = "paused"
-			send(map[string]string{"type": "stopped"})
+			completed = true
 			return
 		}
 		if err != nil {

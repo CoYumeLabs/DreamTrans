@@ -13,10 +13,10 @@ import (
 )
 
 type options struct {
-	root, action, image, proxyImage, app, database, databaseNetwork, output, mainURL, tunnelImage, registrationFile, providerKeyFile, tunnelTokenFile, origins, backupFile, routing string
-	observe, drainTimeout, handoffAfter, port, maximum                                                                                                                              int
-	edge, maintenance, pause, training                                                                                                                                              bool
-	extra                                                                                                                                                                           []string
+	root, action, image, frontendImage, frontend, proxyImage, app, database, databaseNetwork, output, mainURL, tunnelImage, registrationFile, providerKeyFile, tunnelTokenFile, origins, backupFile, routing string
+	observe, drainTimeout, handoffAfter, port, maximum                                                                                                                                                       int
+	edge, yuaction, maintenance, pause, training                                                                                                                                                             bool
+	extra                                                                                                                                                                                                    []string
 }
 
 func parse(args []string, errOut io.Writer) *options {
@@ -27,10 +27,18 @@ func parse(args []string, errOut io.Writer) *options {
 		o.port = 16003
 		args = args[1:]
 	}
+	if len(args) > 0 && args[0] == "yuaction" {
+		o.yuaction = true
+		o.root = "/root/dreamtrans/yuaction"
+		o.port = 11452
+		args = args[1:]
+	}
 	flags := flag.NewFlagSet("dreamtransctl", flag.ContinueOnError)
 	flags.SetOutput(errOut)
 	flags.StringVar(&o.root, "dir", o.root, "installation directory")
 	flags.StringVar(&o.image, "image", "", "immutable release image (upgrade defaults to verified main latest)")
+	flags.StringVar(&o.frontendImage, "frontend-image", "", "immutable YuAction frontend image (defaults to matching backend revision)")
+	flags.StringVar(&o.frontend, "frontend", "", "existing YuAction frontend container")
 	flags.StringVar(&o.proxyImage, "proxy-image", "", "immutable proxy image")
 	flags.StringVar(&o.app, "app", "", "legacy application container")
 	flags.StringVar(&o.database, "database", "", "existing database container")
@@ -92,7 +100,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	return attempt(func() {
 		o := parse(args, errOut)
 		if o.action == "help" {
-			_, _ = fmt.Fprintln(out, "DreamTrans Go 运维工具\n  dreamtransctl --dir /root/dreamtrans upgrade\n  dreamtransctl --dir DIR deploy --image REPOSITORY@sha256:DIGEST\n  dreamtransctl --dir DIR status|resume|drain|rollback|abort|sync-entry|diagnose\n  dreamtransctl --dir DIR configure-drain --handoff-after 600\n  dreamtransctl --dir DIR configure-edge [--routing on|off] [--image EDGE_DIGEST] [--tunnel-image DIGEST]\n  dreamtransctl --dir DIR snapshot --output FILE\n  dreamtransctl --dir DIR install-tools --backup-file FILE\n  dreamtransctl edge --dir DIR install|upgrade|status|drain|rollback|resume|abort|logs|diagnose|uninstall|converge|pause-releases|resume-releases|reconcile\n  首次主站转换：init --app NAME --database NAME --image DIGEST --proxy-image DIGEST --maintenance")
+			_, _ = fmt.Fprintln(out, "DreamTrans Go 运维工具\n  dreamtransctl yuaction --dir DIR init --app BACKEND --frontend FRONTEND --database DB --image DIGEST --frontend-image DIGEST --proxy-image DIGEST --maintenance\n  dreamtransctl yuaction --dir DIR upgrade|status|resume|drain|rollback|abort\n  dreamtransctl --dir /root/dreamtrans upgrade\n  dreamtransctl --dir DIR deploy --image REPOSITORY@sha256:DIGEST\n  dreamtransctl --dir DIR status|resume|drain|rollback|abort|sync-entry|diagnose\n  dreamtransctl --dir DIR configure-drain --handoff-after 600\n  dreamtransctl --dir DIR configure-edge [--routing on|off] [--image EDGE_DIGEST] [--tunnel-image DIGEST]\n  dreamtransctl --dir DIR snapshot --output FILE\n  dreamtransctl --dir DIR install-tools --backup-file FILE\n  dreamtransctl edge --dir DIR install|upgrade|status|drain|rollback|resume|abort|logs|diagnose|uninstall|converge|pause-releases|resume-releases|reconcile\n  首次主站转换：init --app NAME --database NAME --image DIGEST --proxy-image DIGEST --maintenance")
 			return
 		}
 		if strings.HasPrefix(o.action, "compose-") {
@@ -108,7 +116,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		unlock := lock(filepath.Join(c.path, "lock"))
 		defer unlock()
 		if o.action == "install-tools" {
-			need(c.state == nil || c.edge() == o.edge, "installation role mismatch")
+			need(c.state == nil || (c.edge() == o.edge && c.yuaction() == o.yuaction), "installation role mismatch")
 			if o.edge {
 				need(c.state != nil, "Edge adoption requires an existing registered installation")
 				o.backupFile = ""
@@ -122,7 +130,11 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		}
 		if o.action == "init" {
 			need(!o.edge, "use edge install")
-			c.initMain(o)
+			if o.yuaction {
+				c.initYuAction(o)
+			} else {
+				c.initMain(o)
+			}
 			return
 		}
 		if o.action == "install" && o.edge {
@@ -130,17 +142,24 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 			return
 		}
 		need(c.state != nil, "no existing installation; run initial conversion or Edge install")
-		need(c.edge() == o.edge, "installation role mismatch; use the appropriate main or edge command")
+		need(c.edge() == o.edge && c.yuaction() == o.yuaction, "installation role mismatch; use the appropriate main, edge or yuaction command")
 		c.dispatch(o)
 	})
 }
 func (c *controller) dispatch(o *options) {
 	switch o.action {
 	case "deploy", "upgrade":
+		if c.yuaction() {
+			c.deployYuAction(o)
+			return
+		}
 		if c.edge() && o.image == "" {
 			c.converge(o)
 		} else {
 			c.deploy(o)
+			if o.action == "upgrade" && !c.edge() {
+				c.upgradeYuActionCompanion(o)
+			}
 		}
 	case "resume":
 		c.resume(o)
@@ -159,6 +178,9 @@ func (c *controller) dispatch(o *options) {
 		}
 	case "rollback":
 		c.rollback()
+		if c.yuaction() {
+			c.finishRelease(o)
+		}
 	case "abort":
 		c.abort()
 	case "sync-entry":

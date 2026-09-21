@@ -32,10 +32,22 @@ YuAction 默认端口仍为 `11452`，自定义 `APP_PORT`、`APP_BIND`、域名
 
 ## 此次合仓不改变运行升级协议
 
-`dreamtransctl upgrade` 当前只升级 DreamTrans。YuAction 安装器仍原地重建其容器；在没有活动录音的维护时段更新，更新后主持人重新登录。代码合仓不等于两个服务已经支持联合蓝绿。
+采用蓝绿后，`dreamtransctl upgrade` 会继续升级安装目录下的 `yuaction`，两者固定到同一提交，仍保留独立端口。YuAction 自身使用同一个 Go 运维工具的 `yuaction` 子命令；固定 Nginx 入口只 reload 路由，不重建正在承载 WebSocket 的入口。登录令牌以原创建密钥派生的 AES-GCM 密钥加密保存到共享数据库，刷新跨实例串行执行。录音与后台任务用数据库锁确定归属，排空结束后才停止旧容器。
 
-YuAction 尚未实现区域 Edge 接入或 `DeploymentHandoff` 协作迁移。主站启用区域 Edge 调度后不再接受旧 `/ws/speechmatics` 新连接，现有 YuAction 不能在这种配置下启动录音。需后续统一转录接入；本次合仓没有声称修复该功能兼容缺口。
+浏览器收到交接请求后先验证接续接口，在原麦克风继续采音的同时缓存新音频；旧实例等待最终字幕保存、上游流结束并释放录音锁后确认交接。新实例接续同一活动和 Yufolo 会话，再发送缓存。回滚使用相同交接流程，不恢复旧数据库。缓存上限为 60 秒 PCM；异常断网或上游无法完成保存会明确报错，不将不确定音频静默重放。
+
+首次从旧 Compose 版本转换需要维护窗口：先结束旧版页面录音，运行原安装命令并添加 `--adopt-bluegreen`，然后打开新版页面登录。旧版内存登录态和已经加载的浏览器代码无法在服务端升级时自动改写；安装器不会把这种首次转换称为无感迁移。之后的版本升级无需刷新页面、重新授权麦克风或重新登录。
+
+```bash
+/root/dreamtrans/dreamtransctl --dir /root/dreamtrans upgrade
+/root/dreamtrans/yuaction/dreamtransctl yuaction --dir /root/dreamtrans/yuaction status
+/root/dreamtrans/yuaction/dreamtransctl yuaction --dir /root/dreamtrans/yuaction rollback
+```
+
+候选失败用 `abort` 保留当前服务，发布被中断用 `resume`。有 systemd 时安装器配置自动排空；其他环境前台等待后保留未完成任务的旧实例，使用 `drain` 继续检查，始终不强制切断录音。
+
+YuAction 目前通过主站 `/ws/speechmatics` 转录，并转发主站的 `DeploymentHandoff` 请求。区域 Edge 接入仍是既有兼容性限制：启用区域 Edge 调度后，主站不接受此旧接口的新连接。本次蓝绿验证覆盖 YuAction 当前的主站转录链路，不将区域 Edge 支持列为已实现。
 
 ## 后续维护
 
-新功能与修复只向 DreamTrans 仓库提交。旧仓库停更/归档需在统一发行验证后单独处理。保留独立入口与现场权限；共享账号、转录和知识库实现，以及联合发布的状态持久化与排空，作为后续明确变更推进。
+新功能与修复只向 DreamTrans 仓库提交。旧仓库停更/归档需在统一发行验证后单独处理。保留独立入口与现场权限；共享转录显示模型、登录持久化、录音交接和运维协议，保留各自的现场权限边界。

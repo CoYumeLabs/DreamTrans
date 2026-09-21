@@ -1,0 +1,12 @@
+{
+  "protocol": 1,
+  "state_epoch": 1,
+  "component": "yuaction",
+  "recording_handoff": 1,
+  "minimum_free_memory_mb": 128,
+  "expand_migrations": [
+    "001_yufolo.sql",
+    "002_assistant.sql",
+    "003_coordination.sql"
+  ]
+}

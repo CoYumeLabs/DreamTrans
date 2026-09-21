@@ -80,7 +80,7 @@ def main():
         assert after['code'] == code and after['revision'] == before['revision']
         request('/api/rooms/' + code + '/host', token=created['hostKey'])
         sql = "SELECT value FROM public.parent_marker; SELECT count(*) FROM yuaction.rooms; SELECT count(*) FROM yuaction.yuaction_schema_migrations; SELECT to_regclass('public.rooms') IS NULL;"
-        assert docker('exec', database, 'psql', '-XAt', '-U', 'fixture', '-d', 'fixture', '-c', sql).splitlines() == ['42', '1', '2', 't']
+        assert docker('exec', database, 'psql', '-XAt', '-U', 'fixture', '-d', 'fixture', '-c', sql).splitlines() == ['42', '1', '3', 't']
         print('PASS: independent HTTP port, real PostgreSQL migrations, room/host recovery after recreation, parent schema preserved.')
     except Exception:
         for name in containers:

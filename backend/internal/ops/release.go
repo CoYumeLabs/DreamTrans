@@ -60,6 +60,10 @@ func (c *controller) migrate(bundle string, contract object) {
 	c.persist()
 }
 func (c *controller) writeRoute(color string) {
+	if c.yuaction() {
+		c.writeYuActionRoute(color)
+		return
+	}
 	need(color == "blue" || color == "green", "invalid route color")
 	config := `worker_processes auto;
 error_log /dev/stderr warn;
@@ -106,7 +110,7 @@ func hasMount(info object, destination, source string) bool {
 	return false
 }
 func (c *controller) syncEntry() {
-	if c.edge() {
+	if c.edge() || c.yuaction() {
 		return
 	}
 	c.assertDatabase()
@@ -203,6 +207,10 @@ func nullable(s string) any {
 	return s
 }
 func (c *controller) startColor(color, image string, contract object) {
+	if c.yuaction() {
+		c.startYuActionColor(color, image, contract)
+		return
+	}
 	if c.edge() {
 		c.startEdgeColor(color, image, contract)
 		return
@@ -247,6 +255,13 @@ func (c *controller) startColor(color, image string, contract object) {
 }
 func (c *controller) smoke(color string) {
 	c.waitReady(color)
+	if c.yuaction() {
+		c.control(color, "canary")
+		defer c.control(color, "standby")
+		body := c.docker("exec", c.name(color), "wget", "-qO-", "http://127.0.0.1:18083/api/config")
+		need(strings.Contains(body, "yufoloConnected"), "YuAction smoke check failed")
+		return
+	}
 	if c.edge() {
 		return
 	}
@@ -447,6 +462,9 @@ func (c *controller) drain(seconds int) {
 	release := obj(obj(c.state["colors"])[old])
 	if !yes(obj(c.inspect("container", c.name(old))["State"])["Running"]) {
 		need(!c.edge() || yes(release["empty_spool"]), "stopped Edge journal has not been acknowledged")
+		if c.yuaction() && c.containerExists(old+"-frontend") {
+			c.docker("stop", "--timeout", "-1", c.name(old+"-frontend"))
+		}
 		c.state["phase"] = "ready"
 		c.persist()
 		return
@@ -461,10 +479,23 @@ func (c *controller) drain(seconds int) {
 				c.persist()
 			}
 			c.docker("stop", "--timeout", "-1", c.name(old))
+			if c.yuaction() {
+				c.docker("stop", "--timeout", "-1", c.name(old+"-frontend"))
+			}
 			c.state["phase"] = "ready"
 			c.persist()
 			c.progress("8/8", "发布完成；旧镜像保留用于兼容回切")
 			return
+		}
+		if c.yuaction() {
+			// Retry offers for streams admitted just before cutover and for a
+			// client whose earlier preflight failed. Never force-close either.
+			_ = attempt(func() {
+				active := str(c.state["active"])
+				c.probe(active)
+				need(c.routeColor() == active, "YuAction replacement route not confirmed")
+				c.control(old, "handoff")
+			})
 		}
 		if !time.Now().Before(until) {
 			c.state["phase"] = "draining"
@@ -487,6 +518,9 @@ func (c *controller) rollback() {
 	contractOK(obj(obj(colors[old])["contract"]), obj(obj(colors[str(c.state["active"])])["contract"]))
 	if !yes(obj(c.inspect("container", c.name(old))["State"])["Running"]) {
 		c.docker("start", c.name(old))
+	}
+	if c.yuaction() {
+		c.ensureYuActionFrontend(old)
 	}
 	c.waitReady(old)
 	c.switchColor(old)
@@ -528,6 +562,9 @@ func (c *controller) abort() {
 	if running {
 		c.docker("stop", "--timeout", "-1", c.name(target))
 	}
+	if c.yuaction() && c.containerExists(target+"-frontend") {
+		c.docker("stop", "--timeout", "-1", c.name(target+"-frontend"))
+	}
 	if str(c.state["previous"]) == target {
 		c.state["previous"] = nil
 	}
@@ -558,6 +595,10 @@ func (c *controller) resume(o *options) {
 	}
 }
 func (c *controller) recoverCandidate() {
+	if c.yuaction() {
+		c.recoverYuActionCandidate()
+		return
+	}
 	color := str(c.state["target"])
 	need(color != str(c.state["active"]) && (color == "blue" || color == "green"), "invalid candidate identity")
 	release := obj(obj(c.state["colors"])[color])
@@ -594,6 +635,9 @@ func (c *controller) status() object {
 	colors := object{}
 	for color, v := range obj(c.state["colors"]) {
 		info := object{"image": obj(v)["image"]}
+		if c.yuaction() {
+			info["frontend_image"] = obj(v)["frontend_image"]
+		}
 		if attempt(func() {
 			for k, v := range c.control(color, "status") {
 				info[k] = v

@@ -19,26 +19,42 @@ export function useRoom(code: string) {
       .catch((e) => {
         if (active) setError(e.message);
       });
-    const events = new EventSource(`/api/rooms/${code}/events`);
-    events.addEventListener("room", (event) => {
-      try {
-        accept(JSON.parse((event as MessageEvent).data));
-        setError("");
-        setConnection("live");
-      } catch {
-        setError("无法读取实时数据，请刷新页面");
-      }
-    });
-    events.onerror = () => {
-      if (active) setConnection("reconnecting");
+    let events: EventSource | undefined;
+    const connect = () => {
+      if (!active) return;
+      const previous = events;
+      const next = new EventSource(`/api/rooms/${code}/events`);
+      events = next;
+      previous?.close();
+      next.addEventListener("room", (event) => {
+        if (events !== next || !active) return;
+        try {
+          accept(JSON.parse((event as MessageEvent).data));
+          setError("");
+          setConnection("live");
+        } catch {
+          setError("无法读取实时数据，请刷新页面");
+        }
+      });
+      next.addEventListener("handoff", (event) => {
+        if (events === next && active && (event as MessageEvent).data === "1") {
+          // The route has already switched. Reconnect immediately while keeping
+          // the last snapshot and live indicator; genuine errors still surface.
+          connect();
+        }
+      });
+      next.onerror = () => {
+        if (active && events === next) setConnection("reconnecting");
+      };
+      next.onopen = () => {
+        if (active && events === next) setConnection("live");
+      };
     };
-    events.onopen = () => {
-      if (active) setConnection("live");
-    };
+    connect();
     return () => {
       active = false;
       controller.abort();
-      events.close();
+      events?.close();
     };
   }, [code]);
   function accept(next: Room) {
