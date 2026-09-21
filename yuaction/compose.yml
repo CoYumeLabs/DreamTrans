@@ -1,0 +1,49 @@
+name: yuaction
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: yuaction
+      POSTGRES_DB: yuaction
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - yuaction_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U yuaction -d yuaction"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    restart: unless-stopped
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgres://yuaction:${POSTGRES_PASSWORD}@db:5432/yuaction?sslmode=disable
+      LISTEN_ADDR: 0.0.0.0:18083
+      YUACTION_CREATOR_KEY: ${YUACTION_CREATOR_KEY:?Set YUACTION_CREATOR_KEY in .env}
+      YUFOLO_INGEST_KEY: ${YUFOLO_INGEST_KEY:-}
+      YUFOLO_URL: ${YUFOLO_URL:-}
+      YUACTION_DEMO: ${YUACTION_DEMO:-false}
+      TRUST_PROXY: "true"
+      # Used only without YUFOLO_URL. Connected deployments use Yufolo APIs.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-${OPENAI_API_KEYs:-}}
+      OPENAI_API_BASE: ${OPENAI_API_BASE:-https://api.openai.com/v1}
+      OPENAI_API_URL: ${OPENAI_API_URL:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      OPENAI_EMBEDDING_API_KEY: ${OPENAI_EMBEDDING_API_KEY:-}
+      OPENAI_EMBEDDING_API_URL: ${OPENAI_EMBEDDING_API_URL:-}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      GENERIC_SYSTEM_PROMPT: ${GENERIC_SYSTEM_PROMPT:-}
+      KB_SYSTEM_PROMPT: ${KB_SYSTEM_PROMPT:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+  frontend:
+    build: ./frontend
+    ports:
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-11452}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+volumes:
+  yuaction_postgres:

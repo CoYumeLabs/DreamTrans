@@ -1,5 +1,8 @@
 # CI/CD 工作流说明
 
+> 主站与 YuAction 统一由 `ci.yml` 验证，`docker-build.yml` 在全部检查通过后发布四个组件镜像。YuAction 保持独立端口；当前流程见 [合仓说明](../../docs/deployment/yuaction-monorepo.md)。
+
+
 ## 概述
 
 本项目使用 GitHub Actions 实现完整的 CI/CD 流程：

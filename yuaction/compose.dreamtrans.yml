@@ -1,0 +1,49 @@
+name: yuaction
+x-database-environment: &database-environment
+  PGHOST: ${DREAMTRANS_DB_HOST:?Use the installer to discover DreamTrans}
+  PGPORT: "5432"
+  PGDATABASE: ${POSTGRES_DB:-dreamtrans}
+  PGUSER: ${POSTGRES_USER:-dreamtrans}
+  PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in DreamTrans .env}
+services:
+  backend:
+    image: ${IMAGE_PREFIX:-ghcr.io/coyumelabs/dreamtrans-yuaction}-backend:${IMAGE_TAG:?Set YuAction IMAGE_TAG}
+    environment:
+      <<: *database-environment
+      # pgx reads PG* defaults. Avoid embedding passwords in a connection URL.
+      DATABASE_URL: "sslmode=disable search_path=yuaction"
+      LISTEN_ADDR: 0.0.0.0:18083
+      YUACTION_CREATOR_KEY: ${YUACTION_CREATOR_KEY:?Set YUACTION_CREATOR_KEY}
+      YUFOLO_INGEST_KEY: ${YUFOLO_INGEST_KEY:-}
+      YUFOLO_URL: ${YUFOLO_URL:-}
+      YUACTION_DEMO: ${YUACTION_DEMO:-false}
+      TRUST_PROXY: "true"
+      # Used only without YUFOLO_URL. Connected deployments use Yufolo APIs.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-${OPENAI_API_KEYs:-}}
+      OPENAI_API_BASE: ${OPENAI_API_BASE:-https://api.openai.com/v1}
+      OPENAI_API_URL: ${OPENAI_API_URL:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      OPENAI_EMBEDDING_API_KEY: ${OPENAI_EMBEDDING_API_KEY:-}
+      OPENAI_EMBEDDING_API_URL: ${OPENAI_EMBEDDING_API_URL:-}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      GENERIC_SYSTEM_PROMPT: ${GENERIC_SYSTEM_PROMPT:-}
+      KB_SYSTEM_PROMPT: ${KB_SYSTEM_PROMPT:-}
+    networks: [default, dreamtrans]
+    restart: unless-stopped
+  frontend:
+    image: ${IMAGE_PREFIX:-ghcr.io/coyumelabs/dreamtrans-yuaction}-frontend:${IMAGE_TAG:?Set YuAction IMAGE_TAG}
+    ports:
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-11452}:80"
+    depends_on: [backend]
+    restart: unless-stopped
+  database-tools:
+    image: postgres:16-alpine
+    profiles: [tools]
+    environment: *database-environment
+    networks: [dreamtrans]
+    # Only invoked by the installer for schema setup and schema-only backups.
+    entrypoint: []
+networks:
+  dreamtrans:
+    external: true
+    name: ${DREAMTRANS_NETWORK:?Use the installer to discover DreamTrans}
