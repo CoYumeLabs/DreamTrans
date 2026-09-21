@@ -118,7 +118,7 @@ func (s *Service) SetNode(ctx context.Context, actor, id, mode string) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	res, err := tx.ExecContext(ctx, `UPDATE edge_nodes SET mode=$2, identity_hash=CASE WHEN $2='revoked' THEN NULL ELSE identity_hash END,registration_hash=CASE WHEN $2='revoked' THEN NULL ELSE registration_hash END WHERE id=$1`, id, mode)
+	res, err := tx.ExecContext(ctx, `UPDATE edge_nodes SET mode=$2, identity_hash=CASE WHEN $2='revoked' THEN NULL ELSE identity_hash END,registration_hash=CASE WHEN $2='revoked' THEN NULL ELSE registration_hash END WHERE id=$1 AND (mode<>'revoked' OR $2='revoked')`, id, mode)
 	if err != nil {
 		return err
 	}
@@ -257,9 +257,12 @@ func (s *Service) reserve(ctx context.Context, tx *sql.Tx, v *session) error {
 }
 
 // Authorize serializes user concurrency, node capacity and the budget debit before returning a grant.
-//
-//nolint:gocyclo // Keep the authorization transaction in one auditable state transition.
 func (s *Service) Authorize(ctx context.Context, user, tenant string, req AuthorizeRequest) (edgeprotocol.Authorization, error) {
+	return s.authorize(ctx, user, tenant, req, true)
+}
+
+//nolint:gocyclo // Keep admission, concurrency and budget checks in one transaction.
+func (s *Service) authorize(ctx context.Context, user, tenant string, req AuthorizeRequest, allowNew bool) (edgeprotocol.Authorization, error) {
 	var empty edgeprotocol.Authorization
 	if req.Protocol == 0 {
 		req.Protocol = 1
@@ -300,6 +303,18 @@ func (s *Service) Authorize(ctx context.Context, user, tenant string, req Author
 	var owns bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sessions WHERE id=$1 AND user_id=$2 AND tenant_id=$3)`, req.SessionID, user, tenant).Scan(&owns); err != nil || !owns {
 		return empty, ErrUnauthorized
+	}
+	if !allowNew {
+		var existing bool
+		// Account locking serializes close/settlement and authorization. A
+		// recently finalized handoff can recover without admitting new sessions.
+		err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM edge_sessions WHERE id=$1 AND user_id=$2 AND tenant_id=$3 AND (status<>'closed' OR updated_at>now()-interval '2 minutes'))`, req.SessionID, user, tenant).Scan(&existing)
+		if err != nil {
+			return empty, err
+		}
+		if !existing {
+			return empty, ErrUnavailable
+		}
 	}
 	old, oldErr := scanSession(tx.QueryRowContext(ctx, `SELECT `+sessionColumns+` FROM edge_sessions WHERE id=$1 FOR UPDATE`, req.SessionID))
 	generation := int64(1)

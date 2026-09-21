@@ -212,6 +212,7 @@ func (c *controller) installEdge(o *options) {
 	c.ensureEntryNetwork()
 	c.finishEdgeInstall(o)
 	c.installTools(o.backupFile)
+	c.configureDrain(600)
 }
 func (c *controller) finishEdgeInstall(o *options) {
 	c.initialColor(str(c.state["initial_image"]), obj(c.state["initial_contract"]))

@@ -1,5 +1,6 @@
 {
   "protocol": 1,
+  "edge_configuration": 1,
   "state_epoch": 1,
   "edge_protocol_min": 1,
   "edge_protocol_max": 2,

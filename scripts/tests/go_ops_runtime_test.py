@@ -156,6 +156,40 @@ def main():
             assert run('docker', 'exec', prefix + '-blue', 'cat', '/app/data/marker') == 'retained'
             print('Go candidate pause/resume, switch/drain and rollback preserve new writes', flush=True)
 
+            # Same-image configuration changes publish a new color. Repeating
+            # the same configuration is a no-op; rollback restores both config
+            # and route, without restoring a database snapshot.
+            original_env = state()['application_env'].copy()
+            # Released adjacent-protocol Edge fixture: the new main/controller
+            # must also provision an already published Go Edge without a CF key.
+            edge_fixture = ('ghcr.io/coyumelabs/dreamtrans@sha256:'
+                            'e649ba7764da719127155e351726aee914275165303ec1d34ca091015080b2a4')
+            cli('configure-edge', '--image', edge_fixture, '--proxy-image', proxy,
+                '--main', 'https://main.example.test', '--observe', '0')
+            assert state()['active'] == 'green'
+            identity = state()['application_env']['EDGE_SIGNING_SEED']
+            assert len(identity) == 43
+            assert not state()['application_env'].get('EDGE_CLOUDFLARE_API_TOKEN')
+            access = json.loads(run('docker', 'exec', prefix + '-green', 'wget', '-qO-',
+                                    'http://127.0.0.1:8080/api/system/access'))
+            assert access['edge_enabled'] is False and access['edge_control_enabled'] is True
+            started = inspect(prefix + '-green')['State']['StartedAt']
+            cli('configure-edge', '--image', edge_fixture, '--proxy-image', proxy,
+                '--main', 'https://main.example.test', '--observe', '0')
+            assert inspect(prefix + '-green')['State']['StartedAt'] == started
+            assert state()['application_env']['EDGE_SIGNING_SEED'] == identity
+            failed = subprocess.run([binary, '--dir', directory, 'configure-edge',
+                                     '--routing', 'on', '--observe', '0'], capture_output=True)
+            assert failed.returncode != 0
+            assert state()['application_env']['EDGE_ROUTING_ENABLED'] == 'false'
+            cli('rollback')
+            cli('drain-tick')
+            assert state()['active'] == 'blue' and state()['phase'] == 'ready'
+            assert state()['application_env'] == original_env
+            assert sql('SELECT count(*) FROM ops_marker') == '2'
+            assert (root / '.env').read_text() == env_sentinel
+            print('Same-image configuration, idempotence and configuration rollback passed', flush=True)
+
             # Unknown image fails before taking traffic or touching data.
             failed = subprocess.run([binary, '--dir', directory, 'deploy', '--image', 'sha256:' + 'f'*64], capture_output=True)
             assert failed.returncode != 0 and state()['active'] == 'blue'

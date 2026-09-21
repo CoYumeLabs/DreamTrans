@@ -8,9 +8,14 @@ export interface EdgeNode {
   metrics: { provider_latency_ms?: number; load?: number; queue_bytes?: number; oldest_event_seconds?: number }
 }
 
-export async function authorizeEdge(sessionId: string, sampleRate: number): Promise<EdgeAuthorization | null> {
-  const access = await authFetch<{ edge_enabled?: boolean }>('/api/system/access')
-  if (!access.edge_enabled) return null
+export async function authorizeEdge(sessionId: string, sampleRate: number, continuingEdge = false): Promise<EdgeAuthorization | null> {
+  const access = await authFetch<{ edge_enabled?: boolean; edge_control_enabled?: boolean }>('/api/system/access')
+  let preview = localStorage.getItem('dreamtrans.edge.preview') === 'true' && !!access.edge_control_enabled
+  if (!access.edge_enabled && preview) {
+    const profile = await authFetch<{ user: { role: string } }>('/api/user/profile')
+    preview = profile.user.role === 'super_admin'
+  }
+  if (!access.edge_enabled && !preview && !continuingEdge) return null
   const nodes = await authFetch<EdgeNode[]>('/api/edges')
   const latencies: Record<string, number> = {}
   await Promise.allSettled(nodes.slice(0, 12).map(async node => {
@@ -22,7 +27,7 @@ export async function authorizeEdge(sessionId: string, sampleRate: number): Prom
   }))
   return authFetch<EdgeAuthorization>('/api/edges/authorize', {
     method: 'POST',
-    body: JSON.stringify({ session_id: sessionId, protocol: 2, sample_rate: sampleRate,
+    body: JSON.stringify({ preview, session_id: sessionId, protocol: 2, sample_rate: sampleRate,
       region: localStorage.getItem('dreamtrans.edge.region') || 'auto', latencies }),
   })
 }

@@ -8,8 +8,8 @@ export function EdgeRegionSelector() {
   useEffect(() => {
     if (!getAccessToken()) return
     let active = true
-    void authFetch<{ edge_enabled?: boolean }>('/api/system/access').then(async access => {
-      if (!access.edge_enabled) return
+    void authFetch<{ edge_enabled?: boolean; edge_control_enabled?: boolean }>('/api/system/access').then(async access => {
+      if (!access.edge_enabled && !(access.edge_control_enabled && localStorage.getItem('dreamtrans.edge.preview') === 'true')) return
       const nodes = await authFetch<EdgeNode[]>('/api/edges')
       if (active) setRegions([...new Set(nodes.map(node => node.region))])
     }).catch(() => {})

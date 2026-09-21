@@ -5,22 +5,34 @@ test.use({
   launchOptions: { args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] },
 })
 
-test('deployment handoff retains the recording and transcript while audio moves to a new connection', async ({ page }) => {
-  const user = { id: 'handoff-user', tenant_id: 'tenant', email: 'test@example.test', role: 'user', is_active: true, email_verified: true }
+for (const regional of [false, true]) {
+test(regional ? 'Edge preview retains its transport through disabled routing and a failed handoff authorization' : 'deployment handoff retains the recording and transcript while audio moves to a new connection', async ({ page }) => {
+  const user = { id: 'handoff-user', tenant_id: 'tenant', email: 'test@example.test', role: regional ? 'super_admin' : 'user', is_active: true, email_verified: true }
   const token = `${Buffer.from('{"alg":"none"}').toString('base64url')}.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600, sub: user.id })).toString('base64url')}.test`
-  await page.addInitScript(({ user, token }) => {
+  await page.addInitScript(({ user, token, regional }) => {
+    if (regional) localStorage.setItem('dreamtrans.edge.preview', 'true')
     localStorage.setItem('dt_access_token', token)
     localStorage.setItem('dt_user', JSON.stringify(user))
     localStorage.setItem('dt_onboarding_v1_user%3Ahandoff-user', JSON.stringify({ wizardCompletedAt: 1, tourCompletedAt: 1 }))
     localStorage.setItem('dt_unified_settings_v1', JSON.stringify({ translationEnabled: false, keepLocalAudio: true, audioSource: 'microphone' }))
-  }, { user, token })
-  let session = '', created = 0
+  }, { user, token, regional })
+  let session = '', created = 0, grants = 0, authorizationAttempts = 0
+  const previews: boolean[] = []
   const sockets: WebSocketRoute[] = [], sessionIds: string[] = [], audio: number[] = []
   await page.route(/^https?:\/\/[^/]+\/api\//, async route => {
     const request = route.request(), path = new URL(request.url()).pathname
     let body: unknown = {}
-    if (path === '/api/system/access') body = { authentication_enabled: true, anonymous_api_enabled: false, rag_enabled: true }
+    if (path === '/api/system/access') body = { authentication_enabled: true, anonymous_api_enabled: false, rag_enabled: true, edge_enabled: false, edge_control_enabled: regional }
     if (path === '/api/user/profile') body = { user }
+    if (path === '/api/edges') body = [{ id: 'edge', region: 'test', endpoint: 'https://edge.example.test' }]
+    if (path === '/api/edges/authorize') {
+      const data = request.postDataJSON(); expect(data.session_id).toBe(session); previews.push(data.preview)
+      if (++authorizationAttempts === 2) { await route.fulfill({ status: 503, json: { error: 'temporary failure' } }); return }
+      grants++
+      body = { endpoint: 'https://edge.example.test', token: 'short-grant-' + grants,
+        grant: { protocol: 2, session_id: session, generation: grants, previous_generation: grants - 1,
+          previous_audio_sequence: 0, durable_audio_sequence: 0, sample_rate: data.sample_rate } }
+    }
     if (path === '/api/announcements') body = { announcements: [] }
     if (path === '/api/user/balance') body = { available_usd: 10, wallet_usd: 10, grant_usd: 0, plan_code: 'free' }
     if (path === '/api/speechmatics/preflight') body = { ready: true }
@@ -36,10 +48,12 @@ test('deployment handoff retains the recording and transcript while audio moves 
     if (path === '/api/ai/projects') body = { projects: [] }
     await route.fulfill({ json: body })
   })
-  await page.routeWebSocket(/\/ws\/speechmatics/, socket => {
+  await page.route('https://edge.example.test/probe', route => route.fulfill({ status: 200, body: 'ok', headers: { 'access-control-allow-origin': '*' } }))
+  await page.routeWebSocket(/\/ws\/(speechmatics|edge)/, socket => {
+    if (regional) expect(new URL(socket.url()).pathname).toBe('/ws/edge')
     const index = sockets.length
     sockets.push(socket); audio.push(0)
-    sessionIds.push(new URL(socket.url()).searchParams.get('session_id') ?? '')
+    sessionIds.push(regional ? session : new URL(socket.url()).searchParams.get('session_id') ?? '')
     socket.onMessage(message => {
       if (typeof message !== 'string') { audio[index] += message.length; return }
       const data = JSON.parse(message)
@@ -55,13 +69,17 @@ test('deployment handoff retains the recording and transcript while audio moves 
   await expect.poll(() => audio[0] ?? 0).toBeGreaterThan(0)
   sockets[0].send(JSON.stringify({ message: 'AddTranscript', metadata: { start_time: 0, end_time: 1, transcript: 'Retained through upgrade.' }, results: [{ alternatives: [{ content: 'Retained through upgrade.', speaker: 'S1' }] }] }))
   await expect(page.getByText('Retained through upgrade.', { exact: true }).first()).toBeVisible()
+  if (regional) await page.evaluate(() => localStorage.setItem('dreamtrans.edge.preview', 'false'))
   sockets[0].send(JSON.stringify({ message: 'DeploymentHandoff', version: 1 }))
   await expect.poll(() => sockets.length).toBe(2)
   await expect.poll(() => audio[1]).toBeGreaterThan(0)
   expect(created).toBe(1)
+  if (regional) expect(previews).toEqual([true, false, false])
   expect(sessionIds).toEqual([session, session])
   await expect(page.getByRole('button', { name: '暂停录音', exact: true })).toBeVisible()
   await expect(page.getByText('Retained through upgrade.', { exact: true }).first()).toBeVisible()
   await page.getByRole('button', { name: '停止录音', exact: true }).click()
   await expect(page.getByRole('button', { name: '开始新会话', exact: true })).toBeVisible()
 })
+
+}

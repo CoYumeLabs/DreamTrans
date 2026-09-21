@@ -866,9 +866,13 @@ export function useUnifiedWorkspace({
     socketFactory: (url, protocols) => edgeAuthorizationRef.current ? new RegionalEdgeSocket(edgeAuthorizationRef.current, edgeBuffer) : new WebSocket(url, [...protocols]) as unknown as SpeechmaticsSocket,
     tokenProvider: async (sampleRate) => {
       const token = getAccessToken()
-      edgeAuthorizationRef.current = null
-      if (token && currentSessionRef.current) {
-        edgeAuthorizationRef.current = await authorizeEdge(currentSessionRef.current, sampleRate)
+      const sessionId = currentSessionRef.current
+      if (edgeAuthorizationRef.current?.grant.session_id !== sessionId) edgeAuthorizationRef.current = null
+      if (token && sessionId) {
+        // Retain the transport through failed retries and changes to routing.
+        // Only successful authorization replaces the current grant.
+        const continuingEdge = edgeAuthorizationRef.current?.grant.session_id === sessionId
+        edgeAuthorizationRef.current = await authorizeEdge(sessionId, sampleRate, continuingEdge)
         if (edgeAuthorizationRef.current) return edgeAuthorizationRef.current.token
       }
       if (sessionAuthRequiredRef.current && !token) {
