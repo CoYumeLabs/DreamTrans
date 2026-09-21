@@ -6,6 +6,7 @@ YuAction 源代码位于 `yuaction/`，导入源为原仓库提交 `5561118`。�
 
 - DreamTrans：根目录 `backend/`、`frontend/`；YuAction：`yuaction/backend/`、`yuaction/frontend/`。两套 Go / npm 模块和运行进程保留。
 - 根目录 `.github/workflows/ci.yml` 是两产品的统一检查入口，含 YuAction 完整 Go race、数据库迁移、安装器生命周期、浏览器和镜像运行时验证。
+- 导入时升级 YuAction 的 pgx、Excelize 和 Go 扩展库到安全修复版本；本地后端需要 Go 1.26+，CI／Docker 固定为 1.26.5。
 - 所有检查通过后才调用 `docker-build.yml`，发布同一 Git 提交的主站、Edge、YuAction 后端和前端。发行清单 `release-images.json` 记录四个固定 digest。
 - YuAction 镜像为 `ghcr.io/coyumelabs/dreamtrans-yuaction-backend` 和 `ghcr.io/coyumelabs/dreamtrans-yuaction-frontend`；`sha-<完整提交>` 对应本仓库源代码。旧仓库镜像不覆盖。
 - 四个镜像全部构建成功才提升 main 的 latest 标签。跨镜像标签不是原子事务；安装器先解析后端提交，再按同一 SHA 拉取前后端，不依赖两个 latest 同时变化。需要完全固定版本时使用清单中的 digest。

@@ -61,7 +61,7 @@ YuAction 使用独立的 `yuaction` schema，自己的端口、密钥和镜像�
 
 从 DreamTrans 仓库根目录先执行 `cd yuaction`，再运行下列命令。
 
-需要 Go 1.22+、Node.js 22.12+（推荐 Node 24）。前后端分别开一个终端。
+需要 Go 1.26+、Node.js 22.12+；验证与镜像构建固定为 Go 1.26.5、Node 24.18.0。前后端分别开一个终端。
 
 ```bash
 cd backend
