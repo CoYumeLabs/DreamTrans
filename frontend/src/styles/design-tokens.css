@@ -101,4 +101,19 @@
   /* Page measure. */
   --yf-gutter: clamp(16px, 4vw, 40px);
   --yf-max: 1140px;
+
+  /* Buttons. Every surface keeps its own heights (the landing page, the
+     workspace and the console are different densities) but a button reads
+     the same everywhere: one corner, one weight, and the brand indigo for the
+     primary action. The landing page used near-black and the console turned
+     green on hover; both now follow these. */
+  --yf-btn-radius: var(--yf-r-sm);
+  --yf-btn-weight: 650;
+  --yf-btn-primary: var(--yf-accent);
+  --yf-btn-primary-hover: var(--yf-accent-hover);
+
+  /* Display headline, shared by the landing hero and the sign-in page. */
+  --yf-display: clamp(2.05rem, 3.9vw, 3.05rem);
+  --yf-display-weight: 700;
+  --yf-display-leading: 1.16;
 }

@@ -214,10 +214,10 @@ body:has(.lp),
   min-height: 36px;
   padding: 0 14px;
   border: 1px solid transparent;
-  border-radius: var(--lp-r-sm);
+  border-radius: var(--yf-btn-radius);
   font: inherit;
   font-size: 0.875rem;
-  font-weight: 550;
+  font-weight: var(--yf-btn-weight);
   line-height: 1;
   white-space: nowrap;
   cursor: pointer;
@@ -232,11 +232,11 @@ body:has(.lp),
 
 .lp .lp-btn--primary {
   color: #fff;
-  background: var(--lp-ink);
+  background: var(--yf-btn-primary);
 }
 
 .lp .lp-btn--primary:hover {
-  background: #23262d;
+  background: var(--yf-btn-primary-hover);
 }
 
 .lp .lp-btn--secondary {
@@ -287,9 +287,9 @@ body:has(.lp),
 .lp-hero h1 {
   margin: 0;
   text-wrap: balance;
-  font-size: clamp(2.05rem, 3.9vw, 3.05rem);
-  font-weight: 700;
-  line-height: 1.16;
+  font-size: var(--yf-display);
+  font-weight: var(--yf-display-weight);
+  line-height: var(--yf-display-leading);
 }
 
 /* Kept as a hook for the second line; solid ink, no gradient fill. */
@@ -791,7 +791,7 @@ body:has(.lp),
   inset-inline-end: -1px;
   padding: 5px 10px;
   color: #fff;
-  background: var(--lp-ink);
+  background: var(--yf-accent);
   border-start-end-radius: var(--lp-r);
   border-end-start-radius: var(--lp-r-sm);
   font-size: 0.7rem;
@@ -1354,7 +1354,7 @@ body:has(.lp),
   width: 32px;
   height: 32px;
   color: #fff;
-  background: var(--lp-ink);
+  background: var(--yf-accent);
   border-radius: 50%;
 }
 

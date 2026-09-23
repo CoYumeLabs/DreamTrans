@@ -1,7 +1,6 @@
 // Small, shared outline icons keep the admin navigation visually consistent.
 export function AdminIcon({ name }: { name: string }) {
   const paths: Record<string, string> = {
-    brand: 'M5 5l7 7 7-7M12 12v7',
     overview: 'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z',
     users: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M16 3a4 4 0 0 1 0 8M22 21v-2a4 4 0 0 0-3-3.87M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0',
     'signup-risk': 'M12 3l8 3v6c0 5-8 9-8 9s-8-4-8-9V6zM8 12l3 3 5-6',

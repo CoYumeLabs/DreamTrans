@@ -38,14 +38,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .pa-brand__mark {
   width: 38px;
   height: 38px;
-  display: grid;
-  place-items: center;
   flex: 0 0 auto;
-  border-radius: var(--yf-r-lg);
-  background: var(--yf-accent-hover);
-  color: #fff;
-  font-weight: 800;
-  box-shadow: none;
+  object-fit: contain;
 }
 .pa-brand strong, .pa-brand small, td strong, td small { display: block; }
 .pa-brand small, td small { color: var(--yf-muted); margin-top: 3px; }
@@ -154,18 +148,18 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
   display: inline-flex;
   justify-content: center;
   align-items: center;
-  border-radius: var(--yf-r-sm);
+  border-radius: var(--yf-btn-radius);
   padding: 8px 13px;
   border: 1px solid var(--yf-line);
   background: #fff;
   color: var(--yf-navy);
   text-decoration: none;
-  font-weight: 600;
+  font-weight: var(--yf-btn-weight);
   transition: background .16s ease, border-color .16s ease, transform .16s ease;
 }
 .pa-button:hover:not(:disabled) { border-color: var(--yf-muted); }
-.pa-button--primary { color: #fff; background: var(--yf-accent); border-color: var(--yf-accent); }
-.pa-button--primary:hover { background: var(--yf-success); }
+.pa-button--primary { color: #fff; background: var(--yf-btn-primary); border-color: var(--yf-btn-primary); }
+.pa-button--primary:hover:not(:disabled) { background: var(--yf-btn-primary-hover); border-color: var(--yf-btn-primary-hover); }
 .pa-button--quiet { color: var(--yf-navy); background: #fff; border-color: var(--yf-line); }
 .pa-button--quiet:hover { border-color: var(--yf-line); background: var(--yf-surface-raised); }
 .pa-button--danger { color: #fff; background: var(--yf-danger); }
@@ -571,7 +565,6 @@ input:disabled, select:disabled { color: var(--yf-muted); background: var(--yf-w
 
 /* Shared admin controls and compact review layouts. */
 .pa-icon { flex-shrink: 0; }
-.pa-brand__mark .pa-icon { width: 24px; height: 24px; stroke-width: 2; }
 .pa-sidebar nav button { display: flex; align-items: center; gap: 12px; font-size: 13px; font-weight: 500; border-radius: var(--yf-r-sm); }
 .pa-sidebar nav button.is-active { font-weight: 650; }
 .pa-sidebar nav button:nth-child(3), .pa-sidebar nav button:last-child { margin-top: 14px; }

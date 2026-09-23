@@ -216,7 +216,7 @@ export function LiveDemo() {
       <div className="lp-demo__recorder" aria-hidden="true">
         <span><Icon name="sparkles" size={14} />{m.demo.ai}</span>
         <span className="lp-demo__mic"><Icon name="stop" size={16} /></span>
-        <span><Icon name="more" size={14} />{m.demo.more}</span>
+        <span><Icon name="wave" size={14} />{m.demo.insights}</span>
       </div>
     </div>
   )

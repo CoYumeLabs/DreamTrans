@@ -980,9 +980,9 @@ textarea:focus-visible {
   gap: 8px;
   background: white;
   border: 1px solid var(--dt-border);
-  border-radius: var(--yf-r);
+  border-radius: var(--yf-btn-radius);
   font-size: var(--yf-text-sm);
-  font-weight: 680;
+  font-weight: var(--yf-btn-weight);
   text-decoration: none;
   cursor: pointer;
 }
@@ -994,13 +994,13 @@ textarea:focus-visible {
 
 .dt-button--primary {
   color: white;
-  background: var(--dt-accent);
-  border-color: var(--dt-accent);
+  background: var(--yf-btn-primary);
+  border-color: var(--yf-btn-primary);
 }
 
 .dt-button--primary:hover:not(:disabled) {
-  background: var(--dt-accent-hover);
-  border-color: var(--dt-accent-hover);
+  background: var(--yf-btn-primary-hover);
+  border-color: var(--yf-btn-primary-hover);
 }
 
 .dt-button--secondary:hover:not(:disabled) {
@@ -3866,11 +3866,12 @@ textarea:focus-visible {
 .dt-auth__intro h1 {
   max-width: 650px;
   margin: 9px 0 18px;
-  color: #182238;
-  font-size: clamp(2rem, 4.8vw, 4.4rem);
-  font-weight: 720;
-  letter-spacing: -0.055em;
-  line-height: 1.08;
+  color: var(--yf-ink);
+  font-size: var(--yf-display);
+  font-weight: var(--yf-display-weight);
+  line-height: var(--yf-display-leading);
+  text-wrap: balance;
+  word-break: keep-all;
 }
 
 .dt-auth__intro > p:not(.dt-eyebrow) {

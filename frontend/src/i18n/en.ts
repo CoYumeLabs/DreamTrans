@@ -970,7 +970,7 @@ export const en: typeof zhCN = {
     modes: { bilingual: 'Bilingual', learn: 'Learn · B1', translation: 'Translation' },
     translating: 'Translating…',
     ai: 'AI',
-    more: 'More',
+    insights: 'Insights',
     speakers: { lecturer: 'Lecturer', student: 'Student' },
     aiChips: ['AI · explainer card ready: back-propagation', 'AI · summary and 2 action items ready'],
   },

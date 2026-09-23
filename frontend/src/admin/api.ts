@@ -781,7 +781,7 @@ export async function adminFetch<T>(endpoint: string, options: RequestInit = {})
       if (getStoredUser()?.id !== identity) throw new AdminAPIError('账户已切换，请刷新页面', 401)
       return adminFetch<T>(endpoint, { ...options, headers: { ...options.headers, 'X-Admin-Confirm': 'true' } })
     }
-    throw new AdminAPIError(error.error || 'Request failed', response.status)
+    throw new AdminAPIError(error.error || `请求失败（HTTP ${response.status}），请稍后重试`, response.status)
   }
 
   if (response.status === 204) return undefined as T
