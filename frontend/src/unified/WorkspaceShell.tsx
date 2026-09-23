@@ -36,13 +36,14 @@ import { InsightsPanel } from './components/InsightsPanel'
 import { AnnouncementBanner } from './components/AnnouncementBanner'
 import { OnboardingDialog } from './components/OnboardingDialog'
 import { RecorderBar, type RecorderStatus } from './components/RecorderBar'
+import { SessionSetup } from './components/SessionSetup'
 import { SettingsPanel } from './components/SettingsPanel'
 import { Sheet } from './components/Sheet'
+import { TrainingProgramSection } from './components/TrainingProgramSection'
 import { useAnnouncements } from './hooks/useAnnouncements'
 import { useOnboarding } from './hooks/useOnboarding'
 import { adminNavigationState } from './workspace/adminNavigation'
 import { isInsufficientBalanceMessage } from './workspace/billingErrors'
-import { audioSourceLabel, languageLabel } from './workspace/languageOptions'
 
 export interface WorkspaceStats {
   finalSegments: number
@@ -141,6 +142,7 @@ function workspaceTourSteps(m: Messages): TourStep[] {
   const s = m.tour.steps
   return [
     { id: 'record', selectors: ['[data-tour="record"]'], ...s.record },
+    { id: 'session-setup', selectors: ['[data-tour="session-setup"]'], ...s.sessionSetup },
     { id: 'mode-switch', selectors: ['.dt-feed-toolbar .dt-transcript-feed-mode-switch'], ...s.modeSwitch },
     { id: 'assistant', selectors: ['[data-tour="assistant"]'], ...s.assistant },
     { id: 'history', selectors: ['[data-tour="history"]', '[data-tour="history-mobile"]'], ...s.history },
@@ -225,6 +227,8 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
     onGenerateTitle,
   } = props
   const [panel, setPanel] = useState<PanelName | null>(null)
+  // The session-setup popover, anchored to the chip above the transcript.
+  const [setupOpen, setSetupOpen] = useState(false)
   const [assistantDraft, setAssistantDraft] = useState('')
   // A /pro?session=<id> deep link (e.g. from the 学习空间) waiting for history.
   const [pendingSession, setPendingSession] = useState(consumeSessionDeepLink)
@@ -382,6 +386,11 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
   ])
 
   const closePanel = useCallback(() => setPanel(null), [])
+  const openSessionSetup = useCallback(() => {
+    setPanel(null)
+    setSetupOpen(true)
+  }, [])
+  const openSettings = useCallback(() => setPanel('settings'), [])
   const { announcements, dismiss: dismissAnnouncement } = useAnnouncements(user?.id ?? null)
   const onboarding = useOnboarding({
     ownerId: user?.id ?? null,
@@ -723,8 +732,16 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
 
         <main className="dt-stage" ref={stageRef}>
           <div className="dt-feed-toolbar">
-            <div>
-              <p className="dt-eyebrow">{w.feed.eyebrow}</p>
+            <div className="dt-feed-toolbar__lead">
+              <SessionSetup
+                locked={recorderStatus !== 'idle'}
+                open={setupOpen}
+                settings={settings}
+                variant="toolbar"
+                onChange={onSettingsChange}
+                onOpenChange={setSetupOpen}
+                onOpenSettings={openSettings}
+              />
               <span className="dt-feed-toolbar__count">
                 {stats.finalSegments > 0
                   ? w.feed.segments(stats.finalSegments)
@@ -763,29 +780,16 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
                     >
                       {w.feed.start}
                     </button>
-                    <dl className="dt-feed-empty__setup" aria-label={w.feed.setupAria}>
-                      <div>
-                        <dt>{w.feed.audio}</dt>
-                        <dd>{audioSourceLabel(settings.audioSource)}</dd>
-                      </div>
-                      <div>
-                        <dt>{w.feed.language}</dt>
-                        <dd>
-                          {languageLabel(settings.sourceLanguage)}
-                          {settings.translationEnabled
-                            ? ` → ${languageLabel(settings.targetLanguage)}`
-                            : ` · ${w.feed.originalOnly}`}
-                        </dd>
-                      </div>
-                    </dl>
+                    <SessionSetup
+                      locked={recorderStatus !== 'idle'}
+                      open={setupOpen}
+                      settings={settings}
+                      variant="empty"
+                      onChange={onSettingsChange}
+                      onOpenChange={setSetupOpen}
+                      onOpenSettings={openSettings}
+                    />
                     <div className="dt-feed-empty__links">
-                      <button
-                        className="dt-button dt-button--text"
-                        onClick={() => setPanel('settings')}
-                        type="button"
-                      >
-                        {w.feed.changeSettings}
-                      </button>
                       <button
                         className="dt-button dt-button--text"
                         onClick={onboarding.openWizard}
@@ -985,14 +989,10 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
           allowUserApiKey={allowUserApiKey}
           authenticated={Boolean(user)}
           onChange={onSettingsChange}
-          onReplayOnboarding={replayOnboarding}
-          onTrainingOptInChange={props.onTrainingOptInChange}
+          onOpenSessionSetup={openSessionSetup}
           ragEnabled={ragEnabled}
           recorderStatus={recorderStatus}
           settings={settings}
-          trainingRoute={account?.route}
-          trainingOptIn={user?.training_opt_in ?? null}
-          trainingProgram={trainingProgram}
         />
       </Sheet>
 
@@ -1066,6 +1066,12 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
                 sessionId={sessionId}
                 onRefreshAccount={onRefreshAccount}
               />
+              <TrainingProgramSection
+                optIn={user.training_opt_in ?? null}
+                program={trainingProgram}
+                route={account?.route}
+                onOptInChange={props.onTrainingOptInChange}
+              />
               {adminNavigation === 'enabled' && (
                 <a className="dt-button dt-button--primary dt-button--wide" href="/pro/admin">
                   {w.account.openAdmin}
@@ -1103,6 +1109,15 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
               {w.account.loginSync}
             </button>
           )}
+          <button
+            className="dt-button dt-button--text dt-button--small dt-account-panel__help"
+            disabled={recorderStatus !== 'idle'}
+            onClick={replayOnboarding}
+            title={recorderStatus !== 'idle' ? m.settings.help.replayLocked : m.settings.help.body}
+            type="button"
+          >
+            {m.settings.help.replay}
+          </button>
         </div>
       </Sheet>
 

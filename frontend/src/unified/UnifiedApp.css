@@ -784,15 +784,17 @@ textarea:focus-visible {
 
 .dt-feed-toolbar {
   display: flex;
-  align-items: end;
+  align-items: center;
   justify-content: space-between;
   min-width: 0;
   gap: 16px;
 }
 
-.dt-feed-toolbar > div:first-child {
-  display: grid;
-  gap: 2px;
+.dt-feed-toolbar__lead {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 12px;
 }
 
 .dt-eyebrow {
@@ -806,6 +808,7 @@ textarea:focus-visible {
 }
 
 .dt-feed-toolbar__count {
+  flex: none;
   color: var(--dt-muted);
   font-size: var(--yf-text-xs);
 }
@@ -4057,10 +4060,6 @@ textarea:focus-visible {
     padding-inline-end: max(12px, env(safe-area-inset-right));
   }
 
-  .dt-feed-toolbar .dt-eyebrow {
-    display: none;
-  }
-
   .dt-recorder-shell {
     inset-block-end: max(8px, env(safe-area-inset-bottom));
     padding-inline-start: max(10px, env(safe-area-inset-left));
@@ -4249,11 +4248,25 @@ textarea:focus-visible {
   }
 
   .dt-feed-toolbar {
-    align-items: center;
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .dt-feed-toolbar__lead {
+    justify-content: space-between;
   }
 
   .dt-feed-toolbar__count {
     font-size: var(--yf-text-2xs);
+  }
+
+  .dt-feed-toolbar .dt-transcript-feed-mode-switch {
+    width: 100%;
+  }
+
+  .dt-settings__tabs button {
+    padding-inline: 4px;
   }
 
   .dt-transcript-feed-mode-switch {
@@ -4783,28 +4796,225 @@ img.dt-onboarding__mark {
   flex-wrap: wrap;
   justify-content: center;
   margin: 18px 0 0;
+  padding: 0;
   gap: 6px;
+  color: inherit;
+  background: none;
+  border: 0;
+  font: inherit;
+  cursor: pointer;
 }
 
-.dt-feed-empty__setup > div {
+.dt-feed-empty__chip {
   display: inline-flex;
   align-items: center;
+  min-height: 30px;
   padding: 5px 10px;
   gap: 6px;
+  color: var(--dt-muted);
   background: white;
   border: 1px solid var(--dt-border);
   border-radius: var(--yf-r-pill);
   font-size: var(--yf-text-xs);
+  transition: border-color 140ms ease, background 140ms ease;
 }
 
-.dt-feed-empty__setup dt {
+.dt-feed-empty .dt-feed-empty__chip strong {
+  color: var(--dt-ink);
+  font-size: var(--yf-text-xs);
+  font-weight: 650;
+}
+
+.dt-feed-empty__chevron {
   color: var(--dt-muted);
 }
 
-.dt-feed-empty__setup dd {
+.dt-feed-empty__setup:hover .dt-feed-empty__chip,
+.dt-feed-empty__setup[aria-expanded="true"] .dt-feed-empty__chip {
+  background: var(--yf-accent-wash);
+  border-color: #c9ccfb;
+}
+
+.dt-feed-empty__setup:focus-visible {
+  outline: 2px solid var(--dt-accent);
+  outline-offset: 3px;
+  border-radius: var(--yf-r);
+}
+
+/* Session setup: per-session capture and language choices, edited in place. */
+.dt-session-setup {
+  position: relative;
+  min-width: 0;
+}
+
+.dt-session-setup--empty {
+  display: flex;
+  justify-content: center;
+}
+
+.dt-session-setup__trigger {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 34px;
+  padding: 6px 10px;
+  gap: 7px;
+  color: var(--dt-ink);
+  background: white;
+  border: 1px solid var(--dt-border);
+  border-radius: var(--yf-r-pill);
+  box-shadow: var(--yf-shadow-xs);
+  font: inherit;
+  font-size: var(--yf-text-xs);
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.dt-session-setup__trigger > svg:first-child {
+  flex: none;
+  color: var(--dt-accent);
+}
+
+.dt-session-setup__trigger:hover,
+.dt-session-setup__trigger[aria-expanded="true"] {
+  background: var(--yf-accent-wash);
+  border-color: #c9ccfb;
+}
+
+.dt-session-setup__trigger:focus-visible {
+  outline: 2px solid var(--dt-accent);
+  outline-offset: 2px;
+}
+
+.dt-session-setup__summary {
+  display: inline-flex;
+  min-width: 0;
+  overflow: hidden;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.dt-session-setup__summary > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dt-session-setup__summary > span[aria-hidden="true"] {
+  color: var(--dt-subtle);
+}
+
+.dt-session-setup__chevron {
+  flex: none;
+  color: var(--dt-muted);
+}
+
+.dt-session-setup__panel {
+  position: absolute;
+  z-index: 40;
+  inset-block-start: calc(100% + 8px);
+  inset-inline-start: 0;
+  display: grid;
+  width: min(340px, calc(100vw - 32px));
+  padding: 16px;
+  gap: 14px;
+  text-align: start;
+  background: white;
+  border: 1px solid var(--dt-border);
+  border-radius: var(--yf-r-lg);
+  box-shadow: var(--yf-shadow-lg);
+  animation: dt-fade-in 120ms ease-out;
+}
+
+.dt-session-setup__panel header {
+  display: grid;
+  gap: 3px;
+}
+
+.dt-session-setup__panel header strong {
+  color: var(--dt-ink);
+  font-size: var(--yf-text-md);
+}
+
+.dt-session-setup__panel header small {
+  color: var(--dt-muted);
+  font-size: var(--yf-text-xs);
+}
+
+.dt-session-setup__hint {
+  margin: -6px 0 0;
+  color: var(--dt-muted);
+  font-size: var(--yf-text-xs);
+  line-height: 1.55;
+}
+
+.dt-session-setup__panel footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-block-start: 12px;
+  gap: 8px;
+  border-block-start: 1px solid var(--dt-border);
+}
+
+.dt-session-setup__panel footer .dt-button--text {
+  padding-inline: 0;
+}
+
+/* Settings sheet sections. */
+.dt-settings__tabs {
+  position: sticky;
+  z-index: 2;
+  inset-block-start: -19px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  box-shadow: 0 -19px 0 white;
+}
+
+.dt-settings__moved {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  gap: 10px;
+  background: var(--yf-accent-wash);
+  border: 1px solid #dfe2fd;
+  border-radius: var(--yf-r);
+}
+
+.dt-settings__moved p {
+  flex: 1 1 220px;
   margin: 0;
   color: var(--dt-ink);
+  font-size: var(--yf-text-xs);
+  line-height: 1.55;
+}
+
+.dt-settings__edge:empty {
+  display: none;
+}
+
+.dt-settings__edge label {
+  display: grid;
+  gap: 7px;
+  color: var(--dt-ink);
+  font-size: var(--yf-text-xs);
   font-weight: 650;
+}
+
+.dt-settings__edge select {
+  width: 100%;
+  min-height: 43px;
+  padding: 9px 11px;
+  color: var(--dt-ink);
+  background: white;
+  border: 1px solid #d7dde6;
+  border-radius: var(--yf-r-sm);
+  font-size: var(--yf-text-sm);
+  font-weight: 400;
+}
+
+.dt-account-panel__help {
+  justify-self: center;
 }
 
 .dt-feed-empty__links {

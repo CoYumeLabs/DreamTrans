@@ -197,12 +197,14 @@ test('a brand-new account is walked through audio, language and the interface to
   const tour = page.locator('.dt-tour__card')
   await expect(tour).toBeVisible()
   await expect(tour).toHaveAttribute('data-step', 'record')
-  await expect(tour).toContainText('第 1 / 6 步')
+  await expect(tour).toContainText('第 1 / 7 步')
   await expect(page.locator('.dt-tour__spot')).toBeVisible()
   const spot = await page.locator('.dt-tour__spot').boundingBox()
   const record = await page.locator('[data-tour="record"]').boundingBox()
   expect(spot && record && Math.abs(spot.x + spot.width / 2 - (record.x + record.width / 2)) < 2).toBe(true)
 
+  await tour.getByRole('button', { name: '下一步' }).click()
+  await expect(tour).toHaveAttribute('data-step', 'session-setup')
   await tour.getByRole('button', { name: '下一步' }).click()
   await expect(tour).toHaveAttribute('data-step', 'mode-switch')
   await page.keyboard.press('ArrowRight')
@@ -231,8 +233,8 @@ test('a brand-new account is walked through audio, language and the interface to
   await expect(page.locator('.dt-onboarding')).toHaveCount(0)
   await expect(page.locator('.dt-tour')).toHaveCount(0)
 
-  // ...but it stays reachable from the settings panel and the empty state.
-  await page.getByRole('button', { name: '设置', exact: true }).click()
+  // ...but it stays reachable from the account sheet and the empty state.
+  await page.locator('[data-tour="account"]').click()
   await page.getByRole('button', { name: '重新查看新手引导' }).click()
   await expect(page.locator('.dt-onboarding')).toBeVisible()
   await page.keyboard.press('Escape')
