@@ -30,6 +30,7 @@ type Service struct {
 	Billing      *billing.Service
 	Key          ed25519.PrivateKey
 	mintProvider func(context.Context, bool) (string, error)
+	MainNode     func() Node
 }
 
 func New(db *sql.DB, b *billing.Service, encodedKey string) (*Service, error) {
@@ -205,6 +206,7 @@ func (s *Service) Heartbeat(ctx context.Context, node string, h *edgeprotocol.He
 }
 
 type AuthorizeRequest struct {
+	AllowMain  bool               `json:"allow_main,omitempty"`
 	Protocol   int                `json:"protocol"`
 	SessionID  string             `json:"session_id"`
 	Region     string             `json:"region"`
@@ -262,12 +264,14 @@ func (s *Service) reserve(ctx context.Context, tx *sql.Tx, v *session) error {
 }
 
 // Authorize serializes user concurrency, node capacity and the budget debit before returning a grant.
+//
+//nolint:gocritic // Copy the request because authorization normalizes session ID and protocol without mutating its caller.
 func (s *Service) Authorize(ctx context.Context, user, tenant string, req AuthorizeRequest) (edgeprotocol.Authorization, error) {
-	return s.authorize(ctx, user, tenant, req, true)
+	return s.authorize(ctx, user, tenant, &req, true)
 }
 
 //nolint:gocyclo // Keep admission, concurrency and budget checks in one transaction.
-func (s *Service) authorize(ctx context.Context, user, tenant string, req AuthorizeRequest, allowNew bool) (edgeprotocol.Authorization, error) {
+func (s *Service) authorize(ctx context.Context, user, tenant string, req *AuthorizeRequest, allowNew bool) (edgeprotocol.Authorization, error) {
 	var empty edgeprotocol.Authorization
 	if req.Protocol == 0 {
 		req.Protocol = 1
@@ -310,6 +314,13 @@ func (s *Service) authorize(ctx context.Context, user, tenant string, req Author
 	var owns bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sessions WHERE id=$1 AND user_id=$2 AND tenant_id=$3)`, req.SessionID, user, tenant).Scan(&owns); err != nil || !owns {
 		return empty, ErrUnauthorized
+	}
+	var mainActive bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM main_transcription_leases WHERE session_id=$1 AND lease_until>clock_timestamp())`, req.SessionID).Scan(&mainActive); err != nil {
+		return empty, err
+	}
+	if mainActive {
+		return empty, ErrConflict
 	}
 	if !allowNew {
 		var existing bool
@@ -363,14 +374,26 @@ func (s *Service) authorize(ctx context.Context, user, tenant string, req Author
 			return empty, ErrConflict
 		}
 	}
-	var count int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM edge_sessions WHERE user_id=$1 AND status<>'closed' AND lease_until>now()`, user).Scan(&count); err != nil {
+	count, err := activeStreams(ctx, tx, user)
+	if err != nil {
 		return empty, err
 	}
 	if limit >= 0 && count >= limit {
 		return empty, ErrUnavailable
 	}
+	mainEligible := req.AllowMain && allowNew && errors.Is(oldErr, sql.ErrNoRows) && s.MainNode != nil &&
+		(req.Region == "" || req.Region == "auto" || req.Region == MainRegion)
+	var main Node
+	if mainEligible {
+		main = s.MainNode()
+		mainEligible = main.Active < main.MaxConnections
+	}
 	selected, err := selectNode(ctx, tx, nodes, req, route.Training)
+	if mainEligible && (errors.Is(err, ErrUnavailable) || (err == nil && nodeScore(&main, req) <= nodeScore(&selected, req))) {
+		// No Edge reservation is created for main-site audio. The proxy acquires
+		// its shared slot and prepays audio before forwarding to the supplier.
+		return edgeprotocol.Authorization{Transport: MainRegion}, nil
+	}
 	if err != nil {
 		return empty, err
 	}
@@ -411,7 +434,7 @@ func (s *Service) authorize(ctx context.Context, user, tenant string, req Author
 	}
 	return s.grant(&v, selected.Endpoint)
 }
-func nodeScore(n *Node, r AuthorizeRequest) float64 {
+func nodeScore(n *Node, r *AuthorizeRequest) float64 {
 	latency := 1000.0
 	if x, ok := r.Latencies[n.ID]; ok && x >= 0 && x <= 10000 {
 		latency = x
@@ -420,7 +443,7 @@ func nodeScore(n *Node, r AuthorizeRequest) float64 {
 	_ = json.Unmarshal(n.Metrics, &h)
 	return latency + h.ProviderLatencyMS + float64(n.Active)/float64(n.MaxConnections)*500 + h.Load*100
 }
-func selectNode(ctx context.Context, tx *sql.Tx, nodes []Node, req AuthorizeRequest, training bool) (Node, error) {
+func selectNode(ctx context.Context, tx *sql.Tx, nodes []Node, req *AuthorizeRequest, training bool) (Node, error) {
 	for i := range nodes {
 		n := &nodes[i]
 		if req.Region != "" && req.Region != "auto" && req.Region != n.Region {

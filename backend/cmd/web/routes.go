@@ -109,7 +109,7 @@ func (app *Application) buildHandler() (http.Handler, func()) {
 	// Speechmatics token endpoint (legacy - for classic UI)
 	tokenRoute := http.Handler(http.HandlerFunc(tokenHandler.HandleTokenRequest))
 	edgeEnabled := edgecontrol.RoutingEnabled() && app.Store != nil && app.Auth != nil
-	mux.Handle("/api/token/rt", protect(edgeIngressRoute(edgeEnabled, tokenRoute)))
+	mux.Handle("/api/token/rt", protect(edgeTokenRoute(edgeEnabled, tokenRoute)))
 
 	// WebSocket handler with billing support
 	wsHandler := handlers.NewWebSocketHandler(app.Billing)
@@ -122,6 +122,7 @@ func (app *Application) buildHandler() (http.Handler, func()) {
 
 	// Speechmatics WebSocket proxy (for Pro UI - all traffic goes through backend)
 	smProxyHandler, err := handlers.NewSpeechmaticsProxyHandler(app.Billing)
+	mainTranscriptionAvailable := err == nil
 	if edgeEnabled {
 		// Admission and budget checks run transactionally in /api/edges/authorize.
 		// The preflight must not require a main-site supplier credential.
@@ -130,17 +131,28 @@ func (app *Application) buildHandler() (http.Handler, func()) {
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 				return
 			}
+			if r.URL.Query().Get("transport") == edgecontrol.MainRegion {
+				if !mainTranscriptionAvailable {
+					http.Error(w, "main transcription service unavailable", http.StatusServiceUnavailable)
+					return
+				}
+				smProxyHandler.HandlePreflight(w, r)
+				return
+			}
 			w.Header().Set("Cache-Control", "no-store")
 			handlers.WriteJSON(w, map[string]bool{"ready": true})
 		})))
-		mux.Handle("/ws/speechmatics", protect(edgeIngressRoute(true, nil)))
-	} else if err != nil {
+	} else if err == nil {
+		mux.Handle("/api/speechmatics/preflight", protect(http.HandlerFunc(smProxyHandler.HandlePreflight)))
+	}
+	if err != nil {
 		log.Printf("Speechmatics proxy not available: %v", err)
 	} else {
 		smProxyHandler.SetTrainingOptInLookup(trainingOptIn)
-		preflightRoute := http.Handler(http.HandlerFunc(smProxyHandler.HandlePreflight))
+		if edgeService != nil {
+			smProxyHandler.SetRegionalAdmission(edgeService)
+		}
 		speechmaticsRoute := http.Handler(http.HandlerFunc(smProxyHandler.HandleProxy))
-		mux.Handle("/api/speechmatics/preflight", protect(preflightRoute))
 		mux.Handle("/ws/speechmatics", protect(speechmaticsRoute))
 	}
 

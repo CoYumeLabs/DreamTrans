@@ -9,12 +9,12 @@ import (
 	"github.com/dreamtrans/backend/internal/auth"
 )
 
-func TestRegionalModeRequiresSharedAdmission(t *testing.T) {
+func TestRegionalModeRejectsDirectSupplierTokens(t *testing.T) {
 	called := false
 	legacy := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { called = true; w.WriteHeader(http.StatusNoContent) })
 	for _, enabled := range []bool{true, false} {
 		response := httptest.NewRecorder()
-		edgeIngressRoute(enabled, legacy).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/ws/speechmatics", nil))
+		edgeTokenRoute(enabled, legacy).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/token/rt", nil))
 		if enabled && (called || response.Code != http.StatusConflict) {
 			t.Fatal("regional admission was bypassed")
 		}

@@ -21,7 +21,7 @@ func TestGrantBindsNodeOriginBudgetAndExpiry(t *testing.T) {
 	if _, err = Verify(public, token, "tokyo", "https://yufolo.com"); err != nil {
 		t.Fatal(err)
 	}
-	for _, pair := range [][2]string{{"london", "https://yufolo.com"}, {"tokyo", "https://evil.example"}} {
+	for _, pair := range [][2]string{{"london", "https://yufolo.com"}, {"tokyo", "https://evil.example"}, {"tokyo", "https://www.yufolo.com"}} {
 		if _, err = Verify(public, token, pair[0], pair[1]); err == nil {
 			t.Fatal("grant accepted by another node/origin")
 		}

@@ -11,9 +11,8 @@ import (
 	"github.com/dreamtrans/backend/internal/edgecontrol"
 )
 
-// Existing sockets retain their handler; new audio connections must use the
-// common Edge admission ledger once regional routing is enabled.
-func edgeIngressRoute(enabled bool, fallback http.Handler) http.Handler {
+// Direct supplier tokens cannot enforce shared main/Edge admission or metering.
+func edgeTokenRoute(enabled bool, fallback http.Handler) http.Handler {
 	if !enabled {
 		return fallback
 	}

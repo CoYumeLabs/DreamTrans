@@ -81,11 +81,12 @@ export function useWorkspaceRuntime({ ragEnabled, settings, user, onBalanceUpdat
   }))
   const sessionAuthRequiredRef = useRef(false)
   const edgeAuthorizationRef = useRef<EdgeAuthorization | null>(null)
+  const mainTransportSessionRef = useRef('')
   const [edgeBuffer] = useState(() => new EdgeAudioBuffer())
   const [client] = useState(() => new SpeechmaticsProxyClient({
     beforeReconnect: async () => {
       try {
-        await ensureSpeechmaticsPreflight()
+        await ensureSpeechmaticsPreflight(mainTransportSessionRef.current === currentSessionRef.current)
       } catch(reason) {
         if(isInsufficientBalanceError(reason)) {
           throw new SpeechmaticsPaymentRequiredError(messages().workspace.runtime.insufficientBalance)
@@ -101,12 +102,14 @@ export function useWorkspaceRuntime({ ragEnabled, settings, user, onBalanceUpdat
       const token = getAccessToken()
       const sessionId = currentSessionRef.current
       if(edgeAuthorizationRef.current?.grant.session_id !== sessionId) edgeAuthorizationRef.current = null
-      if(token && sessionId) {
+      if(token && sessionId && mainTransportSessionRef.current !== sessionId) {
         // Retain the transport through failed retries and changes to routing.
         // Only successful authorization replaces the current grant.
         const continuingEdge = edgeAuthorizationRef.current?.grant.session_id === sessionId
-        edgeAuthorizationRef.current = await authorizeEdge(sessionId, sampleRate, continuingEdge)
+        edgeAuthorizationRef.current = await authorizeEdge(sessionId, sampleRate, continuingEdge, edgeAuthorizationRef.current?.requestedRegion)
         if(edgeAuthorizationRef.current) return edgeAuthorizationRef.current.token
+        await ensureSpeechmaticsPreflight(true)
+        mainTransportSessionRef.current = sessionId
       }
       if(sessionAuthRequiredRef.current && !token) {
         throw new Error(messages().workspace.runtime.authExpired)

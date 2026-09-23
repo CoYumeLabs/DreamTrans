@@ -922,11 +922,13 @@ export async function getProfile(): Promise<{ user: User; tenant?: Tenant }> {
 
 export async function checkSpeechmaticsPreflight(
   clientOrigin = '',
+  mainTransport = false,
 ): Promise<SpeechmaticsPreflightResponse> {
   const normalizedOrigin = clientOrigin.trim()
-  const endpoint = normalizedOrigin
-    ? `/api/speechmatics/preflight?origin=${encodeURIComponent(normalizedOrigin)}`
-    : '/api/speechmatics/preflight'
+  const params = new URLSearchParams()
+  if (normalizedOrigin) params.set('origin', normalizedOrigin)
+  if (mainTransport) params.set('transport', 'main')
+  const endpoint = '/api/speechmatics/preflight' + (params.size ? `?${params}` : '')
   const response = await authFetch<SpeechmaticsPreflightResponse>(
     endpoint,
     { cache: 'no-store' },

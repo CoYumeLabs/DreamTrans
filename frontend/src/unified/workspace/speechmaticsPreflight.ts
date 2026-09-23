@@ -58,10 +58,10 @@ export function speechmaticsPreflightErrorMessage(reason: unknown): string {
     : copy.failedGeneric
 }
 
-export async function ensureSpeechmaticsPreflight(): Promise<void> {
+export async function ensureSpeechmaticsPreflight(mainTransport = false): Promise<void> {
   try {
     const clientOrigin = typeof window === 'undefined' ? '' : window.location.origin
-    await checkSpeechmaticsPreflight(clientOrigin)
+    await checkSpeechmaticsPreflight(clientOrigin, mainTransport)
   } catch (reason) {
     throw new Error(speechmaticsPreflightErrorMessage(reason), {
       cause: reason,

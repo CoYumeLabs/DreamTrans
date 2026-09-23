@@ -11,6 +11,7 @@ flowchart LR
   MainProxy --> Main[主站蓝 / 绿]
   Main --> PG[(现有 PostgreSQL 卷)]
   Main --> Files[(现有应用文件卷)]
+  Main --> Provider
   Browser --> EdgeCF[节点独立 Cloudflare Tunnel]
   EdgeCF --> EdgeProxy[Edge 固定 Nginx]
   EdgeProxy --> Edge[Edge 蓝 / 绿]
@@ -21,7 +22,26 @@ flowchart LR
 
 主站维护用户、账户、额度预留、账本、节点、会话代次和历史。RAG、知识库、批处理与 YuAction 留在主站。Edge 不连接主站数据库，不加载主站 `rag.db`，不持有主站登录签名密钥或 Stripe 密钥。Edge 的 SQLite 仅用于该实例独占的回传队列，与主站历史 SQLite 无关。
 
-每个可调度 Edge 必须使用独立入口域名和 Tunnel。浏览器探测节点入口延迟；主站将延迟与供应商握手延迟、负载、健康及容量一起评估，事务内确认分配。会话建立后固定节点。Edge 向主站发起 HTTPS 请求直接访问主站域名，不经过 Edge 自己的 Tunnel。
+每个可调度 Edge 必须使用独立入口域名和 Tunnel。浏览器探测节点入口延迟；主站将延迟与供应商握手延迟、负载、健康及容量一起评估，事务内确认分配。Edge 向主站发起 HTTPS 请求直接访问主站域名，不经过 Edge 自己的 Tunnel。
+
+开启 Edge 调度后，主站仍接收实时转录。配置了主站 Speechmatics 凭证时，
+“新转录会话接入地区”显示“主站”（`main`）；自动选择会将主站与区域节点一起比较，
+没有可用 Edge 时也可选择主站。指定某个 Edge 地区时只在该地区选择。
+已经使用 Edge 的会话不会因重新连接而自动切到主站，避免丢失恢复水位和重复结算；
+浏览器中的主站会话重连也保留主站接入。
+
+迁移 `061_main_transcription_leases.sql` 使各主站实例和 Edge 授权共用用户并发上限。
+主站在 WebSocket 握手前申请接入租约，定期续期，续期失败停止连接；主站音频仍由
+原有代理按实际转发量预付并结算，不创建 Edge 音频预算。直接连接主站也执行同样的
+并发检查。旧页面未声明支持主站调度时，区域授权仍返回原有 Edge 协议响应。
+首次部署时，旧版本尚未登记租约的主站连接需要自然排空后，才能完整统计跨实例并发。
+
+Edge 的浏览器来源白名单在启动时兼容 HTTPS 裸域名及其 `www` 地址，例如配置
+`https://example.com` 后，`https://www.example.com` 也可探测和建立 WebSocket，反向配置同样有效。
+仅扩展注册域名这一对地址，保持端口一致，不放行其他子域名、HTTP 或空 Origin；
+`app.example.com` 等业务子域名仍需显式配置。已有节点升级 Edge 镜像后即可生效，无需重新注册。
+每份会话凭证仍绑定签发时的具体 Origin，不能在这两个来源间复用。Cloudflare Tunnel
+负责转发请求，不替代这些检查。直接在地址栏打开 `/probe` 因缺少 Origin 返回 403 是预期行为。
 
 Cloudflare 官方说明：[独立 Tunnel 与负载均衡](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/routing-to-tunnel/public-load-balancers/)、[WebSocket 连接可能中断](https://developers.cloudflare.com/network/websockets/)。
 

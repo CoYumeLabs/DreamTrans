@@ -66,6 +66,10 @@ func TestCompleteStaleSessionsNeverTouchesLiveWork(t *testing.T) {
 	staleButStreaming := createSession("active", staleAt)
 	freshActive := createSession("active", time.Now().UTC())
 	staleButOnEdge := createSession("active", staleAt)
+	staleButOnOtherMain := createSession("active", staleAt)
+	if _, err := db.ExecContext(ctx, `INSERT INTO main_transcription_leases(connection_id,user_id,tenant_id,session_id,lease_until) VALUES(gen_random_uuid(),$1,$2,$3,now()+interval '5 minutes')`, userID, tenantID, staleButOnOtherMain); err != nil {
+		t.Fatal(err)
+	}
 	var nodeID string
 	if err := db.QueryRowContext(ctx, `INSERT INTO edge_nodes(name,region,endpoint,max_connections) VALUES('sweep','test','https://' || gen_random_uuid()::text || '.example.test',1) RETURNING id`).Scan(&nodeID); err != nil {
 		t.Fatal(err)
@@ -114,6 +118,9 @@ func TestCompleteStaleSessionsNeverTouchesLiveWork(t *testing.T) {
 	}
 	if s, _ := status(staleButOnEdge); s != "active" {
 		t.Fatalf("live Edge lease was swept: %s", s)
+	}
+	if s, _ := status(staleButOnOtherMain); s != "active" {
+		t.Fatalf("another main instance's live lease was swept: %s", s)
 	}
 	if s, _ := status(freshActive); s != "active" {
 		t.Fatalf("fresh session was swept: status=%s", s)

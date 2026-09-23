@@ -20,6 +20,6 @@ export function EdgeRegionSelector() {
     setSelected(event.target.value); localStorage.setItem('dreamtrans.edge.region', event.target.value)
   }}>
     <option value="auto">自动（测量延迟与可用容量）</option>
-    {regions.map(region => <option key={region} value={region}>{region}</option>)}
+    {regions.map(region => <option key={region} value={region}>{region === 'main' ? '主站' : region}</option>)}
   </select></label>
 }

@@ -24,11 +24,23 @@ import (
 
 func TestAudioBypassesMainAndOutboxSurvivesNetworkPartitionAndDrain(t *testing.T) {
 	for _, protocol := range []int{1, 2} {
-		t.Run(fmt.Sprintf("protocol_%d", protocol), func(t *testing.T) { testAudioPartitionAndDrain(t, protocol, false) })
+		t.Run(fmt.Sprintf("protocol_%d", protocol), func(t *testing.T) {
+			testAudioPartitionAndDrain(t, protocol, false, "https://main.example.test", "https://main.example.test")
+		})
 	}
 }
-func TestCentralJWTLiveAudioPartitionAndDrain(t *testing.T) { testAudioPartitionAndDrain(t, 2, true) }
-func testAudioPartitionAndDrain(t *testing.T, protocol int, central bool) {
+func TestCentralJWTLiveAudioPartitionAndDrain(t *testing.T) {
+	testAudioPartitionAndDrain(t, 2, true, "https://main.example.test", "https://main.example.test")
+}
+func TestWWWLiveAudioPartitionAndDrain(t *testing.T) {
+	t.Run("apex_configuration", func(t *testing.T) {
+		testAudioPartitionAndDrain(t, 2, true, "https://example.com", "https://www.example.com")
+	})
+	t.Run("www_configuration", func(t *testing.T) {
+		testAudioPartitionAndDrain(t, 2, true, "https://www.example.com", "https://example.com")
+	})
+}
+func testAudioPartitionAndDrain(t *testing.T, protocol int, central bool, configuredOrigin, browserOrigin string) {
 	oldRuntime := deployment.Default
 	deployment.Default = &deployment.Runtime{}
 	t.Cleanup(func() { deployment.Default = oldRuntime })
@@ -40,7 +52,7 @@ func testAudioPartitionAndDrain(t *testing.T, protocol int, central bool) {
 		t.Fatal(err)
 	}
 	node, session := uuid.NewString(), uuid.NewString()
-	grant := edgeprotocol.Grant{RegisteredClaims: jwt.RegisteredClaims{Issuer: "dreamtrans-edge", ID: uuid.NewString(), Audience: jwt.ClaimStrings{node}, ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute))}, NodeID: node, SessionID: session, UserID: uuid.NewString(), Origin: "https://main.example.test", Generation: 1, SampleRate: 48000, ApprovedSamples: 48000 * 30, Provider: "speechmatics", Protocol: protocol}
+	grant := edgeprotocol.Grant{RegisteredClaims: jwt.RegisteredClaims{Issuer: "dreamtrans-edge", ID: uuid.NewString(), Audience: jwt.ClaimStrings{node}, ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute))}, NodeID: node, SessionID: session, UserID: uuid.NewString(), Origin: browserOrigin, Generation: 1, SampleRate: 48000, ApprovedSamples: 48000 * 30, Provider: "speechmatics", Protocol: protocol}
 	token, err := edgeprotocol.Sign(key, &grant)
 	if err != nil {
 		t.Fatal(err)
@@ -124,7 +136,7 @@ func testAudioPartitionAndDrain(t *testing.T, protocol int, central bool) {
 	if central {
 		providerMode, providerKey = "main", ""
 	}
-	server, err := New(&Config{ProviderAuth: providerMode, NodeID: node, PublicKey: base64.RawStdEncoding.EncodeToString(public), ProviderKey: providerKey, ProviderURL: "ws" + strings.TrimPrefix(upstream.URL, "http"), Origins: []string{grant.Origin}, Maximum: 2, Version: "test"}, client, queue)
+	server, err := New(&Config{ProviderAuth: providerMode, NodeID: node, PublicKey: base64.RawStdEncoding.EncodeToString(public), ProviderKey: providerKey, ProviderURL: "ws" + strings.TrimPrefix(upstream.URL, "http"), Origins: []string{configuredOrigin}, Maximum: 2, Version: "test"}, client, queue)
 	if err != nil {
 		t.Fatal(err)
 	}

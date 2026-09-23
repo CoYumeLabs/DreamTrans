@@ -57,6 +57,10 @@ func (s *Service) UserHTTP(w http.ResponseWriter, r *http.Request) {
 		respond(w, nil, ErrUnauthorized)
 		return
 	}
+	if r.Method == http.MethodGet && r.URL.Path == "/api/edges/probe" {
+		respond(w, map[string]bool{"ready": s.MainNode != nil}, nil)
+		return
+	}
 	if r.Method == http.MethodGet && r.URL.Path == "/api/edges" {
 		nodes, err := s.Nodes(r.Context())
 		if err != nil {
@@ -64,6 +68,9 @@ func (s *Service) UserHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		visible := make([]Node, 0)
+		if s.MainNode != nil {
+			visible = append(visible, s.MainNode())
+		}
 		for i := range nodes {
 			n := &nodes[i]
 			if n.Mode == "enabled" {
@@ -82,7 +89,7 @@ func (s *Service) UserHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		req.Origin = r.Header.Get("Origin")
-		result, err := s.authorize(r.Context(), claims.UserID, claims.TenantID, req.AuthorizeRequest, RoutingEnabled() || (req.Preview && claims.Role == "super_admin"))
+		result, err := s.authorize(r.Context(), claims.UserID, claims.TenantID, &req.AuthorizeRequest, RoutingEnabled() || (req.Preview && claims.Role == "super_admin"))
 		respond(w, result, err)
 		return
 	}

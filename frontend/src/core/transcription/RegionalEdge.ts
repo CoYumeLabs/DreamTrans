@@ -1,6 +1,7 @@
 import type { SpeechmaticsSocket } from './SpeechmaticsProxyClient'
 
 export interface EdgeAuthorization {
+  requestedRegion?: string
   endpoint: string
   token: string
   grant: {

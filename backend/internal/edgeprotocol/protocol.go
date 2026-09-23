@@ -46,9 +46,10 @@ type Grant struct {
 
 // Authorization fixes a session to one endpoint until an explicit generation change.
 type Authorization struct {
-	Endpoint string `json:"endpoint"`
-	Token    string `json:"token"`
-	Grant    Grant  `json:"grant"`
+	Transport string `json:"transport,omitempty"`
+	Endpoint  string `json:"endpoint"`
+	Token     string `json:"token"`
+	Grant     Grant  `json:"grant"`
 }
 
 // Event is persisted on Edge before submission. Samples and audio seq are cumulative.

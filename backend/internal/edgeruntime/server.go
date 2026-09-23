@@ -92,6 +92,7 @@ func New(config *Config, main *MainClient, queue *Queue) (*Server, error) {
 		config.ProviderURL = "wss://global.rt.speechmatics.com/v2"
 	}
 	s := &Server{config: *config, key: ed25519.PublicKey(key), main: main, queue: queue, connections: make(map[string]*stream)}
+	s.config.Origins = browserOrigins(config.Origins)
 	deployment.Default.SetPending(queue.Pending)
 	return s, nil
 }

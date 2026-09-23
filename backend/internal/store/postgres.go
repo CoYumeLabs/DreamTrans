@@ -63,6 +63,7 @@ var requiredSchemaMigrations = []string{
 	"049_consent_and_account_archive.sql",
 	"050_durable_batch.sql",
 	"060_system_settings_revision.sql",
+	"061_main_transcription_leases.sql",
 }
 
 // PostgresStore handles all database operations
@@ -479,6 +480,8 @@ func (s *PostgresStore) CompleteStaleSessions(
 		  AND NOT (id = ANY($2::uuid[]))
  AND NOT EXISTS (SELECT 1 FROM edge_sessions e WHERE e.id=sessions.id
   AND e.status<>'closed' AND e.lease_until>NOW())
+ AND NOT EXISTS (SELECT 1 FROM main_transcription_leases m WHERE m.session_id=sessions.id
+  AND m.lease_until>NOW())
 	`, staleAfter.Seconds(), pq.Array(excluded))
 	if err != nil {
 		return 0, err

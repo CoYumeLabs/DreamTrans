@@ -3,17 +3,20 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	internalAuth "github.com/dreamtrans/backend/internal/auth"
 	"github.com/dreamtrans/backend/internal/billing"
 	"github.com/dreamtrans/backend/internal/deployment"
+	"github.com/dreamtrans/backend/internal/edgecontrol"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -43,6 +46,23 @@ type SpeechmaticsProxyHandler struct {
 	billing                  speechmaticsBillingService
 	connections              *webSocketConnectionLimiter
 	liveStreams              *liveTranscriptionRegistry
+	regionalAdmission        *edgecontrol.Service
+	providerLatencyMS        atomic.Int64
+}
+
+// SetRegionalAdmission shares user concurrency with regional grants while
+// preserving the main proxy's existing audio metering and settlement.
+func (h *SpeechmaticsProxyHandler) SetRegionalAdmission(service *edgecontrol.Service) {
+	h.regionalAdmission = service
+	service.MainNode = func() edgecontrol.Node {
+		limiter := h.connections
+		limiter.mu.Lock()
+		active, maximum := limiter.total, limiter.maxTotal
+		limiter.mu.Unlock()
+		metrics, _ := json.Marshal(map[string]any{"provider_latency_ms": h.providerLatencyMS.Load(), "healthy": true})
+		return edgecontrol.Node{ID: edgecontrol.MainRegion, Name: "主站", Region: edgecontrol.MainRegion,
+			Mode: "enabled", MaxConnections: maximum, Active: active, Metrics: metrics}
+	}
 }
 
 // NewSpeechmaticsProxyHandler creates a new Speechmatics proxy handler
@@ -242,6 +262,29 @@ func (h *SpeechmaticsProxyHandler) HandleProxy(w http.ResponseWriter, r *http.Re
 		}
 		streamLimit = limit
 	}
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	var mainLease *edgecontrol.MainLease
+	if h.regionalAdmission != nil && claims != nil {
+		var leaseErr error
+		mainLease, leaseErr = h.regionalAdmission.AcquireMain(ctx, userID, tenantID, billingConnectionID, streamSessionID, streamLimit)
+		if leaseErr != nil {
+			status, message := http.StatusServiceUnavailable, "transcription admission unavailable"
+			switch {
+			case errors.Is(leaseErr, edgecontrol.ErrUnavailable):
+				status, message = http.StatusPaymentRequired, speechmaticsConcurrentLimitMessage
+			case errors.Is(leaseErr, edgecontrol.ErrUnauthorized):
+				status, message = http.StatusForbidden, "session access denied"
+			case errors.Is(leaseErr, edgecontrol.ErrConflict):
+				status, message = http.StatusConflict, "session already uses another transcription connection"
+			}
+			writeSpeechmaticsAccessFailure(w, status, message)
+			return
+		}
+		defer mainLease.Release()
+		stopLease := mainLease.KeepAlive(ctx, cancel)
+		defer stopLease()
+	}
 	liveStreams := h.streamRegistry()
 	releaseStream, acquireErr := liveStreams.Acquire(&liveTranscriptionStream{
 		ConnectionID: billingConnectionID,
@@ -265,11 +308,13 @@ func (h *SpeechmaticsProxyHandler) HandleProxy(w http.ResponseWriter, r *http.Re
 	}
 	safeClientConn := newSafeWebSocketConn(clientConn)
 	defer func() { _ = safeClientConn.Close() }()
+	stopClientCancel := context.AfterFunc(ctx, func() { _ = clientConn.Close() })
+	defer stopClientCancel()
 
 	// Generate Speechmatics token on the account the user's training-program
 	// answer selects.
-	tokenGenerator, trainingRoute, routeDecision := h.tokenGeneratorFor(r.Context(), claims)
-	token, err := tokenGenerator.GenerateTokenContext(r.Context())
+	tokenGenerator, trainingRoute, routeDecision := h.tokenGeneratorFor(ctx, claims)
+	token, err := tokenGenerator.GenerateTokenContext(ctx)
 	if err != nil {
 		log.Printf("Failed to generate Speechmatics token: %v", err)
 		sendErrorToClient(safeClientConn, "failed to generate token")
@@ -286,7 +331,8 @@ func (h *SpeechmaticsProxyHandler) HandleProxy(w http.ResponseWriter, r *http.Re
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
 	}
-	smConn, _, err := dialer.Dial(smURL.String(), nil)
+	providerStart := time.Now()
+	smConn, _, err := dialer.DialContext(ctx, smURL.String(), nil)
 	if err != nil {
 		log.Printf("Failed to connect to Speechmatics: %v", err)
 		sendErrorToClient(safeClientConn, "failed to connect to the transcription service")
@@ -294,6 +340,9 @@ func (h *SpeechmaticsProxyHandler) HandleProxy(w http.ResponseWriter, r *http.Re
 	}
 	safeSMConn := newSafeWebSocketConn(smConn)
 	defer func() { _ = safeSMConn.Close() }()
+	h.providerLatencyMS.Store(time.Since(providerStart).Milliseconds())
+	stopProviderCancel := context.AfterFunc(ctx, func() { _ = smConn.Close() })
+	defer stopProviderCancel()
 
 	// Configure WebSocket connections for robustness
 	clientConn.SetReadLimit(maxMessageSize)
@@ -317,8 +366,6 @@ func (h *SpeechmaticsProxyHandler) HandleProxy(w http.ResponseWriter, r *http.Re
 	log.Printf("Speechmatics proxy connected for user=%s tenant=%s training_route=%t route_reason=%s", userID, tenantID, trainingRoute, routeReason)
 
 	// Create context for managing goroutines
-	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
 	stopHandoff := deployment.Default.NotifyHandoff(safeClientConn.WriteJSON)
 	defer stopHandoff()
 
@@ -350,7 +397,10 @@ func (h *SpeechmaticsProxyHandler) HandleProxy(w http.ResponseWriter, r *http.Re
 		defer balanceUpdates.Stop()
 	}
 	reserveAudio := func(chargeCtx context.Context, count int) error {
-		return h.reserveSpeechmaticsAudio(
+		if err := mainLease.Check(); err != nil {
+			return err
+		}
+		err := h.reserveSpeechmaticsAudio(
 			chargeCtx,
 			balanceUpdates,
 			audioMeter,
@@ -360,6 +410,10 @@ func (h *SpeechmaticsProxyHandler) HandleProxy(w http.ResponseWriter, r *http.Re
 			billingSessionRef,
 			count,
 		)
+		if err != nil {
+			return err
+		}
+		return mainLease.Check()
 	}
 	beginRecognition := func(context.Context) error { return nil }
 
