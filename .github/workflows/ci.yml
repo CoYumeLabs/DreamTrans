@@ -239,7 +239,8 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/ci-tools"
           "$RUNNER_TEMP/ci-tools/bin/pip" install --disable-pip-version-check PyYAML==6.0.2
           "$RUNNER_TEMP/ci-tools/bin/python" -m unittest discover -s scripts/ci -p 'test_*.py' -v
-          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -color
+          command -v shellcheck
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -color .github/workflows/ci.yml .github/workflows/yuaction.yml .github/workflows/docker-build.yml
   metadata:
     name: Build matrix and shared metadata
     runs-on: ubuntu-24.04
@@ -381,7 +382,7 @@ jobs:
             -e SM_API_KEY=ci-placeholder \
             -e ALLOW_ANONYMOUS_API=true \
             "$image"
-          for attempt in $(seq 1 60); do
+          for _attempt in $(seq 1 60); do
             if docker exec "$container" \
               wget -q -O /dev/null http://127.0.0.1:8080/healthz; then
               exit 0
@@ -461,7 +462,7 @@ jobs:
           trap 'docker compose -p "$project" down -v --remove-orphans >/dev/null 2>&1 || true' EXIT
           docker compose -p "$project" config --quiet
           docker compose -p "$project" up -d
-          for attempt in $(seq 1 60); do
+          for _attempt in $(seq 1 60); do
             container="$(docker compose -p "$project" ps -q dreamtrans)"
             state="$(docker inspect \
               --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' \
@@ -489,7 +490,7 @@ jobs:
           container="dreamtrans-frontend-ci-${GITHUB_RUN_ID}"
           trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
           docker run -d --name "$container" "$image"
-          for attempt in $(seq 1 30); do
+          for _attempt in $(seq 1 30); do
             health="$(docker inspect --format '{{.State.Health.Status}}' "$container")"
             if [ "$health" = healthy ]; then
               docker exec "$container" wget -q -O - \

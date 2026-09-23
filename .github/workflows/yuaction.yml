@@ -141,7 +141,8 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/ci-tools"
           "$RUNNER_TEMP/ci-tools/bin/pip" install --disable-pip-version-check PyYAML==6.0.2
           "$RUNNER_TEMP/ci-tools/bin/python" -m unittest discover -s scripts/ci -p 'test_*.py' -v
-          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -color
+          command -v shellcheck
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -color .github/workflows/ci.yml .github/workflows/yuaction.yml .github/workflows/docker-build.yml
   metadata:
     name: Build matrix and shared metadata
     runs-on: ubuntu-24.04

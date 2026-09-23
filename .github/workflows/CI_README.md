@@ -65,10 +65,11 @@ CI=true VITE_BACKEND_URL=/ VITE_BACKEND_WS_URL=/ npm run verify:ci
 
 后端使用 Go 1.26.5，按 `ci.yml` 执行格式、模块、golangci-lint 2.12.2（`event_worker` 标签）、完整 race 与 event worker 测试。数据库迁移和数据库测试使用隔离的 pgvector PostgreSQL 16；镜像或运维修改还需运行相应生命周期与运行时检查。
 
-工作流修改执行 actionlint 1.7.7 和发布契约测试：
+工作流修改执行 actionlint 1.7.7（含 ShellCheck）和发布契约测试。主站与 YuAction 的检查范围为下列三个工作流；其他产品保持各自原有检查：
 
 ```bash
-go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+command -v shellcheck
+go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/ci.yml .github/workflows/yuaction.yml .github/workflows/docker-build.yml
 # 在已安装 PyYAML 6.0.2 的 Python 环境执行。
 python3 -m unittest discover -s scripts/ci -p 'test_*.py' -v
 ```
