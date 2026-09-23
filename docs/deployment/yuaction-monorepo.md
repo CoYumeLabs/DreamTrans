@@ -5,11 +5,11 @@ YuAction 源代码位于 `yuaction/`，导入源为原仓库提交 `5561118`。�
 ## 开发与发行
 
 - DreamTrans：根目录 `backend/`、`frontend/`；YuAction：`yuaction/backend/`、`yuaction/frontend/`。两套 Go / npm 模块和运行进程保留。
-- 根目录 `.github/workflows/ci.yml` 是两产品的统一检查入口，含 YuAction 完整 Go race、数据库迁移、安装器生命周期、浏览器和镜像运行时验证。
+- 主站使用 `.github/workflows/ci.yml`，YuAction 使用独立的 `.github/workflows/yuaction.yml`；后者保留完整 Go race、数据库迁移、安装器生命周期、浏览器和镜像运行时验证。共享转录客户端和运维组件变更会触发双方验证。
 - 导入时升级 YuAction 的 pgx、Excelize 和 Go 扩展库到安全修复版本；本地后端需要 Go 1.26+，CI／Docker 固定为 1.26.5。
-- 所有检查通过后才调用 `docker-build.yml`，发布同一 Git 提交的主站、Edge、YuAction 后端和前端。发行清单 `release-images.json` 记录四个固定 digest。
+- 每个产品各自全部检查通过后调用 `docker-build.yml`，并行推送此前构建与验证的镜像产物，不重新构建。主站与 Edge 使用同一提交；YuAction 前后端使用同一 YuAction 提交。各产品发行清单 `release-images.json` 分别记录自己的固定 digest。
 - YuAction 镜像为 `ghcr.io/coyumelabs/dreamtrans-yuaction-backend` 和 `ghcr.io/coyumelabs/dreamtrans-yuaction-frontend`；`sha-<完整提交>` 对应本仓库源代码。旧仓库镜像不覆盖。
-- 四个镜像全部构建成功才提升 main 的 latest 标签。跨镜像标签不是原子事务；安装器先解析后端提交，再按同一 SHA 拉取前后端，不依赖两个 latest 同时变化。需要完全固定版本时使用清单中的 digest。
+- 每个产品的所有镜像验证和平台发布成功后才提升自己的 latest。跨镜像标签不是原子事务；YuAction 安装器先解析后端提交，再按同一 SHA 拉取前端，不依赖两个 latest 同时变化。主站更新 latest 前保证匹配的 Edge 已发布。需要完全固定版本时使用清单中的 digest。
 - 发布新 GHCR 包后需确认匿名可拉取；私有组织部署可以沿用 `docker login ghcr.io`。
 
 ## 已有安装迁移
@@ -32,7 +32,7 @@ YuAction 默认端口仍为 `11452`，自定义 `APP_PORT`、`APP_BIND`、域名
 
 ## 此次合仓不改变运行升级协议
 
-采用蓝绿后，`dreamtransctl upgrade` 会继续升级安装目录下的 `yuaction`，两者固定到同一提交，仍保留独立端口。YuAction 自身使用同一个 Go 运维工具的 `yuaction` 子命令；固定 Nginx 入口只 reload 路由，不重建正在承载 WebSocket 的入口。登录令牌以原创建密钥派生的 AES-GCM 密钥加密保存到共享数据库，刷新跨实例串行执行。录音与后台任务用数据库锁确定归属，排空结束后才停止旧容器。
+采用蓝绿后，`dreamtransctl upgrade` 会继续升级安装目录下的 `yuaction`，YuAction 解析自己独立验证的最新发行版，再固定匹配的前后端；不再要求与主站同一提交，仍保留独立端口。YuAction 自身使用同一个 Go 运维工具的 `yuaction` 子命令；固定 Nginx 入口只 reload 路由，不重建正在承载 WebSocket 的入口。登录令牌以原创建密钥派生的 AES-GCM 密钥加密保存到共享数据库，刷新跨实例串行执行。录音与后台任务用数据库锁确定归属，排空结束后才停止旧容器。
 
 浏览器收到交接请求后先验证接续接口，在原麦克风继续采音的同时缓存新音频；旧实例等待最终字幕保存、上游流结束并释放录音锁后确认交接。新实例接续同一活动和 Yufolo 会话，再发送缓存。回滚使用相同交接流程，不恢复旧数据库。缓存上限为 60 秒 PCM；异常断网或上游无法完成保存会明确报错，不将不确定音频静默重放。
 
@@ -46,7 +46,7 @@ YuAction 默认端口仍为 `11452`，自定义 `APP_PORT`、`APP_BIND`、域名
 
 候选失败用 `abort` 保留当前服务，发布被中断用 `resume`。有 systemd 时安装器配置自动排空；其他环境前台等待后保留未完成任务的旧实例，使用 `drain` 继续检查，始终不强制切断录音。
 
-YuAction 目前通过主站 `/ws/speechmatics` 转录，并转发主站的 `DeploymentHandoff` 请求。区域 Edge 接入仍是既有兼容性限制：启用区域 Edge 调度后，主站不接受此旧接口的新连接。本次蓝绿验证覆盖 YuAction 当前的主站转录链路，不将区域 Edge 支持列为已实现。
+YuAction 目前通过主站 `/ws/speechmatics` 转录，并转发主站的 `DeploymentHandoff` 请求。启用区域 Edge 调度后，主站仍接受此接口的新连接，并与 Edge 授权共用用户并发上限；YuAction 当前仍通过主站接入。本次蓝绿验证覆盖 YuAction 当前的主站转录链路，不将区域 Edge 支持列为已实现。
 
 ## 后续维护
 

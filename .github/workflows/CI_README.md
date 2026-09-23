@@ -1,128 +1,76 @@
-# CI/CD 工作流说明
+# CI/CD 工作流
 
-> 主站与 YuAction 统一由 `ci.yml` 验证，`docker-build.yml` 在全部检查通过后发布四个组件镜像。YuAction 保持独立端口；当前流程见 [合仓说明](../../docs/deployment/yuaction-monorepo.md)。
+主站与 YuAction 各自验证、各自发布。主站不等待不相关的 YuAction 检查；只有对应产品全部检查通过后，才授予发布任务 `packages: write` 并向 GHCR 推送镜像。
 
+| 工作流 | 验证范围 | 发布镜像 |
+| --- | --- | --- |
+| `ci.yml` | 主站完整前端、后端 race、迁移、运维生命周期、安全扫描、主站及 Edge 镜像运行时 | DreamTrans、Edge |
+| `yuaction.yml` | YuAction 完整前后端、数据库迁移、安装器、端口/持久化、录音蓝绿交接、安全扫描 | YuAction 后端、前端 |
+| `docker-build.yml` | 仅由上述验证成功的工作流调用；校验并推送既有镜像产物 | 调用方所属产品 |
 
-## 概述
+```mermaid
+flowchart LR
+  M[主站变更] --> MT[前后端与安全检查]
+  M --> MB[主站 / Edge / 架构并行构建与运行验证]
+  MT --> MP[主站全部检查通过]
+  MB --> MP
+  MP --> MU[并行推送已验证产物]
+  MU --> ML[合并多架构并更新主站发行标签]
+  Y[YuAction 或共享依赖变更] --> YT[YuAction 完整检查]
+  Y --> YB[前后端 / 架构并行构建]
+  YB --> YR[镜像及录音交接验证]
+  YT --> YP[YuAction 全部检查通过]
+  YR --> YP
+  YP --> YU[并行推送并更新 YuAction 发行标签]
+```
 
-本项目使用 GitHub Actions 实现完整的 CI/CD 流程：
+## 构建一次，验证后发布
 
-- **CI (持续集成)**: `ci.yml` - 代码质量检查
-- **CD (持续部署)**: `docker-build.yml` - Docker 镜像构建和发布
+- AMD64 使用 `ubuntu-24.04`，ARM64 使用原生 `ubuntu-24.04-arm`；组件和架构并行，BuildKit 缓存按组件及架构隔离。
+- 构建时不登录注册表、不推送候选镜像。主站和 Edge 在原生 runner 上执行身份/启动检查；完整主站安装与恢复验证在 AMD64 执行。Edge 音频及重启验证覆盖两种架构。
+- `docker save` 保存已验证镜像。产物记录提交、架构、镜像 ID 和归档 SHA-256。发布任务下载、校验并 `docker load`，确认与测试镜像身份一致，再直接 `docker push`，不重新编译。
+- 每个产品的全部平台推送成功后，再创建多架构索引和发布清单，最后更新其 `latest`。主站的 `latest` 更新前，匹配的 Edge 索引已经存在。
+- 关联安装仍可通过主站命令自动升级 YuAction，但现在解析 YuAction 自己的已验证 `latest`，并按该版本的 SHA 固定匹配前后端，不再要求与主站 SHA 相同。
+- 临时镜像及平台摘要产物保留 1 天；过期后需要重新运行完整产品流水线。发行清单 `release-images-<产品>-<SHA>` 保留 30 天。
 
-同一分支的新提交会取消过时的在途任务。代码质量检查与生产镜像验证并行执行；
-三个发布镜像使用互相隔离的 BuildKit 缓存，避免并发构建彼此覆盖缓存。
+镜像身份由来源标签、镜像 ID 和归档校验值绑定。当前传输路径使用 Docker 单平台归档，不携带 BuildKit 的多平台 attestation 清单；不将它描述为已签名 provenance 或 SBOM。
 
-## CI 工作流 (ci.yml)
+实现依据：[Docker 跨任务传递镜像](https://docs.docker.com/build/ci/github-actions/share-image-jobs/)、[多平台构建](https://docs.docker.com/build/ci/github-actions/multi-platform/)。
 
-### 触发条件
-- 推送到 `main` 分支
-- 针对 `main` 分支的 Pull Request
+## 触发与版本
 
-镜像工作流在 `main` 推送时还会按实际 Docker 输入路径过滤；例如纯前端修改不会
-重复构建 Event Worker 和 Provider。版本标签与手动触发仍会完整构建。
+`main` 推送、`v*` 标签、PR 和手动触发均保留。PR 完整验证，但不发布。主站忽略只修改 `yuaction/` 及其专属工作流的提交。YuAction 的路径过滤包括共享转录客户端、运维 CLI、部署协议及 Go 依赖文件；修改这些共享输入会触发两个产品。
 
-### 检查项目
+路径清单在 `.github/ci-products.json`，镜像矩阵在 `.github/ci-images.json`。修改清单时同步工作流的路径过滤；契约测试会检查两者一致。需要等待 PR 检查的分支保护规则也应按各产品实际触发的工作流配置。
 
-#### 前端检查
-1. **ESLint**: 代码风格和潜在错误检查
-2. **TypeScript 类型检查**: 确保类型安全
-3. **构建测试**: 验证代码可以成功编译
+发布前检查远端主分支中该产品的内容是否仍与已验证提交一致。其他产品的新提交不会阻止本产品发布；存在更新的相关改动时保留 SHA 镜像，不移动浮动标签。
 
-#### 后端检查
-1. **golangci-lint**: 综合性的 Go 代码检查
-   - 格式检查 (gofmt)
-   - 潜在错误 (govet, errcheck)
-   - 代码复杂度 (gocyclo)
-   - 安全问题 (gosec)
-   - 更多...
-2. **单元测试**: 运行所有测试用例
-3. **测试覆盖率**: 生成并上传覆盖率报告
+- 主站：`sha-<完整 SHA>`、`sha-<前 7 位>`，当前 main 发行版有 `main`、`latest`。
+- Edge：`edge-<主站完整 SHA>`。
+- YuAction 前后端：各自有相同的 `sha-<完整 YuAction SHA>` 和独立 `latest`。
+- `v1.2.3` 生成 `1.2.3`、`1.2` 标签；预发布只更新完整预发布标签。Edge 继续按提交引用。
 
-#### 安全扫描
-- **Trivy**: 扫描已知的安全漏洞
+Event Worker 与 Provider 的独立工作流保留原有触发方式。
 
-### 本地运行 CI 检查
+## 本地检查
 
-#### 前端
+前端使用 Node 24.18.0：
+
 ```bash
 cd frontend
-npm ci              # 使用锁文件安装依赖（Node 24.18.0）
+npm ci
 npx playwright install --with-deps chromium
 CI=true VITE_BACKEND_URL=/ VITE_BACKEND_WS_URL=/ npm run verify:ci
 ```
 
-`verify:ci` 与远端 CI 共用，包含 lint、类型检查、构建、全部契约验证和完整 E2E。
-所有修改完成后运行；验证后又修改文件时，重新运行受影响检查。推送后还需确认远端 CI 结果。
+后端使用 Go 1.26.5，按 `ci.yml` 执行格式、模块、golangci-lint 2.12.2（`event_worker` 标签）、完整 race 与 event worker 测试。数据库迁移和数据库测试使用隔离的 pgvector PostgreSQL 16；镜像或运维修改还需运行相应生命周期与运行时检查。
 
-#### 后端
-```bash
-cd backend
-
-# 使用 CI 固定的 golangci-lint v2
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
-  run --timeout=5m --build-tags=event_worker
-
-# 运行测试
-go test -v -race ./...
-go test -v -race -tags=event_worker ./cmd/event-worker
-```
-
-## CD 工作流 (docker-build.yml)
-
-### 功能
-- 多平台构建 (AMD64, ARM64)
-- 自动版本标签
-- 推送到 GitHub Container Registry
-- 构建缓存优化
-
-### 镜像标签策略
-- `latest`: 最新的 main 分支构建
-- `main`: main 分支的最新版本
-- `v1.0.0`: 语义化版本标签
-- `main-abc1234`: 分支名+短 SHA
-
-## 最佳实践
-
-### 开发流程
-1. 创建功能分支
-2. 开发并本地测试
-3. 提交 Pull Request
-4. CI 自动检查代码质量
-5. 代码审查
-6. 合并到 main
-7. CD 自动构建和发布 Docker 镜像
-
-### 修复 CI 失败
-1. 查看 Actions 标签页的错误日志
-2. 本地运行相应的检查命令
-3. 修复问题
-4. 推送修复
-
-### golangci-lint 配置
-- 配置文件: `.golangci.yml`
-- 可以根据项目需求调整启用/禁用的检查器
-- 测试文件有更宽松的规则
-
-## 常见问题
-
-### Q: 如何跳过某个 lint 规则？
-A: 
-- 前端: 使用 `// eslint-disable-next-line` 注释
-- 后端: 使用 `//nolint:规则名` 注释
-
-### Q: 如何在本地模拟 CI 环境？
-A: 使用 Docker 运行相同的命令：
-使用 CI 固定的 golangci-lint v2.12.2：
+工作流修改执行 actionlint 1.7.7 和发布契约测试：
 
 ```bash
-cd backend
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
-  run --timeout=5m --build-tags=event_worker
+go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+# 在已安装 PyYAML 6.0.2 的 Python 环境执行。
+python3 -m unittest discover -s scripts/ci -p 'test_*.py' -v
 ```
 
-### Q: CI 通过了但 CD 失败？
-A: 检查：
-- 环境变量是否正确设置
-- Docker 构建参数是否正确
-- Go 版本是否匹配
+全部修改结束后验证；验证后修改文件需重跑受影响检查。推送后确认该提交在对应产品流水线中的最终结果。

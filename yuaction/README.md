@@ -96,7 +96,7 @@ docker compose up -d --build
 
 ## 自动 Docker 发布（GHCR）
 
-由仓库根目录 `.github/workflows/ci.yml` 统一验证两个产品。全部检查通过后，`docker-build.yml` 发布同一提交的 DreamTrans、Edge 与 YuAction 前后端 AMD64 / ARM64 镜像，全部构建成功后才提升主站和 YuAction 的 `latest`。PR 只验证，不发布；版本标签沿用 DreamTrans 的统一发行版本。
+由 `.github/workflows/yuaction.yml` 独立验证 YuAction，仅 YuAction 或共享依赖改动触发。前后端 AMD64 / ARM64 镜像并行构建；YuAction 全部检查通过后，`docker-build.yml` 直接推送已验证产物，再提升 YuAction 的 `latest`，不等待主站流水线。YuAction 前后端固定为同一提交，可与主站提交不同。PR 只验证，不发布；版本标签继续支持 `v*`。
 
 ```text
 ghcr.io/coyumelabs/dreamtrans-yuaction-backend:latest

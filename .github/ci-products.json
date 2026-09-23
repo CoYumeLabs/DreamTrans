@@ -1,0 +1,25 @@
+{
+  "main": {
+    "exclude": [
+      "yuaction/**",
+      ".github/workflows/yuaction.yml"
+    ]
+  },
+  "yuaction": {
+    "include": [
+      "yuaction/**",
+      "backend/go.mod",
+      "backend/go.sum",
+      "backend/cmd/dreamtransctl/**",
+      "backend/internal/ops/**",
+      "backend/internal/edgehttp/**",
+      "backend/pkg/deployment/**",
+      "backend/internal/deployment/**",
+      "frontend/src/core/transcription/**",
+      ".github/workflows/yuaction.yml",
+      ".github/workflows/docker-build.yml",
+      ".github/ci-*.json",
+      "scripts/ci/**"
+    ]
+  }
+}

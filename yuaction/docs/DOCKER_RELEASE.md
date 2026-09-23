@@ -1,8 +1,8 @@
 # 自动 Docker 发布
 
-工作流统一位于 DreamTrans 仓库根目录：`.github/workflows/ci.yml` 完成两产品全部验证后，调用 `.github/workflows/docker-build.yml` 发布镜像。原 YuAction 独立工作流已移除。
+YuAction 使用仓库根目录的独立工作流 `.github/workflows/yuaction.yml`。YuAction 与共享依赖变更触发完整验证，全部通过后调用 `.github/workflows/docker-build.yml` 直接发布已构建产物，不等待主站流水线，也不重新构建镜像。
 
-推送 main、版本标签或手动运行主分支会验证并发行；PR 只验证。主站、Edge、YuAction 后端和前端采用同一提交号。全部镜像构建成功后才提升 main 的 latest，提升前重新检查远端 main。跨镜像标签更新不是原子操作；安装器按后端镜像的提交标签拉取匹配前端。
+推送 main、版本标签或手动运行主分支会验证并发行；PR 只验证。YuAction 后端和前端采用同一提交号，可与主站不同。组件和架构并行构建；本产品全部检查及平台发布成功后才提升自己的 latest，提升前检查远端 main 中 YuAction 及其共享输入是否仍对应已验证内容。跨镜像标签更新不是原子操作；安装器按后端镜像的提交标签拉取匹配前端。
 
 完整迁移和部署边界见 [合仓说明](../../docs/deployment/yuaction-monorepo.md)。YuAction 保留端口与独立容器，仍使用原地更新。
 
@@ -15,7 +15,7 @@ ghcr.io/coyumelabs/dreamtrans-yuaction-frontend:latest
 
 - 每次发布都有 `sha-<完整40位commit SHA>` 标签，前后端一致，便于固定版本和回退。
 - 推送 `v0.1.0` 这样的 SemVer 标签时，额外生成 `0.1.0` 镜像标签；预发布版本保留后缀。
-- 镜像附带源码、提交信息、构建 provenance 和 SBOM；各组件摘要记录在 Actions 运行摘要中。
+- 镜像附带源码和提交信息；传输产物校验归档 SHA-256、架构和测试时的镜像 ID，各组件摘要记录在 Actions 运行摘要中。Docker 归档传输不携带 BuildKit attestation，不将其描述为已签名 provenance 或 SBOM。
 - 使用仓库的 `GITHUB_TOKEN` 和仅发布任务授予的 `packages: write`，不需要新增 Docker Hub 密码。
 
 ## 拉取与运行

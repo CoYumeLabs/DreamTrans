@@ -1,234 +1,99 @@
-name: Build and Push Docker Image
-
-on:
-  # Called only after ci.yml has completed both test and image-verification
-  # jobs. Keep image publication out of direct push triggers so :latest never
-  # races ahead of the quality gate.
+name: Publish tested image artifacts
+'on':
   workflow_call:
     inputs:
-      build_time:
-        description: Build timestamp shared with the verified amd64 artifact
+      product:
+        description: 'Independent product: main or yuaction'
         required: true
         type: string
-
 concurrency:
-  # A called workflow inherits the caller's github.workflow value. Use a
-  # publication-specific prefix so this job cannot cancel its own CI caller.
-  group: dreamtrans-image-publish-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  REGISTRY: ghcr.io
-  # Use lowercase image name to satisfy GHCR naming requirements
-  IMAGE_NAME: ${{ github.repository_owner }}/dreamtrans
-
+  group: publish-${{ inputs.product }}-${{ github.ref }}
+  cancel-in-progress: false
+permissions:
+  contents: read
 jobs:
-  build-and-push:
-    runs-on: ubuntu-latest
+  prepare:
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'pull_request'
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select verified product artifacts
+        run: |
+          echo "matrix=$(python3 scripts/ci/images.py matrix "$PRODUCT" --publish)" >> "$GITHUB_OUTPUT"
+        env:
+          PRODUCT: ${{ inputs.product }}
+        id: matrix
+  push-platforms:
+    name: Push ${{ matrix.component }} (${{ matrix.arch }})
+    needs: prepare
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
-      
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Verify main branch freshness
-        if: github.ref == 'refs/heads/main'
-        shell: bash
-        env:
-          EXPECTED_SHA: ${{ github.sha }}
+      - uses: actions/checkout@v4
+      - name: Download the tested image
+        uses: actions/download-artifact@v4
+        with:
+          name: image-${{ matrix.component }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/image
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify identity and push without rebuilding
         run: |
-          set -euo pipefail
-          remote_main_sha=""
-          for attempt in 1 2 3; do
-            if remote_main_sha="$(
-              git ls-remote --exit-code origin refs/heads/main |
-                awk 'NR == 1 { print $1 }'
-            )" && [[ -n "$remote_main_sha" ]]; then
-              break
-            fi
-            remote_main_sha=""
-            if [[ "$attempt" -lt 3 ]]; then
-              echo "Unable to resolve remote main (attempt $attempt/3); retrying..."
-              sleep "$((attempt * 2))"
-            fi
-          done
-          if [[ ! "$remote_main_sha" =~ ^[0-9a-f]{40,64}$ ]]; then
-            echo "::error::Unable to resolve a valid remote main commit."
-            exit 1
-          fi
-          if [[ "$remote_main_sha" != "$EXPECTED_SHA" ]]; then
-            echo "::error::Refusing stale main publication. Expected $remote_main_sha, workflow has $EXPECTED_SHA."
-            exit 1
-          fi
-          echo "Remote main is current at $EXPECTED_SHA."
-
-      - name: Set up QEMU
-        # setup-qemu-action v3, pinned to an immutable commit.
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        
-      - name: Log in to GHCR (retry)
-        if: github.event_name != 'pull_request'
-        uses: nick-fields/retry@v2
-        with:
-          max_attempts: 5
-          retry_wait_seconds: 10
-          timeout_minutes: 2
-          command: |
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-          
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          # Disable metadata-action's implicit semver -> latest behavior.
-          # Latest is promoted only after every component has been published.
-          flavor: |
-            latest=false
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=sha-,format=short
-            type=sha,prefix=sha-,format=long
-            
-      - name: Build and push Docker image
-        id: main-image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: |
-            type=gha,scope=dreamtrans-app
-            type=gha
-          cache-to: type=gha,mode=max,scope=dreamtrans-app
-          platforms: linux/amd64,linux/arm64
-          build-args: |
-            VCS_REF=${{ github.sha }}
-            VITE_APP_COMMIT=${{ github.sha }}
-            VITE_APP_BUILD_TIME=${{ inputs.build_time }}
-          
-      - name: Extract immutable Edge metadata
-        id: edge-meta
-        uses: docker/metadata-action@v5
-        with:
-          # Reuse the existing public package, with a separate immutable Edge tag.
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          flavor: latest=false
-          tags: type=raw,value=edge-${{ github.sha }}
-
-      - name: Build and push verified Edge image
-        id: edge-image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: backend/Dockerfile.edge
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.edge-meta.outputs.tags }}
-          labels: ${{ steps.edge-meta.outputs.labels }}
-          cache-from: type=gha,scope=dreamtrans-edge
-          cache-to: type=gha,mode=max,scope=dreamtrans-edge
-          platforms: linux/amd64,linux/arm64
-
-      - name: YuAction backend image metadata
-        id: yuaction-backend-meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/dreamtrans-yuaction-backend
-          flavor: latest=false
-          tags: |
-            type=sha,prefix=sha-,format=long
-            type=semver,pattern={{version}}
-      - name: Publish verified YuAction backend
-        id: yuaction-backend
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: yuaction/backend/Dockerfile
-          push: true
-          tags: ${{ steps.yuaction-backend-meta.outputs.tags }}
-          labels: ${{ steps.yuaction-backend-meta.outputs.labels }}
-          platforms: linux/amd64,linux/arm64
-          cache-from: type=gha,scope=yuaction-backend
-          cache-to: type=gha,mode=max,scope=yuaction-backend
-
-      - name: YuAction frontend image metadata
-        id: yuaction-frontend-meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/dreamtrans-yuaction-frontend
-          flavor: latest=false
-          tags: |
-            type=sha,prefix=sha-,format=long
-            type=semver,pattern={{version}}
-      - name: Publish verified YuAction frontend
-        id: yuaction-frontend
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: yuaction/frontend/Dockerfile
-          push: true
-          tags: ${{ steps.yuaction-frontend-meta.outputs.tags }}
-          labels: ${{ steps.yuaction-frontend-meta.outputs.labels }}
-          platforms: linux/amd64,linux/arm64
-          cache-from: type=gha,scope=yuaction-frontend
-          cache-to: type=gha,mode=max,scope=yuaction-frontend
-
-      - name: Promote complete main release
-        if: github.ref == 'refs/heads/main'
+          python3 scripts/ci/images.py push "$COMPONENT" "$ARCH" "$RUNNER_TEMP/image"
         env:
-          MAIN_DIGEST: ${{ steps.main-image.outputs.digest }}
-          YUACTION_BACKEND_DIGEST: ${{ steps.yuaction-backend.outputs.digest }}
-          YUACTION_FRONTEND_DIGEST: ${{ steps.yuaction-frontend.outputs.digest }}
-        run: |
-          set -euo pipefail
-          current="$(git ls-remote --exit-code origin refs/heads/main | awk 'NR == 1 {print $1}')"
-          if [[ "$current" != "$GITHUB_SHA" ]]; then
-            echo 'Newer main exists; retaining immutable images without moving latest.'
-            exit 0
-          fi
-          repository="${REGISTRY}/${IMAGE_NAME,,}"
-          docker buildx imagetools create --tag "${repository}-yuaction-backend:latest" "${repository}-yuaction-backend@${YUACTION_BACKEND_DIGEST}"
-          docker buildx imagetools create --tag "${repository}-yuaction-frontend:latest" "${repository}-yuaction-frontend@${YUACTION_FRONTEND_DIGEST}"
-          docker buildx imagetools create --tag "${repository}:latest" "${repository}@${MAIN_DIGEST}"
-
-      - name: Record immutable release references
-        if: github.event_name != 'pull_request'
-        env:
-          MAIN_DIGEST: ${{ steps.main-image.outputs.digest }}
-          EDGE_DIGEST: ${{ steps.edge-image.outputs.digest }}
-          YUACTION_BACKEND_DIGEST: ${{ steps.yuaction-backend.outputs.digest }}
-          YUACTION_FRONTEND_DIGEST: ${{ steps.yuaction-frontend.outputs.digest }}
-        run: |
-          repository="${REGISTRY}/${IMAGE_NAME,,}"
-          python3 - "$repository" <<'PYTHON'
-          import json, os, sys
-          manifest = {
-              "commit": os.environ["GITHUB_SHA"],
-              "main_image": sys.argv[1] + "@" + os.environ["MAIN_DIGEST"],
-              "edge_image": sys.argv[1] + "@" + os.environ["EDGE_DIGEST"],
-              "yuaction_backend_image": sys.argv[1] + "-yuaction-backend@" + os.environ["YUACTION_BACKEND_DIGEST"],
-              "yuaction_frontend_image": sys.argv[1] + "-yuaction-frontend@" + os.environ["YUACTION_FRONTEND_DIGEST"],
-          }
-          with open("release-images.json", "w") as output:
-              json.dump(manifest, output, indent=2)
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
-              summary.write("Verified release images (pin these digests):\n\n```json\n")
-              summary.write(json.dumps(manifest, indent=2) + "\n```\n")
-          PYTHON
-
-      - name: Upload release manifest
-        if: github.event_name != 'pull_request'
+          COMPONENT: ${{ matrix.component }}
+          ARCH: ${{ matrix.arch }}
+      - name: Pass immutable platform digest to promotion
         uses: actions/upload-artifact@v4
         with:
-          name: release-images-${{ github.sha }}
-          path: release-images.json
+          name: digest-${{ matrix.component }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/image/digest-*.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
+  promote:
+    name: Promote complete verified product
+    needs:
+      - prepare
+      - push-platforms
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+      - name: Merge platforms and promote only current product contents
+        run: |
+          python3 scripts/ci/images.py release "$PRODUCT" "$RUNNER_TEMP/digests"
+        env:
+          PRODUCT: ${{ inputs.product }}
+      - name: Record immutable release references
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-images-${{ inputs.product }}-${{ github.sha }}
+          path: ${{ runner.temp }}/digests/release-images.json
+          if-no-files-found: error
+          overwrite: true
           retention-days: 30

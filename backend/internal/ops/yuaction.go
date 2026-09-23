@@ -289,8 +289,8 @@ func (c *controller) resumeYuActionInitial() {
 	c.progress("✓", "YuAction 固定端口入口已采用蓝绿；后续升级与回滚保持录音采集")
 }
 
-// A linked installation follows the same immutable commit as main. Standalone
-// YuAction installations keep their own port and independent lifecycle command.
+// Linked and standalone installations resolve the latest independently verified
+// YuAction release, then pin its frontend and backend to the same YuAction revision.
 func (c *controller) upgradeYuActionCompanion(o *options) {
 	root := filepath.Join(c.root, "yuaction")
 	if !exists(filepath.Join(root, ".bluegreen", "state.json")) {
@@ -300,10 +300,8 @@ func (c *controller) upgradeYuActionCompanion(o *options) {
 	labels := obj(obj(c.inspect("image", str(active["image"]))["Config"])["Labels"])
 	revision := str(labels["org.opencontainers.image.revision"])
 	need(regexp.MustCompile(`^[a-f0-9]{40}$`).MatchString(revision) && str(labels["org.opencontainers.image.source"]) == "https://github.com/CoYumeLabs/DreamTrans", "linked YuAction requires a verified official main revision; use its independent command for custom releases")
-	ref := "ghcr.io/coyumelabs/dreamtrans-yuaction-backend:sha-" + revision
-	c.docker("pull", ref)
-	image := str(c.inspect("image", ref)["Id"])
-	c.progress("YuAction", "主站已接流；使用同一提交自动迁移 YuAction 录音")
-	err := Run(c.ctx, []string{"yuaction", "--dir", root, "upgrade", "--image", image, "--observe", fmt.Sprint(o.observe), "--drain-timeout", fmt.Sprint(o.drainTimeout)}, c.out, c.errOut)
+	image, frontend := c.yuactionImages(&options{})
+	c.progress("YuAction", "主站已接流；使用 YuAction 独立验证的发行版迁移录音")
+	err := Run(c.ctx, []string{"yuaction", "--dir", root, "upgrade", "--image", image, "--frontend-image", frontend, "--observe", fmt.Sprint(o.observe), "--drain-timeout", fmt.Sprint(o.drainTimeout)}, c.out, c.errOut)
 	check(err, "main is upgraded; YuAction release remains recoverable with dreamtransctl yuaction --dir DIR resume")
 }

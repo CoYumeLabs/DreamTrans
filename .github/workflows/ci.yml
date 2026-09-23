@@ -1,27 +1,23 @@
 name: CI - Code Quality
-
-on:
+'on':
   push:
     branches:
       - main
     tags:
-      - 'v*'
+      - v*
+    paths-ignore:
+      - yuaction/**
+      - .github/workflows/yuaction.yml
   pull_request:
     branches:
       - main
-  workflow_dispatch:
-
+    paths-ignore:
+      - yuaction/**
+      - .github/workflows/yuaction.yml
+  workflow_dispatch: null
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  # Let an in-flight main/tag publication finish so frequent pushes cannot
-  # starve :latest. GitHub still keeps at most one pending run per group, so
-  # intermediate queued commits are coalesced to the newest one. PR checks can
-  # still cancel superseded runs to avoid wasting CI capacity.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
-# Product verification jobs and the security scan are
-# independent and run in parallel; publish-image gates on all of them, so the
-# split changes wall-clock time, not what a broken commit can publish.
 jobs:
   frontend:
     name: Frontend Lint & Test
@@ -31,35 +27,29 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '24.18.0'
-          cache: 'npm'
+          node-version: 24.18.0
+          cache: npm
           cache-dependency-path: frontend/package-lock.json
-
       - name: Install frontend dependencies
         run: npm ci
         working-directory: ./frontend
-
       - name: Inject build metadata (frontend)
         run: |
           echo "VITE_APP_COMMIT=${GITHUB_SHA}" >> .env.production
           echo "VITE_APP_BUILD_TIME=$(date -u +%FT%TZ)" >> .env.production
         working-directory: ./frontend
-
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
         working-directory: ./frontend
-
       - name: Verify frontend (shared with local pre-commit checks)
         run: npm run verify:ci
         working-directory: ./frontend
         env:
           VITE_BACKEND_URL: /
           VITE_BACKEND_WS_URL: /
-
       - name: Verify Moodle extension privacy boundary and builds
         working-directory: ./extension
         run: |
@@ -67,7 +57,6 @@ jobs:
           npm run type-check
           npm test
           npm run build
-
   backend:
     name: Backend Lint & Test
     runs-on: ubuntu-latest
@@ -80,23 +69,18 @@ jobs:
           POSTGRES_PASSWORD: dreamtrans-ci
         ports:
           - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U dreamtrans -d dreamtrans_test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+        options: --health-cmd "pg_isready -U dreamtrans -d dreamtrans_test" --health-interval 10s --health-timeout
+          5s --health-retries 5
     permissions:
       contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26.5'
+          go-version: 1.26.5
           cache-dependency-path: backend/go.sum
-
       - name: Check backend formatting
         run: |
           unformatted="$(gofmt -l .)"
@@ -106,17 +90,14 @@ jobs:
             exit 1
           fi
         working-directory: ./backend
-
       - name: Check and download Go modules
         run: |
           go mod tidy -diff
           go mod download
           go mod verify
         working-directory: ./backend
-
       - name: Verify migration bundle manifest
         run: bash scripts/tests/migration_bundle_test.sh
-
       - name: Apply migrations to pgvector PostgreSQL
         run: |
           bash scripts/migrate.sh
@@ -145,81 +126,67 @@ jobs:
         env:
           MIGRATIONS_DIR: ${{ github.workspace }}/backend/migrations
           PGHOST: 127.0.0.1
-          PGPORT: "5432"
+          PGPORT: '5432'
           PGDATABASE: dreamtrans_test
           PGUSER: dreamtrans
           PGPASSWORD: dreamtrans-ci
-
       - name: Verify legacy provider model migration
         run: bash scripts/tests/provider_models_migration_test.sh
         env:
           MIGRATIONS_DIR: ${{ github.workspace }}/backend/migrations
           PGHOST: 127.0.0.1
-          PGPORT: "5432"
+          PGPORT: '5432'
           PGDATABASE: dreamtrans_test
           PGUSER: dreamtrans
           PGPASSWORD: dreamtrans-ci
-
       - name: Verify legacy model catalog constraint migration
         run: bash scripts/tests/model_catalog_constraints_migration_test.sh
         env:
           MIGRATIONS_DIR: ${{ github.workspace }}/backend/migrations
           PGHOST: 127.0.0.1
-          PGPORT: "5432"
+          PGPORT: '5432'
           PGDATABASE: dreamtrans_test
           PGUSER: dreamtrans
           PGPASSWORD: dreamtrans-ci
-
       - name: Verify acquisition source migration replay
         run: bash scripts/tests/acquisition_migration_test.sh
         env:
           MIGRATIONS_DIR: ${{ github.workspace }}/backend/migrations
           PGHOST: 127.0.0.1
-          PGPORT: "5432"
+          PGPORT: '5432'
           PGDATABASE: dreamtrans_test
           PGUSER: dreamtrans
           PGPASSWORD: dreamtrans-ci
-
       - name: Lint backend with golangci-lint-action
-        # v9.3.0, pinned to the immutable release commit.
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a
         with:
           version: v2.12.2
           working-directory: backend
           args: --timeout=5m --build-tags=event_worker
-          skip-cache: true  # Skip cache to ensure fresh install
-
+          skip-cache: true
       - name: Test backend
         run: go test -v -race -coverprofile=coverage.txt ./...
         working-directory: ./backend
         env:
           DREAMTRANS_TEST_DATABASE_URL: postgres://dreamtrans:dreamtrans-ci@127.0.0.1:5432/dreamtrans_test?sslmode=disable
-
       - name: Test event worker
         run: go test -v -race -tags=event_worker ./cmd/event-worker
         working-directory: ./backend
-
       - name: Build standalone Go operations CLI
         run: |
           cd backend
           go build -o "${RUNNER_TEMP}/dreamtransctl" ./cmd/dreamtransctl
           echo "DREAMTRANS_CTL=${RUNNER_TEMP}/dreamtransctl" >> "$GITHUB_ENV"
-
       - name: Verify installer fresh lifecycle
         run: scripts/tests/install_fresh_lifecycle_test.sh
-
       - name: Verify installer administrator lifecycle
         run: scripts/tests/install_admin_update_test.sh
-
       - name: Backup script checks (mocked docker)
         run: bash scripts/tests/backup_test.sh
-
       - name: Verify Go operations bootstrap
         run: bash scripts/tests/go_ops_bootstrap_test.sh
-
       - name: Verify background draining with real systemd timers
         run: sudo env DREAMTRANS_CTL="$DREAMTRANS_CTL" python3 scripts/tests/drain_systemd_test.py
-
       - name: Verify blue-green controller failure recovery
         run: |
           python3 -m py_compile scripts/tests/legacy/*.py
@@ -228,186 +195,99 @@ jobs:
           python3 -m py_compile scripts/tests/go_ops_runtime_test.py
           python3 scripts/tests/release_controller_test.py
           python3 scripts/tests/edge_bootstrap_test.py
-
       - name: Upload backend coverage
         uses: codecov/codecov-action@v4
         with:
           file: ./backend/coverage.txt
           flags: backend
           token: ${{ secrets.CODECOV_TOKEN }}
-        continue-on-error: true  # Don't fail if codecov is not configured
-
-  yuaction:
-    name: YuAction Tests & Runtime
+        continue-on-error: true
+  security-scan:
+    name: Security Scan
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: yuaction
-          POSTGRES_PASSWORD: yuaction-test
-          POSTGRES_DB: yuaction_test
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U yuaction -d yuaction_test"
-          --health-interval 5s --health-timeout 3s --health-retries 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Run Trivy security scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+      - name: Upload Trivy scan results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: dreamtrans
+  workflow-checks:
+    name: CI workflow contracts
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.5'
-          cache-dependency-path: yuaction/backend/go.sum
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24.18.0'
-          cache: npm
-          cache-dependency-path: yuaction/frontend/package-lock.json
-      - name: Verify installer lifecycle and monorepo migration
+          go-version: 1.26.5
+          cache: false
+      - name: Check workflows and publication boundary
         run: |
-          bash -n yuaction/scripts/install.sh
-          python3 -m unittest discover -s yuaction/scripts/tests -v
-      - name: Verify Go dependencies, formatting and database migrations
-        working-directory: yuaction/backend
-        env:
-          TEST_DATABASE_URL: postgres://yuaction:yuaction-test@localhost:5432/yuaction_test?sslmode=disable
-        run: |
-          test -z "$(gofmt -l .)"
-          go mod tidy -diff
-          go mod download
-          go mod verify
-          go test -race ./...
-          go vet ./...
-      - name: Verify full YuAction browser suite
-        working-directory: yuaction/frontend
-        env:
-          CI: 'true'
-        run: |
-          npm ci
-          npx playwright install --with-deps chromium
-          npm run build
-          npm run test:e2e
-      - uses: docker/setup-buildx-action@v3
-      - name: Build YuAction backend
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: yuaction/backend/Dockerfile
-          load: true
-          tags: yuaction-backend-ci:${{ github.sha }}
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=https://github.com/CoYumeLabs/DreamTrans
-          cache-from: type=gha,scope=yuaction-backend
-          cache-to: type=gha,mode=max,scope=yuaction-backend
-      - name: Build YuAction frontend
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: yuaction/frontend/Dockerfile
-          load: true
-          tags: yuaction-frontend-ci:${{ github.sha }}
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=https://github.com/CoYumeLabs/DreamTrans
-          cache-from: type=gha,scope=yuaction-frontend
-          cache-to: type=gha,mode=max,scope=yuaction-frontend
-      - name: Verify independent port, persistence and container recreation
-        run: python3 yuaction/scripts/tests/runtime_test.py "yuaction-backend-ci:${GITHUB_SHA}" "yuaction-frontend-ci:${GITHUB_SHA}"
-      - name: Verify YuAction live blue/green upgrade and rollback
-        run: |
-          (cd yuaction/backend && CGO_ENABLED=0 go test -c -tags=e2e -o "${RUNNER_TEMP}/yuaction-upstream.test" ./internal/app)
-          sudo env YUACTION_RUNTIME_FIXTURE_BINARY="${RUNNER_TEMP}/yuaction-upstream.test" python3 yuaction/scripts/tests/bluegreen_runtime_test.py "yuaction-backend-ci:${GITHUB_SHA}" "yuaction-frontend-ci:${GITHUB_SHA}"
-
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: yuaction-browser-test-results
-          path: yuaction/frontend/test-results/
-
-  security-scan:
-    name: Security Scan
-    runs-on: ubuntu-latest
+          python3 -m venv "$RUNNER_TEMP/ci-tools"
+          "$RUNNER_TEMP/ci-tools/bin/pip" install --disable-pip-version-check PyYAML==6.0.2
+          "$RUNNER_TEMP/ci-tools/bin/python" -m unittest discover -s scripts/ci -p 'test_*.py' -v
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -color
+  metadata:
+    name: Build matrix and shared metadata
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
-      security-events: write  # Required for uploading SARIF files
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Run Trivy security scan
-        # v0.36.0, pinned by commit instead of a mutable branch or tag.
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-
-      - name: Upload Trivy scan results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: 'trivy-results.sarif'
-
-  # Separate job for build verification
-  build-verification:
-    name: Build Verification
-    runs-on: ubuntu-latest
     outputs:
-      build_time: ${{ steps.build-metadata.outputs.build_time }}
+      matrix: ${{ steps.meta.outputs.matrix }}
+      build_time: ${{ steps.meta.outputs.build_time }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Compute shared build metadata
-        id: build-metadata
-        shell: bash
-        run: echo "build_time=$(date -u +%FT%TZ)" >> "$GITHUB_OUTPUT"
-
-      - name: Build final production image
+      - uses: actions/checkout@v4
+      - name: Prepare image matrix
+        run: |
+          echo "matrix=$(python3 scripts/ci/images.py matrix main)" >> "$GITHUB_OUTPUT"
+          echo "build_time=$(date -u +%FT%TZ)" >> "$GITHUB_OUTPUT"
+        id: meta
+  build-verification:
+    name: Build and verify ${{ matrix.component }} (${{ matrix.arch }})
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.metadata.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build candidate once
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
           load: true
           push: false
-          tags: |
-            dreamtrans-ci:${{ github.sha }}
-            ghcr.io/coyumelabs/dreamtrans:ci-${{ github.sha }}
+          platforms: linux/${{ matrix.arch }}
+          tags: ${{ matrix.local_tag }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
           cache-from: |
-            type=gha,scope=dreamtrans-app
-            type=gha
-          cache-to: type=gha,mode=max,scope=dreamtrans-app
+            type=gha,scope=${{ matrix.cache }}-${{ matrix.arch }}
+            type=gha,scope=${{ matrix.cache }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.cache }}-${{ matrix.arch }}
           build-args: |
             VITE_APP_COMMIT=${{ github.sha }}
-            VITE_APP_BUILD_TIME=${{ steps.build-metadata.outputs.build_time }}
+            VITE_APP_BUILD_TIME=${{ needs.metadata.outputs.build_time }}
             VCS_REF=${{ github.sha }}
-
-      - name: Build standalone frontend image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./frontend
-          load: true
-          push: false
-          tags: dreamtrans-frontend-ci:${{ github.sha }}
-          cache-from: type=gha,scope=dreamtrans-frontend
-          cache-to: type=gha,mode=max,scope=dreamtrans-frontend
-
-      - name: Build isolated regional Edge image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: backend/Dockerfile.edge
-          load: true
-          push: false
-          tags: dreamtrans-edge-ci:${{ github.sha }}
-          cache-from: type=gha,scope=dreamtrans-edge
-          cache-to: type=gha,mode=max,scope=dreamtrans-edge
-
       - name: Verify Edge runtime identity and credential boundary
         run: |
           image="dreamtrans-edge-ci:${GITHUB_SHA}"
@@ -429,23 +309,23 @@ jobs:
             exit 1
           fi
           [[ "$output" == *'Edge refuses main-site secrets: DATABASE_URL'* ]]
-
+        if: matrix.component == 'edge'
       - name: Verify Edge audio and durable return under a small memory limit
         run: |
           artifact_dir="${RUNNER_TEMP}/dreamtrans-edge-runtime-${GITHUB_RUN_ID}"
           mkdir -p "$artifact_dir"
           docker buildx build -f backend/Dockerfile.edge \
             --target edge-runtime-test-binary \
-            --cache-from type=gha,scope=dreamtrans-edge \
+            --cache-from type=gha,scope=dreamtrans-edge-${{ matrix.arch }} \
             --output "type=local,dest=${artifact_dir}" .
           docker run --rm --memory=256m --memory-swap=256m --cpus=1 \
             --entrypoint /tmp/edge-runtime.test \
             --mount "type=bind,src=${artifact_dir}/edge-runtime.test,dst=/tmp/edge-runtime.test,readonly" \
             "dreamtrans-edge-ci:${GITHUB_SHA}" -test.v -test.count=1 -test.timeout=2m
-
+        if: matrix.component == 'edge'
       - name: Verify Edge admission state survives process restart
         run: python3 scripts/tests/edge_restart_test.py "dreamtrans-edge-ci:${GITHUB_SHA}"
-
+        if: matrix.component == 'edge'
       - name: Verify final image contents and runtime identity
         run: |
           image="dreamtrans-ci:${GITHUB_SHA}"
@@ -515,14 +395,14 @@ jobs:
           done
           docker logs "$container"
           exit 1
-
+        if: matrix.component == 'main'
       - name: Verify file extraction in the production runtime
         run: |
           artifact_dir="${RUNNER_TEMP}/dreamtrans-extraction-${GITHUB_RUN_ID}"
           mkdir -p "$artifact_dir"
           docker buildx build \
             --target knowledge-extraction-test-binary \
-            --cache-from type=gha,scope=dreamtrans-app \
+            --cache-from type=gha,scope=dreamtrans-app-amd64 \
             --output "type=local,dest=${artifact_dir}" \
             .
           test -x "${artifact_dir}/knowledge-extraction.test"
@@ -536,7 +416,7 @@ jobs:
             -test.count=1 \
             -test.timeout=5m \
             -test.run '^TestLinuxKnowledgeExtractionFixtures$'
-
+        if: matrix.component == 'main' && matrix.arch == 'amd64'
       - name: Extract standalone Go operations CLI from the verified image
         run: |
           artifact="${RUNNER_TEMP}/dreamtransctl"
@@ -546,28 +426,29 @@ jobs:
           chmod 0700 "$artifact"
           "$artifact" help
           echo "DREAMTRANS_CTL=$artifact" >> "$GITHUB_ENV"
-
+        if: matrix.component == 'main' && matrix.arch == 'amd64'
       - name: Verify legacy appdata permission migration
         run: |
           scripts/tests/install_appdata_permissions_test.sh \
             "dreamtrans-ci:${GITHUB_SHA}"
-
+        if: matrix.component == 'main' && matrix.arch == 'amd64'
       - name: Verify restored deployment updates and recovery
         run: |
           scripts/tests/install_restored_update_test.sh \
             "dreamtrans-ci:${GITHUB_SHA}"
-
+        if: matrix.component == 'main' && matrix.arch == 'amd64'
       - name: Verify Go lifecycle on existing production-shaped volumes
         run: sudo env DREAMTRANS_CTL="$DREAMTRANS_CTL" python3 scripts/tests/go_ops_runtime_test.py "dreamtrans-ci:${GITHUB_SHA}"
-
+        if: matrix.component == 'main' && matrix.arch == 'amd64'
       - name: Verify full backup restoration with production Docker tooling
         run: python3 scripts/tests/backup_snapshot_runtime_test.py "dreamtrans-ci:${GITHUB_SHA}"
-
+        if: matrix.component == 'main' && matrix.arch == 'amd64'
       - name: Verify stable companion routing after recreation
         run: python3 scripts/tests/proxy_network_runtime_test.py "dreamtrans-ci:${GITHUB_SHA}"
-
+        if: matrix.component == 'main' && matrix.arch == 'amd64'
       - name: Verify Compose migrations and readiness
         run: |
+          docker tag "dreamtrans-ci:${GITHUB_SHA}" "ghcr.io/coyumelabs/dreamtrans:ci-${GITHUB_SHA}"
           project="dreamtrans-ci-${GITHUB_RUN_ID}"
           export IMAGE_TAG="ci-${GITHUB_SHA}"
           export BIND_ADDRESS="127.0.0.1"
@@ -599,7 +480,7 @@ jobs:
           done
           docker compose -p "$project" logs --tail=100
           exit 1
-
+        if: matrix.component == 'main' && matrix.arch == 'amd64'
       - name: Verify standalone frontend runtime
         run: |
           image="dreamtrans-frontend-ci:${GITHUB_SHA}"
@@ -627,23 +508,39 @@ jobs:
           done
           docker logs "$container"
           exit 1
-
-  # Publication is deliberately downstream of both the source/test gate and
-  # the production-image verification gate. A failing push can no longer
-  # replace the mutable :latest tag with an unverified image.
+        if: matrix.component == 'frontend'
+      - name: Export the tested image
+        run: |
+          python3 scripts/ci/images.py export "$COMPONENT" "$ARCH" "$RUNNER_TEMP/image"
+        env:
+          COMPONENT: ${{ matrix.component }}
+          ARCH: ${{ matrix.arch }}
+        if: matrix.publish
+      - name: Transfer tested image to publication
+        if: matrix.publish
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-${{ matrix.component }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/image/
+          if-no-files-found: error
+          overwrite: true
+          compression-level: 1
+          retention-days: 1
   publish-image:
-    name: Publish verified application image
+    name: Publish tested main and Edge images
     if: github.event_name != 'pull_request'
     needs:
       - frontend
       - backend
       - security-scan
-      - yuaction
+      - workflow-checks
       - build-verification
     permissions:
       contents: read
       packages: write
     uses: ./.github/workflows/docker-build.yml
     with:
-      build_time: ${{ needs.build-verification.outputs.build_time }}
+      product: main
     secrets: inherit
+permissions:
+  contents: read

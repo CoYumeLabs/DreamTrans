@@ -1,0 +1,7 @@
+{
+  "main": {"product": "main", "repository": "dreamtrans", "tag_prefix": "sha-", "local_tag": "dreamtrans-ci", "context": ".", "file": "Dockerfile", "cache": "dreamtrans-app", "architectures": ["amd64", "arm64"], "publish": true},
+  "edge": {"product": "main", "repository": "dreamtrans", "tag_prefix": "edge-", "local_tag": "dreamtrans-edge-ci", "context": ".", "file": "backend/Dockerfile.edge", "cache": "dreamtrans-edge", "architectures": ["amd64", "arm64"], "publish": true},
+  "frontend": {"product": "main", "repository": "", "tag_prefix": "", "local_tag": "dreamtrans-frontend-ci", "context": "./frontend", "file": "frontend/Dockerfile", "cache": "dreamtrans-frontend", "architectures": ["amd64"], "publish": false},
+  "yuaction-backend": {"product": "yuaction", "repository": "dreamtrans-yuaction-backend", "tag_prefix": "sha-", "local_tag": "yuaction-backend-ci", "context": ".", "file": "yuaction/backend/Dockerfile", "cache": "yuaction-backend", "architectures": ["amd64", "arm64"], "publish": true},
+  "yuaction-frontend": {"product": "yuaction", "repository": "dreamtrans-yuaction-frontend", "tag_prefix": "sha-", "local_tag": "yuaction-frontend-ci", "context": ".", "file": "yuaction/frontend/Dockerfile", "cache": "yuaction-frontend", "architectures": ["amd64", "arm64"], "publish": true}
+}

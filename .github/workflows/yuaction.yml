@@ -1,0 +1,252 @@
+name: YuAction CI/CD
+'on':
+  push:
+    branches:
+      - main
+    tags:
+      - v*
+    paths:
+      - yuaction/**
+      - backend/go.mod
+      - backend/go.sum
+      - backend/cmd/dreamtransctl/**
+      - backend/internal/ops/**
+      - backend/internal/edgehttp/**
+      - backend/pkg/deployment/**
+      - backend/internal/deployment/**
+      - frontend/src/core/transcription/**
+      - .github/workflows/yuaction.yml
+      - .github/workflows/docker-build.yml
+      - .github/ci-*.json
+      - scripts/ci/**
+  pull_request:
+    branches:
+      - main
+    paths:
+      - yuaction/**
+      - backend/go.mod
+      - backend/go.sum
+      - backend/cmd/dreamtransctl/**
+      - backend/internal/ops/**
+      - backend/internal/edgehttp/**
+      - backend/pkg/deployment/**
+      - backend/internal/deployment/**
+      - frontend/src/core/transcription/**
+      - .github/workflows/yuaction.yml
+      - .github/workflows/docker-build.yml
+      - .github/ci-*.json
+      - scripts/ci/**
+  workflow_dispatch: null
+concurrency:
+  group: yuaction-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+permissions:
+  contents: read
+jobs:
+  backend:
+    name: YuAction backend and installer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: yuaction
+          POSTGRES_PASSWORD: yuaction-test
+          POSTGRES_DB: yuaction_test
+        ports:
+          - 5432:5432
+        options: --health-cmd "pg_isready -U yuaction -d yuaction_test" --health-interval 5s --health-timeout 3s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.5
+          cache-dependency-path: yuaction/backend/go.sum
+      - name: Verify installer lifecycle and monorepo migration
+        run: |
+          bash -n yuaction/scripts/install.sh
+          python3 -m unittest discover -s yuaction/scripts/tests -v
+      - name: Verify Go dependencies, formatting and database migrations
+        working-directory: yuaction/backend
+        env:
+          TEST_DATABASE_URL: postgres://yuaction:yuaction-test@localhost:5432/yuaction_test?sslmode=disable
+        run: |
+          test -z "$(gofmt -l .)"
+          go mod tidy -diff
+          go mod download
+          go mod verify
+          go test -race ./...
+          go vet ./...
+  frontend:
+    name: YuAction full browser suite
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: yuaction/frontend/package-lock.json
+      - name: Verify full YuAction browser suite
+        working-directory: yuaction/frontend
+        env:
+          CI: 'true'
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run build
+          npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: yuaction-browser-test-results
+          path: yuaction/frontend/test-results/
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Run Trivy security scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+      - name: Upload Trivy scan results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: yuaction
+  workflow-checks:
+    name: CI workflow contracts
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.5
+          cache: false
+      - name: Check workflows and publication boundary
+        run: |
+          python3 -m venv "$RUNNER_TEMP/ci-tools"
+          "$RUNNER_TEMP/ci-tools/bin/pip" install --disable-pip-version-check PyYAML==6.0.2
+          "$RUNNER_TEMP/ci-tools/bin/python" -m unittest discover -s scripts/ci -p 'test_*.py' -v
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -color
+  metadata:
+    name: Build matrix and shared metadata
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.meta.outputs.matrix }}
+      build_time: ${{ steps.meta.outputs.build_time }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare image matrix
+        run: |
+          echo "matrix=$(python3 scripts/ci/images.py matrix yuaction)" >> "$GITHUB_OUTPUT"
+          echo "build_time=$(date -u +%FT%TZ)" >> "$GITHUB_OUTPUT"
+        id: meta
+  images:
+    name: Build and verify ${{ matrix.component }} (${{ matrix.arch }})
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.metadata.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build candidate once
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          load: true
+          push: false
+          platforms: linux/${{ matrix.arch }}
+          tags: ${{ matrix.local_tag }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: |
+            type=gha,scope=${{ matrix.cache }}-${{ matrix.arch }}
+            type=gha,scope=${{ matrix.cache }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.cache }}-${{ matrix.arch }}
+          build-args: |
+            VITE_APP_COMMIT=${{ github.sha }}
+            VITE_APP_BUILD_TIME=${{ needs.metadata.outputs.build_time }}
+            VCS_REF=${{ github.sha }}
+      - name: Export the tested image
+        run: |
+          python3 scripts/ci/images.py export "$COMPONENT" "$ARCH" "$RUNNER_TEMP/image"
+        env:
+          COMPONENT: ${{ matrix.component }}
+          ARCH: ${{ matrix.arch }}
+        if: matrix.publish
+      - name: Transfer tested image to publication
+        if: matrix.publish
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-${{ matrix.component }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/image/
+          if-no-files-found: error
+          overwrite: true
+          compression-level: 1
+          retention-days: 1
+  runtime:
+    name: YuAction image and upgrade runtime
+    needs: images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.5
+          cache-dependency-path: yuaction/backend/go.sum
+      - name: Download tested AMD64 images
+        uses: actions/download-artifact@v4
+        with:
+          pattern: image-yuaction-*-amd64
+          path: ${{ runner.temp }}/images
+      - name: Load and verify the transferred images
+        run: |
+          for component in yuaction-backend yuaction-frontend; do
+            python3 scripts/ci/images.py load "$component" amd64 "$RUNNER_TEMP/images/image-${component}-amd64"
+          done
+      - name: Verify independent port, persistence and container recreation
+        run: python3 yuaction/scripts/tests/runtime_test.py "yuaction-backend-ci:${GITHUB_SHA}" "yuaction-frontend-ci:${GITHUB_SHA}"
+      - name: Verify YuAction live blue/green upgrade and rollback
+        run: |
+          (cd yuaction/backend && CGO_ENABLED=0 go test -c -tags=e2e -o "${RUNNER_TEMP}/yuaction-upstream.test" ./internal/app)
+          sudo env YUACTION_RUNTIME_FIXTURE_BINARY="${RUNNER_TEMP}/yuaction-upstream.test" python3 yuaction/scripts/tests/bluegreen_runtime_test.py "yuaction-backend-ci:${GITHUB_SHA}" "yuaction-frontend-ci:${GITHUB_SHA}"
+  publish-image:
+    name: Publish tested YuAction images
+    if: github.event_name != 'pull_request'
+    needs:
+      - backend
+      - frontend
+      - security-scan
+      - workflow-checks
+      - runtime
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker-build.yml
+    with:
+      product: yuaction
+    secrets: inherit
