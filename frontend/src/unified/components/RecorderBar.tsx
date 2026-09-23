@@ -16,7 +16,7 @@ interface RecorderBarProps {
   durationLabel: string
   onAssistant: () => void
   onContinue: () => void
-  onMore: () => void
+  onInsights: () => void
   onPauseToggle: () => void
   onStart: () => void
   onStop: () => void
@@ -29,7 +29,7 @@ export function RecorderBar({
   durationLabel,
   onAssistant,
   onContinue,
-  onMore,
+  onInsights,
   onPauseToggle,
   onStart,
   onStop,
@@ -111,13 +111,13 @@ export function RecorderBar({
         </div>
 
         <button
-          aria-label={m.recorder.moreTools}
+          aria-label={m.recorder.openInsights}
           className="dt-recorder__utility"
-          onClick={onMore}
+          onClick={onInsights}
           type="button"
         >
-          <Icon name="more" />
-          <span>{m.recorder.more}</span>
+          <Icon name="wave" />
+          <span>{m.recorder.insights}</span>
         </button>
       </div>
     </div>

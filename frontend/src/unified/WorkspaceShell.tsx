@@ -24,6 +24,7 @@ import type { SessionCostView, TransportDiagnostics } from './hooks/useUnifiedWo
 import { BatchTranscribePanel } from './components/BatchTranscribePanel'
 import { AccountPanel } from './components/AccountPanel'
 import { BrandMark } from './components/BrandMark'
+import { ExportMenu } from './components/ExportMenu'
 import { AssistantPanel } from './components/AssistantPanel'
 import { GuideTour, type TourStep } from './components/GuideTour'
 import {
@@ -103,7 +104,7 @@ export interface WorkspaceShellProps {
   onTrainingOptInChange: (optIn: boolean) => Promise<boolean>
 }
 
-type PanelName = 'batch' | 'assistant' | 'history' | 'insights' | 'settings' | 'tools' | 'account'
+type PanelName = 'batch' | 'assistant' | 'history' | 'insights' | 'settings' | 'account'
 
 const statusTone: Record<RecorderStatus, string> = {
   idle: 'neutral',
@@ -622,14 +623,7 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
               <Icon name="cloud" size={16} />
               {connectionLabel}
             </span>
-            <button
-              aria-label={w.hints.downloads}
-              className="dt-icon-button"
-              onClick={() => setPanel('tools')}
-              type="button"
-            >
-              <Icon name="download" />
-            </button>
+            <ExportMenu onDownloadAudio={onDownloadAudio} onDownloadText={onDownloadText} />
             <button
               aria-label={m.common.settings}
               className="dt-icon-button"
@@ -641,7 +635,7 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
             </button>
             <button
               aria-label={m.common.account}
-              className="dt-topbar__avatar"
+              className="dt-topbar__avatar dt-mobile-only"
               data-tour="account-mobile"
               onClick={() => setPanel('account')}
               type="button"
@@ -838,7 +832,7 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
           durationLabel={durationLabel}
           onAssistant={() => setPanel('assistant')}
           onContinue={() => { void onContinue() }}
-          onMore={() => setPanel('tools')}
+          onInsights={() => setPanel('insights')}
           onPauseToggle={onPauseToggle}
           onStart={() => { void onStart() }}
           onStop={() => { void onStop() }}
@@ -997,47 +991,6 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
       </Sheet>
 
       <Sheet
-        description={w.sheets.tools.description}
-        eyebrow={w.sheets.tools.eyebrow}
-        onClose={closePanel}
-        open={panel === 'tools'}
-        title={w.sheets.tools.title}
-      >
-        <div className="dt-export-list">
-          <ExportButton
-            description={w.exports.insights.description}
-            icon="wave"
-            label={w.exports.insights.label}
-            onClick={() => setPanel('insights')}
-          />
-          <ExportButton
-            description={w.exports.audio.description}
-            icon="download"
-            label={w.exports.audio.label}
-            onClick={onDownloadAudio}
-          />
-          <ExportButton
-            description={w.exports.bilingual.description}
-            icon="message"
-            label={w.exports.bilingual.label}
-            onClick={() => onDownloadText('bilingual')}
-          />
-          <ExportButton
-            description={w.exports.original.description}
-            icon="archive"
-            label={w.exports.original.label}
-            onClick={() => onDownloadText('original')}
-          />
-          <ExportButton
-            description={w.exports.translation.description}
-            icon="language"
-            label={w.exports.translation.label}
-            onClick={() => onDownloadText('translation')}
-          />
-        </div>
-      </Sheet>
-
-      <Sheet
         description={user ? w.sheets.account.description : undefined}
         eyebrow={user ? w.sheets.account.eyebrow : w.sheets.account.localEyebrow}
         onClose={closePanel}
@@ -1072,21 +1025,6 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
                 route={account?.route}
                 onOptInChange={props.onTrainingOptInChange}
               />
-              {adminNavigation === 'enabled' && (
-                <a className="dt-button dt-button--primary dt-button--wide" href="/pro/admin">
-                  {w.account.openAdmin}
-                </a>
-              )}
-              {adminNavigation === 'disabled' && (
-                <button
-                  className="dt-button dt-button--primary dt-button--wide"
-                  disabled
-                  title={adminNavigationTitle}
-                  type="button"
-                >
-                  {w.account.openAdminAfter}
-                </button>
-              )}
               <button
                 className="dt-button dt-button--secondary dt-button--wide"
                 disabled={transitionBusy}
@@ -1173,36 +1111,5 @@ function LegacyHistoryNotice({
         {disabled ? legacy.afterRecording : busy ? legacy.migrating : legacy.migrate}
       </button>
     </div>
-  )
-}
-
-interface ExportButtonProps {
-  description: string
-  icon: 'archive' | 'download' | 'language' | 'message' | 'wave'
-  label: string
-  onClick: () => Promise<void> | void
-}
-
-function ExportButton({ description, icon, label, onClick }: ExportButtonProps) {
-  const [busy, setBusy] = useState(false)
-  return (
-    <button
-      className="dt-export-item"
-      disabled={busy}
-      onClick={() => {
-        setBusy(true)
-        void Promise.resolve(onClick()).finally(() => setBusy(false))
-      }}
-      type="button"
-    >
-      <span className="dt-export-item__icon">
-        {busy ? <span className="dt-spinner" /> : <Icon name={icon} size={20} />}
-      </span>
-      <span>
-        <strong>{label}</strong>
-        <small>{description}</small>
-      </span>
-      <Icon name="arrow-down" size={17} />
-    </button>
   )
 }
