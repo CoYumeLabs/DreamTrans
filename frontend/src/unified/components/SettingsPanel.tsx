@@ -1,4 +1,3 @@
-import { EdgeRegionSelector } from './EdgeRegionSelector'
 import { useEffect, useState } from 'react'
 import {
   getAvailableModels,
@@ -154,9 +153,6 @@ export function SettingsPanel({
             >
               {s.openSessionSetup}
             </button>
-          </div>
-          <div className="dt-settings__edge">
-            <EdgeRegionSelector />
           </div>
           <section className="dt-settings__section">
             <div>

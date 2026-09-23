@@ -1,5 +1,6 @@
 import { authFetch } from '../../pro/api/auth'
 import type { EdgeAuthorization } from '../../core/transcription/RegionalEdge'
+import { readEdgeRegion } from './edgeRegions'
 
 export interface EdgeNode {
   id: string; name: string; region: string; endpoint: string; mode: string
@@ -26,7 +27,7 @@ export async function authorizeEdge(sessionId: string, sampleRate: number, conti
       : await fetch(node.endpoint + '/probe', { ...options, credentials: 'omit' })
     if (response.ok) latencies[node.id] = performance.now() - start
   }))
-  const region = requestedRegion ?? (localStorage.getItem('dreamtrans.edge.region') || 'auto')
+  const region = requestedRegion ?? readEdgeRegion()
   const result = await authFetch<EdgeAuthorization | { transport: 'main' }>('/api/edges/authorize', {
     method: 'POST',
     body: JSON.stringify({ preview, session_id: sessionId, protocol: 2, sample_rate: sampleRate,

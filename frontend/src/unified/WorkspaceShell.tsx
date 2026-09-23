@@ -42,9 +42,11 @@ import { SettingsPanel } from './components/SettingsPanel'
 import { Sheet } from './components/Sheet'
 import { TrainingProgramSection } from './components/TrainingProgramSection'
 import { useAnnouncements } from './hooks/useAnnouncements'
+import { useEdgeRegions } from './hooks/useEdgeRegions'
 import { useOnboarding } from './hooks/useOnboarding'
 import { adminNavigationState } from './workspace/adminNavigation'
 import { isInsufficientBalanceMessage } from './workspace/billingErrors'
+import { readEdgeRegion, writeEdgeRegion } from './workspace/edgeRegions'
 
 export interface WorkspaceStats {
   finalSegments: number
@@ -230,6 +232,20 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
   const [panel, setPanel] = useState<PanelName | null>(null)
   // The session-setup popover, anchored to the chip above the transcript.
   const [setupOpen, setSetupOpen] = useState(false)
+  const edgeRegions = useEdgeRegions(user?.id ?? null, user?.role ?? null)
+  const [storedEdgeRegion, setStoredEdgeRegion] = useState(readEdgeRegion)
+  // A stored region whose nodes are gone would otherwise be sent unseen.
+  const edgeRegion = edgeRegions.includes(storedEdgeRegion) ? storedEdgeRegion : 'auto'
+  useEffect(() => {
+    if (edgeRegions.length > 0 && storedEdgeRegion !== edgeRegion) {
+      writeEdgeRegion(edgeRegion)
+      setStoredEdgeRegion(edgeRegion)
+    }
+  }, [edgeRegions, edgeRegion, storedEdgeRegion])
+  const changeEdgeRegion = useCallback((region: string) => {
+    writeEdgeRegion(region)
+    setStoredEdgeRegion(region)
+  }, [])
   const [assistantDraft, setAssistantDraft] = useState('')
   // A /pro?session=<id> deep link (e.g. from the 学习空间) waiting for history.
   const [pendingSession, setPendingSession] = useState(consumeSessionDeepLink)
@@ -728,7 +744,10 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
           <div className="dt-feed-toolbar">
             <div className="dt-feed-toolbar__lead">
               <SessionSetup
+                edgeRegion={edgeRegion}
+                edgeRegions={edgeRegions}
                 locked={recorderStatus !== 'idle'}
+                onEdgeRegionChange={changeEdgeRegion}
                 open={setupOpen}
                 settings={settings}
                 variant="toolbar"
@@ -775,7 +794,10 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
                       {w.feed.start}
                     </button>
                     <SessionSetup
+                      edgeRegion={edgeRegion}
+                      edgeRegions={edgeRegions}
                       locked={recorderStatus !== 'idle'}
+                      onEdgeRegionChange={changeEdgeRegion}
                       open={setupOpen}
                       settings={settings}
                       variant="empty"

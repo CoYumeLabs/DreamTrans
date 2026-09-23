@@ -3,6 +3,7 @@ import type { AudioCaptureSource } from '../../core/audio/BrowserAudioCapture'
 import { useMessages } from '../../i18n'
 import type { UnifiedSettings } from '../hooks/useUnifiedSettings'
 import { usePopoverDismiss } from '../hooks/usePopoverDismiss'
+import { edgeRegionLabel } from '../workspace/edgeRegions'
 import { audioSourceLabel, languageLabel, languageOptions } from '../workspace/languageOptions'
 import { Icon } from './Icon'
 import { Toggle } from './Toggle'
@@ -20,6 +21,11 @@ interface SessionSetupProps {
   /** A session is running, so its capture and language setup are fixed. */
   locked: boolean
   settings: UnifiedSettings
+  /** Node regions this account may pick; empty hides the picker. */
+  edgeRegions: readonly string[]
+  /** `auto` or one of `edgeRegions`. */
+  edgeRegion: string
+  onEdgeRegionChange: (region: string) => void
   onOpenChange: (open: boolean) => void
   onChange: (patch: Partial<UnifiedSettings>) => void
   onOpenSettings: () => void
@@ -35,6 +41,9 @@ export function SessionSetup({
   open,
   locked,
   settings,
+  edgeRegions,
+  edgeRegion,
+  onEdgeRegionChange,
   onOpenChange,
   onChange,
   onOpenSettings,
@@ -50,6 +59,7 @@ export function SessionSetup({
   const languages = settings.translationEnabled
     ? `${languageLabel(settings.sourceLanguage)} → ${languageLabel(settings.targetLanguage)}`
     : `${languageLabel(settings.sourceLanguage)} · ${setup.originalOnly}`
+  const pinnedRegion = edgeRegions.length > 0 && edgeRegion !== 'auto' ? edgeRegionLabel(edgeRegion) : ''
 
   return (
     <div className={`dt-session-setup dt-session-setup--${variant}`} ref={rootRef}>
@@ -68,6 +78,12 @@ export function SessionSetup({
             <span>{audio}</span>
             <span aria-hidden="true">·</span>
             <span>{languages}</span>
+            {pinnedRegion && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span>{pinnedRegion}</span>
+              </>
+            )}
           </span>
           <Icon className="dt-session-setup__chevron" name="arrow-down" size={14} />
         </button>
@@ -150,6 +166,22 @@ export function SessionSetup({
               ))}
             </select>
           </label>
+          {edgeRegions.length > 0 && (
+            <label className="dt-field">
+              <span>{setup.region}</span>
+              <select
+                disabled={locked}
+                onChange={(event) => onEdgeRegionChange(event.target.value)}
+                value={edgeRegion}
+              >
+                <option value="auto">{setup.regionAuto}</option>
+                {edgeRegions.map((region) => (
+                  <option key={region} value={region}>{edgeRegionLabel(region)}</option>
+                ))}
+              </select>
+              <small>{setup.regionHint}</small>
+            </label>
+          )}
           <footer>
             <button
               className="dt-button dt-button--text dt-button--small"

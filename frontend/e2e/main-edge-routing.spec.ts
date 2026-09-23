@@ -78,8 +78,11 @@ async function setup(page: Page, transport: 'main' | 'edge', insufficientBalance
 
 test('main is selectable while Edge routing is enabled and uses the metered main socket', async ({ page }) => {
   const fixture = await setup(page, 'main')
-  await page.locator('[data-tour="settings"]').click()
-  await page.getByLabel('新转录会话接入地区').selectOption('main')
+  await page.locator('[data-tour="session-setup"]').click()
+  const node = page.getByLabel('接入节点')
+  await expect(node.locator('option')).toHaveText(['自动（按延迟和空闲容量选择）', '主站', '悉尼'])
+  await node.selectOption('main')
+  await expect(page.locator('[data-tour="session-setup"]')).toContainText('主站')
   await page.keyboard.press('Escape')
   await page.getByRole('button', { name: '开始新会话', exact: true }).click()
   await expect(page.getByRole('button', { name: '暂停录音', exact: true })).toBeVisible()
@@ -114,4 +117,15 @@ test('main selection reports insufficient balance before opening an audio connec
   await expect.poll(() => fixture.mainPreflights.length).toBeGreaterThan(0)
   await expect(page.getByRole('button', { name: '开始新会话', exact: true })).toBeVisible()
   expect(fixture.sockets).toHaveLength(0)
+})
+
+test('a stored region whose nodes are gone falls back to automatic instead of being sent unseen', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('dreamtrans.edge.region', 'eu-west-2'))
+  const fixture = await setup(page, 'edge')
+  await page.locator('[data-tour="session-setup"]').click()
+  await expect(page.getByLabel('接入节点')).toHaveValue('auto')
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: '开始新会话', exact: true }).click()
+  await expect(page.getByRole('button', { name: '暂停录音', exact: true })).toBeVisible()
+  expect(fixture.authorizations[0]).toMatchObject({ region: 'auto' })
 })

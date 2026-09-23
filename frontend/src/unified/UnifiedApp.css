@@ -4914,9 +4914,16 @@ img.dt-onboarding__mark {
   white-space: nowrap;
 }
 
-.dt-session-setup__summary > span:last-child {
+.dt-session-setup__summary > span:not([aria-hidden]) {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.dt-session-setup__panel .dt-field > small {
+  color: var(--dt-muted);
+  font-size: var(--yf-text-2xs);
+  line-height: 1.5;
 }
 
 .dt-session-setup__summary > span[aria-hidden="true"] {
@@ -5007,30 +5014,6 @@ img.dt-onboarding__mark {
   color: var(--dt-ink);
   font-size: var(--yf-text-xs);
   line-height: 1.55;
-}
-
-.dt-settings__edge:empty {
-  display: none;
-}
-
-.dt-settings__edge label {
-  display: grid;
-  gap: 7px;
-  color: var(--dt-ink);
-  font-size: var(--yf-text-xs);
-  font-weight: 650;
-}
-
-.dt-settings__edge select {
-  width: 100%;
-  min-height: 43px;
-  padding: 9px 11px;
-  color: var(--dt-ink);
-  background: white;
-  border: 1px solid #d7dde6;
-  border-radius: var(--yf-r-sm);
-  font-size: var(--yf-text-sm);
-  font-weight: 400;
 }
 
 .dt-account-panel__help {
