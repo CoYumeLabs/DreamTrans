@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { authFetch } from '../../pro/api/auth'
-import type { EdgeNode } from '../workspace/edgeSelection'
+import { warmEdgeLatencies, type EdgeNode } from '../workspace/edgeSelection'
 
 function previewEnabled(): boolean {
   try {
@@ -26,7 +26,9 @@ export function useEdgeRegions(userId: string | null, role: string | null): stri
         const previewing = Boolean(access.edge_control_enabled) && previewEnabled() && role === 'super_admin'
         if (!access.edge_enabled && !previewing) return
         const nodes = await authFetch<EdgeNode[]>('/api/edges')
-        if (active) setRegions([...new Set(nodes.map((node) => node.region))])
+        if (!active) return
+        setRegions([...new Set(nodes.map((node) => node.region))])
+        warmEdgeLatencies(nodes)
       })
       .catch(() => {
         // Without the node list the picker stays hidden and routing stays automatic.

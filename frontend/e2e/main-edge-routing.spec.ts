@@ -87,7 +87,8 @@ test('main is selectable while Edge routing is enabled and uses the metered main
   await page.getByRole('button', { name: '开始新会话', exact: true }).click()
   await expect(page.getByRole('button', { name: '暂停录音', exact: true })).toBeVisible()
   expect(fixture.authorizations[0]).toMatchObject({ allow_main: true, region: 'main' })
-  expect(fixture.mainProbes()).toBeGreaterThan(0)
+  // Pinning the main site leaves nothing to rank, so no latencies are sent.
+  expect(fixture.authorizations[0].latencies).toEqual({})
   expect(fixture.mainPreflights.length).toBeGreaterThan(0)
   expect(fixture.sockets[0].url()).toContain('/ws/speechmatics')
 })
@@ -98,6 +99,9 @@ for (const transport of ['main', 'edge'] as const) {
     await page.getByRole('button', { name: '开始新会话', exact: true }).click()
     await expect(page.getByRole('button', { name: '暂停录音', exact: true })).toBeVisible()
     expect(fixture.authorizations[0]).toMatchObject({ allow_main: true, region: 'auto' })
+    // Automatic routing ranks the main site and every regional node.
+    expect(Object.keys(fixture.authorizations[0].latencies as object).sort()).toEqual(['main', 'sydney'])
+    expect(fixture.mainProbes()).toBeGreaterThan(0)
     expect(fixture.sockets[0].url()).toContain(transport === 'main' ? '/ws/speechmatics' : '/ws/edge')
     await page.evaluate(() => localStorage.setItem('dreamtrans.edge.region', 'main'))
     fixture.sockets[0].close({ code: 1012, reason: 'test restart' })
@@ -107,6 +111,8 @@ for (const transport of ['main', 'edge'] as const) {
     else {
       expect(fixture.authorizations[1].allow_main).toBeUndefined()
       expect(fixture.authorizations[1].region).toBe('auto')
+      // A regional reconnect cannot move to the main site, so it is not ranked.
+      expect(Object.keys(fixture.authorizations[1].latencies as object)).toEqual(['sydney'])
     }
   })
 }
