@@ -1,7 +1,8 @@
 import { authFetch } from '../../pro/api/auth'
 import type { EdgeAuthorization } from '../../core/transcription/RegionalEdge'
-import { readEdgeRegion } from './edgeRegions'
+import { edgeRegionLabel, readEdgeRegion } from './edgeRegions'
 import { EdgeLatencyMeter, latencyCandidates, MAIN_NODE_ID, type ProbeFn } from './edgeLatency'
+import { messages } from '../../i18n'
 
 export interface EdgeNode {
   id: string; name: string; region: string; endpoint: string; mode: string
@@ -34,15 +35,20 @@ export function warmEdgeLatencies(nodes: readonly EdgeNode[]): void {
 }
 
 export async function authorizeEdge(sessionId: string, sampleRate: number, continuingEdge = false, requestedRegion?: string): Promise<EdgeAuthorization | null> {
+  const region = requestedRegion ?? readEdgeRegion()
+  const pinnedEdge = region !== '' && region !== 'auto' && region !== MAIN_NODE_ID
+  const unavailable = () => new Error(messages().workspace.runtime.edgeUnavailable(edgeRegionLabel(region)))
   const access = await authFetch<{ edge_enabled?: boolean; edge_control_enabled?: boolean }>('/api/system/access')
   let preview = localStorage.getItem('dreamtrans.edge.preview') === 'true' && !!access.edge_control_enabled
   if (!access.edge_enabled && preview) {
     const profile = await authFetch<{ user: { role: string } }>('/api/user/profile')
     preview = profile.user.role === 'super_admin'
   }
-  if (!access.edge_enabled && !preview && !continuingEdge) return null
+  if (!access.edge_enabled && !preview && !continuingEdge) {
+    if (pinnedEdge) throw unavailable()
+    return null
+  }
   const nodes = await authFetch<EdgeNode[]>('/api/edges')
-  const region = requestedRegion ?? readEdgeRegion()
   const latencies = await latencyMeter.latencies(
     latencyCandidates(nodes, region, continuingEdge),
     continuingEdge ? RECONNECT_BUDGET_MS : START_BUDGET_MS,
@@ -53,6 +59,9 @@ export async function authorizeEdge(sessionId: string, sampleRate: number, conti
       ...(!continuingEdge && nodes.some(node => node.id === MAIN_NODE_ID) ? { allow_main: true } : {}),
       region, latencies }),
   })
-  if ('transport' in result && result.transport === 'main') return null
+  if ('transport' in result && result.transport === 'main') {
+    if (pinnedEdge || continuingEdge) throw unavailable()
+    return null
+  }
   return { ...result as EdgeAuthorization, requestedRegion: region }
 }

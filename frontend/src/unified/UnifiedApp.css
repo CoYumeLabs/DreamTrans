@@ -570,6 +570,7 @@ textarea:focus-visible {
 
 .dt-transport-diag__row strong {
   color: var(--dt-ink);
+  overflow-wrap: anywhere;
   font-variant-numeric: tabular-nums;
   font-size: var(--yf-text-sm);
 }

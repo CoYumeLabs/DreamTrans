@@ -13,18 +13,19 @@ async function setup(page: Page, transport: 'main' | 'edge', insufficientBalance
     localStorage.setItem('dt_access_token', token)
     localStorage.setItem('dt_user', JSON.stringify(user))
     localStorage.setItem('dt_onboarding_v1_user%3Arouting-user', JSON.stringify({ wizardCompletedAt: 1, tourCompletedAt: 1 }))
-    localStorage.setItem('dt_unified_settings_v1', JSON.stringify({ translationEnabled: false, keepLocalAudio: false, audioSource: 'microphone' }))
+    localStorage.setItem('dt_unified_settings_v1', JSON.stringify({ translationEnabled: false, keepLocalAudio: false, audioSource: 'microphone', debugTransport: true }))
   }, { token, user })
   const authorizations: Array<Record<string, unknown>> = []
   const sockets: WebSocketRoute[] = []
   const mainPreflights: string[] = []
+  const control = { edgeEnabled: true }
   let sessionId = ''
   let mainProbes = 0
   await page.route('https://edge.example.test/probe', route => route.fulfill({ status: 204, headers: { 'access-control-allow-origin': '*' } }))
   await page.route(/^https?:\/\/[^/]+\/api\//, async route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname
     let body: unknown = {}
-    if (path === '/api/system/access') body = { authentication_enabled: true, anonymous_api_enabled: false, edge_enabled: true, edge_control_enabled: true }
+    if (path === '/api/system/access') body = { authentication_enabled: true, anonymous_api_enabled: false, edge_enabled: control.edgeEnabled, edge_control_enabled: true }
     if (path === '/api/user/profile') body = { user }
     if (path === '/api/announcements') body = { announcements: [] }
     if (path === '/api/edges/probe') { mainProbes++; body = { ready: true } }
@@ -73,7 +74,7 @@ async function setup(page: Page, transport: 'main' | 'edge', insufficientBalance
     })
   })
   await page.goto('/pro')
-  return { authorizations, sockets, mainPreflights, mainProbes: () => mainProbes }
+  return { authorizations, sockets, mainPreflights, control, mainProbes: () => mainProbes }
 }
 
 test('main is selectable while Edge routing is enabled and uses the metered main socket', async ({ page }) => {
@@ -103,6 +104,8 @@ for (const transport of ['main', 'edge'] as const) {
     expect(Object.keys(fixture.authorizations[0].latencies as object).sort()).toEqual(['main', 'sydney'])
     expect(fixture.mainProbes()).toBeGreaterThan(0)
     expect(fixture.sockets[0].url()).toContain(transport === 'main' ? '/ws/speechmatics' : '/ws/edge')
+    await expect(page.locator('.dt-transport-diag')).toContainText('实际连接')
+    await expect(page.locator('.dt-transport-diag')).toContainText(transport === 'main' ? '/ws/speechmatics' : 'edge.example.test/ws/edge')
     await page.evaluate(() => localStorage.setItem('dreamtrans.edge.region', 'main'))
     fixture.sockets[0].close({ code: 1012, reason: 'test restart' })
     await expect.poll(() => fixture.sockets.length).toBe(2)
@@ -134,4 +137,38 @@ test('a stored region whose nodes are gone falls back to automatic instead of be
   await page.getByRole('button', { name: '开始新会话', exact: true }).click()
   await expect(page.getByRole('button', { name: '暂停录音', exact: true })).toBeVisible()
   expect(fixture.authorizations[0]).toMatchObject({ region: 'auto' })
+})
+
+test('a pinned regional node cannot silently become main when routing is disabled after selection', async ({ page }) => {
+  const fixture = await setup(page, 'edge')
+  await page.locator('[data-tour="session-setup"]').click()
+  await page.getByLabel('接入节点').selectOption('ap-southeast-2')
+  await page.keyboard.press('Escape')
+  fixture.control.edgeEnabled = false
+  await page.getByRole('button', { name: '开始新会话', exact: true }).click()
+  await expect(page.getByText('所选接入节点（悉尼）当前不可用，请重试或手动选择其他节点。', { exact: false })).toBeVisible()
+  expect(fixture.sockets).toHaveLength(0)
+  expect(fixture.authorizations).toHaveLength(0)
+  expect(fixture.mainPreflights).toHaveLength(0)
+})
+
+test('a main response cannot override an explicit regional selection', async ({ page }) => {
+  const fixture = await setup(page, 'main')
+  await page.locator('[data-tour="session-setup"]').click()
+  await page.getByLabel('接入节点').selectOption('ap-southeast-2')
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: '开始新会话', exact: true }).click()
+  await expect(page.getByText('所选接入节点（悉尼）当前不可用，请重试或手动选择其他节点。', { exact: false })).toBeVisible()
+  expect(fixture.authorizations[0].region).toBe('ap-southeast-2')
+  expect(fixture.sockets).toHaveLength(0)
+  expect(fixture.mainPreflights).toHaveLength(0)
+})
+
+test('automatic selection still permits the main site when regional routing is disabled', async ({ page }) => {
+  const fixture = await setup(page, 'edge')
+  fixture.control.edgeEnabled = false
+  await page.getByRole('button', { name: '开始新会话', exact: true }).click()
+  await expect(page.getByRole('button', { name: '暂停录音', exact: true })).toBeVisible()
+  expect(fixture.authorizations).toHaveLength(0)
+  expect(fixture.sockets[0].url()).toContain('/ws/speechmatics')
 })

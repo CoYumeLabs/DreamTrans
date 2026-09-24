@@ -394,8 +394,10 @@ export const zhCN = {
       migrate: '迁移旧版历史',
     },
     runtime: {
+      edgeUnavailable: (region: string) => `所选接入节点（${region}）当前不可用，请重试或手动选择其他节点。`,
+      connectionCount: (count: number) => `已建立 ${count} 次音频连接`,
       noSamples: '尚无样本', recent: (value: string) => `最近 ${value}`, average: (value: string) => `均 ${value}`, peak: (value: string) => `峰 ${value}`,
-      liveBehind: (value: string) => `实时落后 ${value}`, partialPending: '有待确定文本', noPartial: '无待确定', labels: { queue: '发送积压', partial: '待确定', final: '已确认', sent: '已发送', dropped: '丢弃', ai: 'AI 翻译' },
+      liveBehind: (value: string) => `实时落后 ${value}`, partialPending: '有待确定文本', noPartial: '无待确定', labels: { connection: '实际连接', queue: '发送积压', partial: '待确定', final: '已确认', sent: '已发送', dropped: '丢弃', ai: 'AI 翻译' },
       networkMain: '网络/主线程', normal: '正常', lastPartialFinal: (partial: string, final: string) => `上次待确定 ${partial}前 · 上次确认 ${final}前`, lastFinal: (value: string) => `上次确认 ${value}前`, droppedNote: '未发出的音频被丢弃', pending: (count: number) => `待处理 ${count}`, buffered: (count: number) => `缓冲 ${count} 字`, queued: '队列中', backlog: (value: string) => `积压 ${value}`, sentFor: (value: string) => `已发 ${value}`, droppedBytes: (value: string) => `丢 ${value}`,
       hints: { queue: '发送队列有积压（网络或主线程卡顿）；本地录音仍按实时写入。', partial: '待确定文本也偏慢：更可能是上行链路或识别输入延迟，不只是定稿等待。', final: '待确定正常、已确认偏慢：发送健康，延迟主要在定稿（等句尾），初步文本应仍先出现。', dropped: '曾因网络拥塞丢弃未发送音频，字幕可能跳句。', ai: 'AI 翻译队列积压，译文会比原文更晚。', healthy: '发送链路健康。对比「待确定」与「已确认」：前者应明显更短。' },
       sessionTitle: (date: string) => `会话 · ${date}`, ownerChanged: '云端会话所属账号已变化', cloudUpdateFailed: '云端会话更新失败', authExpired: '登录状态已失效，无法继续当前云端会话', cloudSyncFailed: (error: string) => `云端同步暂时失败：${error}`,

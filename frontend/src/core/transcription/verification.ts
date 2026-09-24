@@ -291,7 +291,7 @@ async function verifyClient(): Promise<void> {
   let reconnectTimelineOffset = 0
   const client = new SpeechmaticsProxyClient({
     tokenProvider: () => 'fresh-token',
-    url: 'ws://dreamtrans.test/ws/speechmatics',
+    url: 'ws://diagnostic-user:diagnostic-secret@dreamtrans.test/ws/speechmatics?jwt=diagnostic-token&session_id=private-session#private-fragment',
     socketFactory: (_url, protocols) => {
       const socket = new FakeSocket()
       sockets.push(socket)
@@ -321,6 +321,7 @@ async function verifyClient(): Promise<void> {
     timeline_offset_seconds: 120,
     translation_config: { target_languages: ['cmn'], enable_partials: true },
   })
+  assert(client.getDiagnostics().connectionEndpoint === null, 'a pending handshake must not claim a connected destination')
   await nextTurn()
   const firstSocket = sockets[0]
   assert(firstSocket, 'start must create a socket')
@@ -383,6 +384,7 @@ async function verifyClient(): Promise<void> {
   )
   assert(initialBinaryFrames.length === 1, 'small worklet chunks must coalesce to one frame')
   const liveDiag = client.getDiagnostics()
+  assert(liveDiag.connectionEndpoint === 'dreamtrans.test/ws/speechmatics', 'actual connection diagnostics must exclude credentials, queries and fragments')
   assert(
     typeof liveDiag.outboundQueueMs === 'number' && liveDiag.outboundQueueMs >= 0,
     'diagnostics must report non-negative outbound queue latency',
@@ -399,6 +401,7 @@ async function verifyClient(): Promise<void> {
   for (let index = 0; index < 735; index += 1) client.sendAudio(workletChunk)
 
   firstSocket.fail()
+  assert(client.getDiagnostics().connectionEndpoint === null, 'a disconnected socket must not remain the reported active destination')
   const reconnectAudio = new Float32Array(1_920)
   client.sendAudio(reconnectAudio)
   await new Promise((resolve) => {

@@ -210,6 +210,8 @@ export interface SpeechmaticsClientDiagnostics {
   readonly droppedAudioBytes: number
   readonly sentAudioBytes: number
   readonly connectionCount: number
+  /** Connected audio destination (host/path only); absent before recognition starts. */
+  readonly connectionEndpoint: string | null
   /**
    * Latency samples compare each result's audio endTime against the amount of
    * PCM already accepted when the result was applied (ms).

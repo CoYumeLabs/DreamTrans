@@ -164,6 +164,7 @@ export class SpeechmaticsPaymentRequiredError extends Error {}
 
 interface SocketContext {
   readonly serial: number
+  readonly endpoint: string | null
   readonly socket: SpeechmaticsSocket
   readonly reconnect: boolean
   timelineOffset: number
@@ -258,6 +259,16 @@ function defaultSocketFactory(
   protocols: readonly string[],
 ): SpeechmaticsSocket {
   return new WebSocket(url, [...protocols]) as unknown as SpeechmaticsSocket
+}
+
+// Diagnostics expose the audio destination, never query tokens or user info.
+function diagnosticEndpoint(value: string): string | null {
+  try {
+    const url = new URL(value)
+    return `${url.host}${url.pathname}`
+  } catch {
+    return null
+  }
 }
 
 function defaultProtocolFactory(token: string): readonly string[] {
@@ -810,6 +821,7 @@ export class SpeechmaticsProxyClient {
       droppedAudioBytes: this.droppedAudioBytes,
       sentAudioBytes: this.sentAudioBytes,
       connectionCount: this.connectionCount,
+      connectionEndpoint: this.context?.recognitionStarted ? this.context.endpoint : null,
       lastPartialLagMs: this.lastPartialLagMs,
       lastFinalLagMs: this.lastFinalLagMs,
       avgPartialLagMs: this.emaPartialLagMs === null
@@ -993,6 +1005,7 @@ export class SpeechmaticsProxyClient {
     })
     const context: SocketContext = {
       serial,
+      endpoint: diagnosticEndpoint(url),
       socket,
       reconnect,
       timelineOffset: reconnect

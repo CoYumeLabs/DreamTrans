@@ -164,6 +164,13 @@ export function buildTransportDiagnostics(
         : r.lastFinal(formatDiagMs(audio.lastFinalAgeMs)),
     },
   ]
+  if(audio.connectionEndpoint) {
+    rows.unshift({
+      label: r.labels.connection,
+      value: audio.connectionEndpoint,
+      note: r.connectionCount(audio.connectionCount),
+    })
+  }
   if(dropped > 0) {
     rows.push({
       label: r.labels.dropped,
