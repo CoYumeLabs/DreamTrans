@@ -109,8 +109,10 @@ export async function fetchModuleFiles(
       const text = domToText(doc.querySelector('#page-content, [role="main"], body'))
       return text ? [textFile(`${module.name}.txt`, text, response.url, module.timemodified)] : []
     }
-    case 'page': {
-      const response = await moodleFetch(limiter, `${base}/mod/page/view.php?id=${module.cmid}`)
+    case 'page':
+    case 'cms': {
+      // cms: Monash's custom content pages (mod_cms), rendered like a page.
+      const response = await moodleFetch(limiter, `${base}/mod/${module.modtype}/view.php?id=${module.cmid}`)
       const doc = new DOMParser().parseFromString(await response.text(), 'text/html')
       const text = domToText(doc.querySelector('[role="main"] .box.generalbox, [role="main"], #region-main'))
       return text ? [textFile(`${module.name}.txt`, text, response.url, module.timemodified)] : []
@@ -127,10 +129,9 @@ export async function fetchModuleFiles(
       const text = lines.join('\n')
       return text.length > 20 ? [textFile(`${module.name}.txt`, text, module.url ?? base, module.timemodified)] : []
     }
-    case 'forum':
-      // A forum name cannot prove its contents are public announcements.
-      return []
     default:
+      // Forums of every kind land here: a forum name cannot prove its
+      // contents are public announcements.
       return []
   }
 }

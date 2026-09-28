@@ -22,6 +22,8 @@ export function detectRecording(url?: string, name?: string): { provider: Record
   return undefined
 }
 
+export const FORUM_MODTYPE = /forum/i
+
 export function classifyModule(module: CourseModule): CourseModule {
   const haystack = `${module.url ?? ''} ${module.name} ${module.contents.map((c) => c.fileurl).join(' ')}`
   if (LIBRARY_PATTERN.test(haystack)) {
@@ -33,7 +35,8 @@ export function classifyModule(module: CourseModule): CourseModule {
     const recording = detectRecording(target, module.name)
     if (recording) module.recording = recording
   }
-  if (module.modtype === 'forum') {
+  // forum, hsuforum (Open Forum), forumng, …: any discussion plugin is private.
+  if (FORUM_MODTYPE.test(module.modtype)) {
     module.skipped = 'private'
   }
   return module
