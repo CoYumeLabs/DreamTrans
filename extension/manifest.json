@@ -3,7 +3,6 @@
   "name": "DreamTrans Moodle Sync",
   "version": "0.1.0",
   "description": "把 Moodle 课件同步进 DreamTrans 学习空间。抓取和抽取都在你的浏览器里完成，服务器只收到文本，不持有 Moodle 凭据，也不保存课件原文件。",
-  "default_locale": null,
   "permissions": ["activeTab", "scripting", "storage"],
   "optional_host_permissions": ["https://*/*", "http://*/*"],
   "background": {
