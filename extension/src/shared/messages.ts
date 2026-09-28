@@ -61,6 +61,10 @@ export function sendToBackground<T extends BackgroundResponse>(request: Backgrou
         reject(new Error('background returned nothing'))
         return
       }
+      if (!response.ok) {
+        reject(new Error((response as { error?: string }).error || 'background request failed'))
+        return
+      }
       resolve(response)
     })
   })

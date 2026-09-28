@@ -52,12 +52,29 @@ export class RateLimiter {
   }
 }
 
-/** Same-origin fetch with the tab's own cookies; never follows to other hosts. */
-export async function moodleFetch(limiter: RateLimiter, url: string, init?: RequestInit): Promise<Response> {
+export interface MoodleFetchOptions {
+  /**
+   * File downloads only: Moodle sites that keep files in object storage
+   * (Monash: CloudFront) answer pluginfile.php with a redirect to a signed
+   * https URL. Accept that hop when what comes back is a file, never a page.
+   * Cookies stay on Moodle: credentials are same-origin.
+   */
+  allowFileRedirect?: boolean
+}
+
+/** Same-origin fetch with the tab's own cookies; pages never follow to other hosts. */
+export async function moodleFetch(
+  limiter: RateLimiter, url: string, init?: RequestInit, options: MoodleFetchOptions = {},
+): Promise<Response> {
   return limiter.run(async () => {
     const response = await fetch(url, { credentials: 'same-origin', redirect: 'follow', ...init })
-    if (new URL(response.url).host !== new URL(url, location.href).host) {
-      throw new Error(`redirected off Moodle: ${response.url}`)
+    const final = new URL(response.url)
+    if (final.host !== new URL(url, location.href).host) {
+      const contentType = (response.headers.get('content-type') ?? '').toLowerCase()
+      const isFile = contentType !== '' && !contentType.includes('html')
+      if (!options.allowFileRedirect || final.protocol !== 'https:' || !isFile || !response.ok) {
+        throw new Error(`redirected off Moodle to ${final.host}`)
+      }
     }
     if (response.status === 401 || response.status === 403) {
       throw new Error(`Moodle refused ${url} (${response.status})`)

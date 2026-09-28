@@ -16,12 +16,19 @@ function filenameFromResponse(response: Response, fallback: string): string {
   }
   const plain = disposition.match(/filename="?([^";]+)"?/i)
   if (plain) return plain[1]
+  // Signed object-storage URLs carry the name in a query parameter; the
+  // Content-Disposition header itself is not readable cross-origin.
+  const signed = new URL(response.url).searchParams.get('response-content-disposition') ?? ''
+  const fromQuery = signed.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i)
+  if (fromQuery) {
+    try { return decodeURIComponent(fromQuery[1]) } catch { return fromQuery[1] }
+  }
   const fromUrl = decodeURIComponent(response.url.split('?')[0].split('/').pop() ?? '')
   return fromUrl || fallback
 }
 
 async function fetchBinary(limiter: RateLimiter, url: string, fallbackName: string, timemodified?: number): Promise<FetchedFile | null> {
-  const response = await moodleFetch(limiter, url)
+  const response = await moodleFetch(limiter, url, undefined, { allowFileRedirect: true })
   const mimetype = (response.headers.get('content-type') ?? 'application/octet-stream').split(';')[0].trim().toLowerCase()
   if (mimetype === 'text/html') {
     // resource/view.php can answer with a "click to open" page instead of a
@@ -90,7 +97,7 @@ export async function fetchModuleFiles(
       return [file]
     }
     case 'folder': {
-      const response = await moodleFetch(limiter, `${base}/mod/folder/download_folder.php?id=${module.cmid}`)
+      const response = await moodleFetch(limiter, `${base}/mod/folder/download_folder.php?id=${module.cmid}`, undefined, { allowFileRedirect: true })
       const contentType = (response.headers.get('content-type') ?? '').toLowerCase()
       if (!contentType.includes('zip') && !contentType.includes('octet')) {
         // Folder download disabled: fall back to the listed files.
