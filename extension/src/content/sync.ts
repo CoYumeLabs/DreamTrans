@@ -69,6 +69,8 @@ interface KnownSource { id: string; hasOriginal: boolean }
 
 /** Modules fetched and extracted at once; Moodle requests still share the limiter. */
 const MODULE_WORKERS = 3
+/** Uploads in flight at once; the server admits three per user. */
+const UPLOADS_IN_FLIGHT = 3
 
 interface UploadResult { id: string; duplicate: boolean; figures?: FigureStats }
 
@@ -139,13 +141,27 @@ export async function runSync(ctx: MoodleContext, doc: Document, options: SyncOp
     const modules = tree.sections.flatMap((section) => section.modules.map((module) => ({ section, module })))
     const total = modules.length
     let done = 0
-    // Uploads go one at a time: the server reads one material per user at a
-    // time. Fetching and extracting the next modules overlaps with it.
-    let uploadChain: Promise<unknown> = Promise.resolve()
-    const serialUpload = <T>(task: () => Promise<T>): Promise<T> => {
-      const run = uploadChain.then(task, task)
-      uploadChain = run.catch(() => undefined)
-      return run
+    // Up to UPLOADS_IN_FLIGHT uploads at once, matching the server's per-user
+    // admission; a busy answer (another tab syncing) waits and tries again.
+    let uploading = 0
+    const waiting: Array<() => void> = []
+    const boundedUpload = async <T>(task: () => Promise<T>): Promise<T> => {
+      while (uploading >= UPLOADS_IN_FLIGHT) await new Promise<void>((resolve) => waiting.push(resolve))
+      uploading += 1
+      try {
+        for (let attempt = 1; ; attempt += 1) {
+          try {
+            return await task()
+          } catch (reason) {
+            const busy = reason instanceof Error && /busy|429/i.test(reason.message)
+            if (!busy || attempt >= 5 || limiter.cancelled) throw reason
+            await new Promise((resolve) => setTimeout(resolve, 3000 * attempt))
+          }
+        }
+      } finally {
+        uploading -= 1
+        waiting.shift()?.()
+      }
     }
 
     const processModule = async ({ section, module }: typeof modules[number]): Promise<void> => {
@@ -216,7 +232,7 @@ export async function runSync(ctx: MoodleContext, doc: Document, options: SyncOp
               extractor: extracted.extractor,
             },
           }
-          const uploaded = await serialUpload(async () => {
+          const uploaded = await boundedUpload(async () => {
             if (limiter.cancelled) throw new Error('cancelled')
             report({
               phase: 'upload',

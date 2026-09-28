@@ -58,23 +58,42 @@ func TestCommandBudgetCancellationAndRelease(t *testing.T) {
 }
 
 func TestDerivedUploadBudgetBoundsUsers(t *testing.T) {
-	t.Setenv("KNOWLEDGE_EXTRACT_WORKERS", "2")
-	b := &derivedUploadBudget{users: make(map[string]bool)}
-	if !b.acquire("a") || b.acquire("a") || !b.acquire("b") || b.acquire("c") {
-		t.Fatal("global or per-user admission failed")
+	t.Setenv("KNOWLEDGE_EXTRACT_WORKERS", "2") // global cap: 2 × 3 = 6
+	b := &derivedUploadBudget{users: make(map[string]int)}
+	for i := 0; i < derivedUploadsPerUser; i++ {
+		if !b.acquire("a") {
+			t.Fatalf("user a upload %d refused", i+1)
+		}
+	}
+	if b.acquire("a") {
+		t.Fatal("per-user admission exceeded")
+	}
+	for _, user := range []string{"b", "b", "c"} {
+		if !b.acquire(user) {
+			t.Fatalf("user %s was refused below the global cap", user)
+		}
+	}
+	if b.acquire("d") {
+		t.Fatal("global admission exceeded")
 	}
 	b.release("a")
-	if !b.acquire("c") {
+	if !b.acquire("d") {
 		t.Fatal("released slot was not reusable")
+	}
+	b.release("zzz") // releasing an unknown user must not free a slot
+	if b.acquire("e") {
+		t.Fatal("stray release freed a slot")
 	}
 }
 
 func TestDerivedUploadRejectsBusyBeforeReadingBody(t *testing.T) {
 	user := "busy-review-user"
-	if !derivedUploads.acquire(user) {
-		t.Fatal("cannot reserve test slot")
+	for i := 0; i < derivedUploadsPerUser; i++ {
+		if !derivedUploads.acquire(user) {
+			t.Fatal("cannot reserve test slot")
+		}
+		defer derivedUploads.release(user)
 	}
-	defer derivedUploads.release(user)
 	r := httptest.NewRequest("POST", "/", strings.NewReader("invalid JSON"))
 	w := httptest.NewRecorder()
 	(&RAGHandler{}).handleDerivedSourceUpload(w, r, &models.AIProject{UserID: user})
