@@ -39,6 +39,41 @@ const IMAGE_OPS = new Set<number>([
   pdfjs.OPS.paintImageXObjectRepeat,
 ])
 
+/**
+ * Share of the page covered by images, from the operator list. pdf.js paints
+ * every image into the unit square under the current transform, so each one
+ * covers |det(CTM)| of user space. Logos and icons on slide templates stay
+ * far below the figure threshold; a chart or photo does not.
+ */
+export function imageCoverage(fnArray: number[], argsArray: unknown[][], pageArea: number): number {
+  type Matrix = [number, number, number, number, number, number]
+  const multiply = (m: Matrix, t: Matrix): Matrix => [
+    m[0] * t[0] + m[2] * t[1], m[1] * t[0] + m[3] * t[1],
+    m[0] * t[2] + m[2] * t[3], m[1] * t[2] + m[3] * t[3],
+    m[0] * t[4] + m[2] * t[5] + m[4], m[1] * t[4] + m[3] * t[5] + m[5],
+  ]
+  let ctm: Matrix = [1, 0, 0, 1, 0, 0]
+  const stack: Matrix[] = []
+  let covered = 0
+  for (let i = 0; i < fnArray.length; i += 1) {
+    const fn = fnArray[i]
+    const args = argsArray[i] ?? []
+    if (fn === pdfjs.OPS.save) stack.push(ctm)
+    else if (fn === pdfjs.OPS.restore) ctm = stack.pop() ?? ctm
+    else if (fn === pdfjs.OPS.transform) ctm = multiply(ctm, args as Matrix)
+    else if (fn === pdfjs.OPS.paintFormXObjectBegin) {
+      stack.push(ctm)
+      if (Array.isArray(args[0]) && args[0].length === 6) ctm = multiply(ctm, args[0] as Matrix)
+    } else if (fn === pdfjs.OPS.paintFormXObjectEnd) ctm = stack.pop() ?? ctm
+    else if (fn === pdfjs.OPS.paintImageXObjectRepeat) covered += pageArea
+    else if (IMAGE_OPS.has(fn)) covered += Math.abs(ctm[0] * ctm[3] - ctm[1] * ctm[2])
+  }
+  return pageArea > 0 ? Math.min(1, covered / pageArea) : 0
+}
+
+/** Images covering at least this share of a page make it worth a render. */
+const FIGURE_COVERAGE = 0.12
+
 interface TextItemLike { str: string; transform: number[]; hasEOL?: boolean }
 
 /** Joins pdf.js text items into lines by their y position. */
@@ -73,15 +108,21 @@ async function extractPDF(bytes: ArrayBuffer, options: ExtractOptions): Promise<
     const page = await pdf.getPage(n)
     const textContent = await page.getTextContent()
     const text = itemsToText(textContent.items as TextItemLike[])
-    let imageOps = 0
-    try {
-      const ops = await page.getOperatorList()
-      for (const fn of ops.fnArray) if (IMAGE_OPS.has(fn)) imageOps += 1
-    } catch {
-      imageOps = 0
+    const textless = text.replace(/\s/g, '').length < 40
+    let coverage = 0
+    if (options.renderFigures && !textless) {
+      try {
+        const ops = await page.getOperatorList()
+        const [x0, y0, x1, y1] = page.view
+        coverage = imageCoverage(ops.fnArray, ops.argsArray as unknown[][], Math.abs((x1 - x0) * (y1 - y0)))
+      } catch {
+        coverage = 0
+      }
     }
     const figures: DerivedFigure[] = []
-    const figurePage = imageOps > 0 || text.replace(/\s/g, '').length < 40
+    // Scanned or image-only pages, or pages with a real figure. A slide whose
+    // only image is the template logo already has its text layer.
+    const figurePage = textless || coverage >= FIGURE_COVERAGE
     if (options.renderFigures && figurePage && figuresRendered < options.maxFigures) {
       const base = page.getViewport({ scale: 1 })
       const scale = options.renderWidth / base.width
