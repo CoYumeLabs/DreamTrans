@@ -135,3 +135,48 @@ export async function fetchModuleFiles(
       return []
   }
 }
+
+// Forums, only when the user switched them on for this sync. One text file per
+// discussion so an unchanged thread keeps its sha256. Only subjects, times and
+// post bodies are read: author names, pictures and profile links are never
+// part of the extracted text.
+const MAX_DISCUSSIONS = 50
+const POST_SELECTOR = 'article.forum-post-container, .hsuforum-post-wrapper, .forumpost'
+const POST_BODY = '.post-content-container, .posting, .content .no-overflow'
+const POST_SUBJECT = '[data-region-content="forum-post-core-subject"], .hsuforum-post-title, .subject'
+const NESTED = '[data-region="replies-container"], .indent, .hsuforum-thread-replies'
+
+export async function fetchForumFiles(
+  limiter: RateLimiter, ctx: MoodleContext, module: CourseModule,
+): Promise<FetchedFile[]> {
+  if (!/^[a-z0-9_]+$/.test(module.modtype)) return []
+  const base = `${ctx.wwwroot}/mod/${module.modtype}`
+  const listing = await moodleFetch(limiter, `${base}/view.php?id=${module.cmid}`)
+  const listDoc = new DOMParser().parseFromString(await listing.text(), 'text/html')
+  const discussions = new Map<string, string>()
+  for (const anchor of Array.from(listDoc.querySelectorAll<HTMLAnchorElement>('a[href*="discuss.php?d="]'))) {
+    const id = new URL(anchor.getAttribute('href') ?? '', listing.url).searchParams.get('d')
+    if (!id || discussions.has(id)) continue
+    discussions.set(id, (anchor.textContent ?? '').replace(/\s+/g, ' ').trim())
+    if (discussions.size >= MAX_DISCUSSIONS) break
+  }
+  const files: FetchedFile[] = []
+  for (const [id, title] of discussions) {
+    const response = await moodleFetch(limiter, `${base}/discuss.php?d=${id}`)
+    const doc = new DOMParser().parseFromString(await response.text(), 'text/html')
+    const blocks: string[] = []
+    for (const post of Array.from(doc.querySelectorAll<HTMLElement>(POST_SELECTOR))) {
+      const own = post.cloneNode(true) as HTMLElement
+      own.querySelectorAll(NESTED).forEach((node) => node.remove())
+      const body = domToText(own.querySelector(POST_BODY))
+      if (!body) continue
+      const subject = own.querySelector(POST_SUBJECT)?.textContent?.replace(/\s+/g, ' ').trim()
+      const when = own.querySelector<HTMLTimeElement>('time[datetime]')?.dateTime
+      blocks.push([`## ${subject || title}${when ? ` · ${when}` : ''}`, body].join('\n\n'))
+    }
+    if (!blocks.length) continue
+    const name = title || `discussion-${id}`
+    files.push(textFile(`${module.name} - ${name}.txt`, [`# ${module.name} / ${name}`, ...blocks].join('\n\n'), response.url, module.timemodified))
+  }
+  return files
+}

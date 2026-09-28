@@ -128,6 +128,8 @@ export interface SyncOptions {
   full: boolean
   /** Upload renders of figure pages (OCR'd server-side, then discarded). */
   uploadFigures: boolean
+  /** Opt-in: forum posts (announcements and discussions), post bodies only. */
+  includeForums?: boolean
 }
 
 export interface SyncProgress {

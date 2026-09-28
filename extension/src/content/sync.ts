@@ -5,7 +5,8 @@ import type {
 } from '../shared/types'
 import { discoverCourse } from './discovery'
 import { extractFile, sha256Hex } from './extract'
-import { fetchModuleFiles } from './fetcher'
+import { fetchForumFiles, fetchModuleFiles } from './fetcher'
+import { FORUM_MODTYPE } from './discovery'
 import { RateLimiter } from './limits'
 
 // Sync: incremental by timemodified, idempotent by sha256. One pass over the
@@ -76,7 +77,9 @@ export async function runSync(ctx: MoodleContext, doc: Document, options: SyncOp
         summary.recordings.push({ provider: module.recording.provider, name: module.name, url: module.recording.url, section: section.name })
         continue
       }
-      if (module.skipped || !FETCHABLE.has(module.modtype)) {
+      // Forums are private unless the user opted in for this sync.
+      const optedForum = module.skipped === 'private' && Boolean(options.includeForums) && FORUM_MODTYPE.test(module.modtype)
+      if (!optedForum && (module.skipped || !FETCHABLE.has(module.modtype))) {
         summary.skipped += 1
         continue
       }
@@ -89,7 +92,7 @@ export async function runSync(ctx: MoodleContext, doc: Document, options: SyncOp
       report({ phase: 'fetch', message: `${section.name} / ${module.name}`, done, total })
       const moduleState: SyncModuleState = { timemodified: fingerprint, sha256s: [], uploadedAt: Date.now() }
       try {
-        const files = await fetchModuleFiles(limiter, ctx, module)
+        const files = optedForum ? await fetchForumFiles(limiter, ctx, module) : await fetchModuleFiles(limiter, ctx, module)
         for (const file of files) {
           const sha = await sha256Hex(file.bytes)
           moduleState.sha256s.push(sha)

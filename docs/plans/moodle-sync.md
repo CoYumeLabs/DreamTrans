@@ -82,7 +82,7 @@ manifest 用 `optional_host_permissions`，首次在 Moodle 域上手动授权�
 
 - [x] `core_course_get_contents` AJAX 是否开放 —— 否（2026-09-28 PSY2041：servicenotavailable），改用 `core_courseformat_get_state`
 - [x] `sesskey` 在 HTML 中的位置 —— `M.cfg.sesskey`；Moodle 4.1（Panopto instance 名 Moodle-41-Prod）
-- [ ] 四门课 modtype 分布
+- [x] 四门课 modtype 分布 —— PSY2041：label 45、cms 28、resource 25、url 12、quiz 12、forum 6、lti 5、folder 2、assign 2、page 1、hsuforum 1；cms（mod_cms）按页面抓取；论坛默认不同步，用户手动开启后只取标题、时间、正文
 - [ ] Echo360 嵌入方式、域名、字幕接口 —— PSY2041 用的是 Panopto（`monash.au.panopto.com`，Moodle Panopto block + 播客 feed），未见 Echo360；M2 对齐需改以 Panopto 为主
 - [ ] Leganto 链接特征
 - [ ] 单课全量请求数与耗时

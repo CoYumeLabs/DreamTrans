@@ -22,6 +22,7 @@ const ui = {
   project: $<HTMLSelectElement>('#project'),
   figures: $<HTMLInputElement>('#figures'),
   full: $<HTMLInputElement>('#full'),
+  forums: $<HTMLInputElement>('#forums'),
   sync: $<HTMLButtonElement>('#sync'),
   diagnose: $<HTMLButtonElement>('#diagnose'),
   cancel: $<HTMLButtonElement>('#cancel'),
@@ -214,7 +215,7 @@ ui.sync.addEventListener('click', async () => {
   try {
     const response = await ask<{ ok: true; summary: SyncSummary }>({
       type: 'moodle.sync',
-      options: { projectId: ui.project.value, full: ui.full.checked, uploadFigures: ui.figures.checked },
+      options: { projectId: ui.project.value, full: ui.full.checked, uploadFigures: ui.figures.checked, includeForums: ui.forums.checked },
     })
     showSummary(response.summary)
   } catch (reason) {

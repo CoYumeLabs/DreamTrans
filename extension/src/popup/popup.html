@@ -42,6 +42,11 @@
           <span class="toggle-text"><b>上传含图页面</b><small>约 1024px 渲染图，服务器只做 OCR，图片不保存</small></span>
         </label>
         <label class="toggle">
+          <input type="checkbox" id="forums" />
+          <span class="switch" aria-hidden="true"></span>
+          <span class="toggle-text"><b>同步论坛</b><small>公告和讨论区，每个帖子一份；只取标题、时间和正文，不含作者名字和头像</small></span>
+        </label>
+        <label class="toggle">
           <input type="checkbox" id="full" />
           <span class="switch" aria-hidden="true"></span>
           <span class="toggle-text"><b>全量重检</b><small>忽略本地记录重新抓取；服务器按 sha256 去重，不会重复上传</small></span>
