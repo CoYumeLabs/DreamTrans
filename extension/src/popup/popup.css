@@ -143,4 +143,3 @@ select option { color: var(--ink); background: var(--panel); }
 #report .bad { color: var(--red); }
 #report .na { color: var(--muted); }
 
-.foot { color: var(--muted); font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em; line-height: 1.6; }
