@@ -24,7 +24,7 @@
       </form>
       <div id="account-row" class="row" hidden>
         <span id="account-who"></span>
-        <button class="btn quiet" id="logout" type="button">退出</button>
+        <button class="btn quiet small" id="logout" type="button">退出</button>
       </div>
     </section>
 
@@ -33,24 +33,34 @@
       <p id="moodle-course" class="course"></p>
       <label class="field">
         <span>同步到 DreamTrans 课程</span>
-        <select id="project"><option value="">请先登录</option></select>
+        <span class="select"><select id="project"><option value="">请先登录</option></select></span>
       </label>
-      <label class="check"><input type="checkbox" id="figures" checked /> 上传含图页面的渲染图（服务器只做 OCR，图片不保存）</label>
-      <label class="check"><input type="checkbox" id="full" /> 全量重检（忽略本地记录）</label>
-      <div class="row">
+      <div class="options">
+        <label class="toggle">
+          <input type="checkbox" id="figures" checked />
+          <span class="switch" aria-hidden="true"></span>
+          <span class="toggle-text"><b>上传含图页面</b><small>约 1024px 渲染图，服务器只做 OCR，图片不保存</small></span>
+        </label>
+        <label class="toggle">
+          <input type="checkbox" id="full" />
+          <span class="switch" aria-hidden="true"></span>
+          <span class="toggle-text"><b>全量重检</b><small>忽略本地记录重新抓取；服务器按 sha256 去重，不会重复上传</small></span>
+        </label>
+      </div>
+      <div class="actions">
         <button class="btn primary" id="sync" type="button" disabled>同步本课程</button>
         <button class="btn" id="diagnose" type="button" disabled>诊断</button>
-        <button class="btn quiet" id="cancel" type="button" hidden>停止</button>
+        <button class="btn danger" id="cancel" type="button" hidden>停止</button>
       </div>
       <div id="progress" class="progress" hidden>
         <div class="bar"><i></i></div>
         <p id="progress-text"></p>
       </div>
-      <pre id="summary" class="log" hidden></pre>
+      <div id="summary" class="summary" hidden></div>
     </section>
 
     <section class="panel" id="report-panel" hidden>
-      <div class="head"><span class="label">Monash 特征表</span><button class="btn quiet" id="copy-report" type="button">复制 Markdown</button></div>
+      <div class="head"><span class="label">Moodle 特征表</span><button class="btn quiet small" id="copy-report" type="button">复制 Markdown</button></div>
       <div id="report"></div>
     </section>
 

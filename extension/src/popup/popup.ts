@@ -1,6 +1,6 @@
 import { sendToBackground, sendToTab, type ContentRequest, type ContentResponse, type ProgressMessage } from '../shared/messages'
 import type { DiagnosticsReport, DreamTransProject, DreamTransStatus, MoodleContext, SyncSummary } from '../shared/types'
-import { projectOptions, reportContents } from './safeDom'
+import { projectOptions, reportContents, summaryContents } from './safeDom'
 
 // The popup: log in to DreamTrans once, pick which DreamTrans course this
 // Moodle course maps to, then 诊断 or 同步. The sync itself runs in the
@@ -112,16 +112,8 @@ function showProgress(message: string, done?: number, total?: number): void {
 }
 
 function showSummary(summary: SyncSummary): void {
-  const lines = [
-    `扫描 ${summary.scanned} 个模块 · 上传 ${summary.uploaded} · 未变 ${summary.unchanged} · 服务器已有 ${summary.duplicates} · 跳过 ${summary.skipped} · 失败 ${summary.failed}`,
-    `${summary.requests} 次请求 · ${(summary.durationMs / 1000).toFixed(1)} s`,
-  ]
-  if (summary.recordings.length) {
-    lines.push('', `录播 ${summary.recordings.length} 个（记录，不抓取）：`, ...summary.recordings.map((r) => `- [${r.provider}] ${r.section} / ${r.name}`))
-  }
-  if (summary.errors.length) lines.push('', '问题：', ...summary.errors.map((e) => `- ${e}`))
   ui.summary.hidden = false
-  ui.summary.textContent = lines.join('\n')
+  summaryContents(ui.summary, summary)
 }
 
 function renderReport(report: DiagnosticsReport): void {
@@ -151,7 +143,8 @@ async function init(): Promise<void> {
   if (moodle.courseId > 0) {
     ui.moodleState.textContent = moodle.sesskeySource === 'none' ? '页面上没有 sesskey' : moodle.host
     ui.moodleState.className = `muted${moodle.sesskeySource === 'none' ? ' bad' : ' ok'}`
-    ui.moodleCourse.textContent = `${moodle.shortname ? `${moodle.shortname} · ` : ''}${moodle.courseName}`
+    const prefix = moodle.shortname && !moodle.courseName.startsWith(moodle.shortname) ? `${moodle.shortname} · ` : ''
+    ui.moodleCourse.textContent = `${prefix}${moodle.courseName}`
   } else {
     ui.moodleState.textContent = '不在课程页面上'
     ui.moodleCourse.textContent = '打开 course/view.php?id=… 再点这里'
