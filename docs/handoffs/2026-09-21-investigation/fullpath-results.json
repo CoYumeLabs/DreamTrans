@@ -1,0 +1,979 @@
+{
+  "valid": true,
+  "old": "ghcr.io/coyumelabs/dreamtrans@sha256:d32344e29bff71713ccfa39ea19f646d95944dead09f0b754fb6202516462b90",
+  "new": "ghcr.io/coyumelabs/dreamtrans@sha256:a6fcde016bec5d69d78f4bdf0fcdbb9bf85df3c6755f4c1c6b529bbb3661b64d",
+  "fixture": "synthetic 100k usage rows, mock provider PCM acknowledgements, real release CLI/Nginx/PG",
+  "boundaries": [
+    "Provider only acknowledges synthetic PCM; no actual transcription, subtitle persistence, translation, or supplier latency is measured.",
+    "Short 20\u201330 second stable phases do not exercise the production 600 second handoff timer or long-running background work.",
+    "No Cloudflare tunnel or real Edge registration; independent per-container 2 CPU limits are not a shared 2 vCPU t3.medium host or its CPU/EBS credits."
+  ],
+  "stage_applications": {
+    "old_active": [
+      {
+        "moment": "start",
+        "active": "blue",
+        "previous": null,
+        "phase": "ready",
+        "applications": {
+          "blue": {
+            "container_id": "dbb37f6b32454f4bbdad62ea46aeb5f87bc5dab02f5b898a8e6267a4c2949bdc",
+            "image_id": "sha256:40c4c0f560ac8bb121ebe4e23c6fa1caae4d5fd105cc86938b4eadc7c3c7f3e2",
+            "running": true
+          }
+        }
+      }
+    ],
+    "upgrade_to_new": [
+      {
+        "moment": "start",
+        "active": "blue",
+        "previous": null,
+        "phase": "ready",
+        "applications": {
+          "blue": {
+            "container_id": "dbb37f6b32454f4bbdad62ea46aeb5f87bc5dab02f5b898a8e6267a4c2949bdc",
+            "image_id": "sha256:40c4c0f560ac8bb121ebe4e23c6fa1caae4d5fd105cc86938b4eadc7c3c7f3e2",
+            "running": true
+          }
+        }
+      },
+      {
+        "moment": "after_deploy",
+        "active": "green",
+        "previous": "blue",
+        "phase": "draining",
+        "applications": {
+          "blue": {
+            "container_id": "dbb37f6b32454f4bbdad62ea46aeb5f87bc5dab02f5b898a8e6267a4c2949bdc",
+            "image_id": "sha256:40c4c0f560ac8bb121ebe4e23c6fa1caae4d5fd105cc86938b4eadc7c3c7f3e2",
+            "running": true
+          },
+          "green": {
+            "container_id": "fd0d30bc9dd0c5b556055f933635fe7e31426aa1958d25dc23dd7c1d469cb5e7",
+            "image_id": "sha256:61d6c453b24d818e8be185e87644ce8144399a71230c155d1d4c1c935e17cf0d",
+            "running": true
+          }
+        }
+      }
+    ],
+    "new_http_old_audio_draining": [
+      {
+        "moment": "start",
+        "active": "green",
+        "previous": "blue",
+        "phase": "draining",
+        "applications": {
+          "blue": {
+            "container_id": "dbb37f6b32454f4bbdad62ea46aeb5f87bc5dab02f5b898a8e6267a4c2949bdc",
+            "image_id": "sha256:40c4c0f560ac8bb121ebe4e23c6fa1caae4d5fd105cc86938b4eadc7c3c7f3e2",
+            "running": true
+          },
+          "green": {
+            "container_id": "fd0d30bc9dd0c5b556055f933635fe7e31426aa1958d25dc23dd7c1d469cb5e7",
+            "image_id": "sha256:61d6c453b24d818e8be185e87644ce8144399a71230c155d1d4c1c935e17cf0d",
+            "running": true
+          }
+        }
+      }
+    ],
+    "new_active_before_config": [
+      {
+        "moment": "start",
+        "active": "green",
+        "previous": "blue",
+        "phase": "ready",
+        "applications": {
+          "blue": {
+            "container_id": "dbb37f6b32454f4bbdad62ea46aeb5f87bc5dab02f5b898a8e6267a4c2949bdc",
+            "image_id": "sha256:40c4c0f560ac8bb121ebe4e23c6fa1caae4d5fd105cc86938b4eadc7c3c7f3e2",
+            "running": false
+          },
+          "green": {
+            "container_id": "fd0d30bc9dd0c5b556055f933635fe7e31426aa1958d25dc23dd7c1d469cb5e7",
+            "image_id": "sha256:61d6c453b24d818e8be185e87644ce8144399a71230c155d1d4c1c935e17cf0d",
+            "running": true
+          }
+        }
+      }
+    ],
+    "configure_edge_same_image": [
+      {
+        "moment": "start",
+        "active": "green",
+        "previous": "blue",
+        "phase": "ready",
+        "applications": {
+          "blue": {
+            "container_id": "dbb37f6b32454f4bbdad62ea46aeb5f87bc5dab02f5b898a8e6267a4c2949bdc",
+            "image_id": "sha256:40c4c0f560ac8bb121ebe4e23c6fa1caae4d5fd105cc86938b4eadc7c3c7f3e2",
+            "running": false
+          },
+          "green": {
+            "container_id": "fd0d30bc9dd0c5b556055f933635fe7e31426aa1958d25dc23dd7c1d469cb5e7",
+            "image_id": "sha256:61d6c453b24d818e8be185e87644ce8144399a71230c155d1d4c1c935e17cf0d",
+            "running": true
+          }
+        }
+      },
+      {
+        "moment": "after_configure",
+        "active": "blue",
+        "previous": "green",
+        "phase": "draining",
+        "applications": {
+          "blue": {
+            "container_id": "bda0c968e2132d8be2ec248920c39489c5477fcfca5c9d32b49860113bb0fdb2",
+            "image_id": "sha256:61d6c453b24d818e8be185e87644ce8144399a71230c155d1d4c1c935e17cf0d",
+            "running": true
+          },
+          "green": {
+            "container_id": "fd0d30bc9dd0c5b556055f933635fe7e31426aa1958d25dc23dd7c1d469cb5e7",
+            "image_id": "sha256:61d6c453b24d818e8be185e87644ce8144399a71230c155d1d4c1c935e17cf0d",
+            "running": true
+          }
+        }
+      }
+    ],
+    "new_http_new_audio_draining": [
+      {
+        "moment": "start",
+        "active": "blue",
+        "previous": "green",
+        "phase": "draining",
+        "applications": {
+          "blue": {
+            "container_id": "bda0c968e2132d8be2ec248920c39489c5477fcfca5c9d32b49860113bb0fdb2",
+            "image_id": "sha256:61d6c453b24d818e8be185e87644ce8144399a71230c155d1d4c1c935e17cf0d",
+            "running": true
+          },
+          "green": {
+            "container_id": "fd0d30bc9dd0c5b556055f933635fe7e31426aa1958d25dc23dd7c1d469cb5e7",
+            "image_id": "sha256:61d6c453b24d818e8be185e87644ce8144399a71230c155d1d4c1c935e17cf0d",
+            "running": true
+          }
+        }
+      }
+    ],
+    "new_active_after_config": [
+      {
+        "moment": "start",
+        "active": "blue",
+        "previous": "green",
+        "phase": "ready",
+        "applications": {
+          "blue": {
+            "container_id": "bda0c968e2132d8be2ec248920c39489c5477fcfca5c9d32b49860113bb0fdb2",
+            "image_id": "sha256:61d6c453b24d818e8be185e87644ce8144399a71230c155d1d4c1c935e17cf0d",
+            "running": true
+          },
+          "green": {
+            "container_id": "fd0d30bc9dd0c5b556055f933635fe7e31426aa1958d25dc23dd7c1d469cb5e7",
+            "image_id": "sha256:61d6c453b24d818e8be185e87644ce8144399a71230c155d1d4c1c935e17cf0d",
+            "running": false
+          }
+        }
+      }
+    ]
+  },
+  "image_ids": {
+    "old": "sha256:40c4c0f560ac8bb121ebe4e23c6fa1caae4d5fd105cc86938b4eadc7c3c7f3e2",
+    "new": "sha256:61d6c453b24d818e8be185e87644ce8144399a71230c155d1d4c1c935e17cf0d"
+  },
+  "billing_rows": 26,
+  "billing_distinct_keys": 26,
+  "billing_charge_usd": "0.0227183325",
+  "final_state": {
+    "phase": "ready",
+    "active": "blue",
+    "previous": "green"
+  },
+  "cutover_http_failures": [],
+  "audio_connections": [
+    {
+      "connection": "7257266f1c964f2e89ede0a999acfaff",
+      "sent": 240,
+      "acknowledged": 240,
+      "pending": [],
+      "duplicates": [],
+      "ended": true,
+      "receiver_stopped": true
+    },
+    {
+      "connection": "bb1342799cc44d1fa96dbc02bfaa7083",
+      "sent": 244,
+      "acknowledged": 244,
+      "pending": [],
+      "duplicates": [],
+      "ended": true,
+      "receiver_stopped": true
+    },
+    {
+      "connection": "82ff8a6c5a9b499bb01ff63848683f75",
+      "sent": 150,
+      "acknowledged": 150,
+      "pending": [],
+      "duplicates": [],
+      "ended": true,
+      "receiver_stopped": true
+    }
+  ],
+  "errors": [],
+  "http_summary": [
+    {
+      "stage": "configure_edge_same_image",
+      "path": "/api/admin/access",
+      "n": 27,
+      "statuses": {
+        "200": 27
+      },
+      "p50_ms": 4.161,
+      "p95_ms": 5.432,
+      "max_ms": 5.872
+    },
+    {
+      "stage": "configure_edge_same_image",
+      "path": "/api/prompts/defaults",
+      "n": 27,
+      "statuses": {
+        "200": 27
+      },
+      "p50_ms": 3.595,
+      "p95_ms": 5.854,
+      "max_ms": 7.706
+    },
+    {
+      "stage": "configure_edge_same_image",
+      "path": "/api/system/access",
+      "n": 27,
+      "statuses": {
+        "200": 27
+      },
+      "p50_ms": 3.156,
+      "p95_ms": 4.363,
+      "max_ms": 6.69
+    },
+    {
+      "stage": "configure_edge_same_image",
+      "path": "/api/system/settings",
+      "n": 27,
+      "statuses": {
+        "200": 27
+      },
+      "p50_ms": 3.393,
+      "p95_ms": 5.371,
+      "max_ms": 8.973
+    },
+    {
+      "stage": "configure_edge_same_image",
+      "path": "/api/user/billing/account",
+      "n": 27,
+      "statuses": {
+        "200": 27
+      },
+      "p50_ms": 11.37,
+      "p95_ms": 15.784,
+      "max_ms": 21.426
+    },
+    {
+      "stage": "configure_edge_same_image",
+      "path": "/api/user/billing/session-costs",
+      "n": 27,
+      "statuses": {
+        "200": 27
+      },
+      "p50_ms": 214.869,
+      "p95_ms": 269.649,
+      "max_ms": 298.636
+    },
+    {
+      "stage": "configure_edge_same_image",
+      "path": "/api/user/profile",
+      "n": 27,
+      "statuses": {
+        "200": 27
+      },
+      "p50_ms": 5.066,
+      "p95_ms": 8.317,
+      "max_ms": 9.638
+    },
+    {
+      "stage": "configure_edge_same_image",
+      "path": "/healthz",
+      "n": 27,
+      "statuses": {
+        "200": 27
+      },
+      "p50_ms": 3.775,
+      "p95_ms": 4.866,
+      "max_ms": 5.472
+    },
+    {
+      "stage": "configure_edge_same_image",
+      "path": "/readyz",
+      "n": 27,
+      "statuses": {
+        "200": 27
+      },
+      "p50_ms": 3.791,
+      "p95_ms": 6.267,
+      "max_ms": 8.344
+    },
+    {
+      "stage": "new_active_after_config",
+      "path": "/api/admin/access",
+      "n": 93,
+      "statuses": {
+        "200": 93
+      },
+      "p50_ms": 3.766,
+      "p95_ms": 5.286,
+      "max_ms": 16.0
+    },
+    {
+      "stage": "new_active_after_config",
+      "path": "/api/prompts/defaults",
+      "n": 93,
+      "statuses": {
+        "200": 93
+      },
+      "p50_ms": 3.276,
+      "p95_ms": 4.645,
+      "max_ms": 14.457
+    },
+    {
+      "stage": "new_active_after_config",
+      "path": "/api/system/access",
+      "n": 93,
+      "statuses": {
+        "200": 93
+      },
+      "p50_ms": 3.088,
+      "p95_ms": 4.47,
+      "max_ms": 10.676
+    },
+    {
+      "stage": "new_active_after_config",
+      "path": "/api/system/settings",
+      "n": 93,
+      "statuses": {
+        "200": 93
+      },
+      "p50_ms": 3.174,
+      "p95_ms": 4.953,
+      "max_ms": 9.806
+    },
+    {
+      "stage": "new_active_after_config",
+      "path": "/api/user/billing/account",
+      "n": 93,
+      "statuses": {
+        "200": 93
+      },
+      "p50_ms": 10.727,
+      "p95_ms": 13.279,
+      "max_ms": 19.448
+    },
+    {
+      "stage": "new_active_after_config",
+      "path": "/api/user/billing/session-costs",
+      "n": 93,
+      "statuses": {
+        "200": 93
+      },
+      "p50_ms": 216.973,
+      "p95_ms": 262.819,
+      "max_ms": 272.867
+    },
+    {
+      "stage": "new_active_after_config",
+      "path": "/api/user/profile",
+      "n": 93,
+      "statuses": {
+        "200": 93
+      },
+      "p50_ms": 4.151,
+      "p95_ms": 6.107,
+      "max_ms": 10.388
+    },
+    {
+      "stage": "new_active_after_config",
+      "path": "/healthz",
+      "n": 93,
+      "statuses": {
+        "200": 93
+      },
+      "p50_ms": 3.173,
+      "p95_ms": 5.316,
+      "max_ms": 11.237
+    },
+    {
+      "stage": "new_active_after_config",
+      "path": "/readyz",
+      "n": 93,
+      "statuses": {
+        "200": 93
+      },
+      "p50_ms": 3.524,
+      "p95_ms": 5.216,
+      "max_ms": 6.208
+    },
+    {
+      "stage": "new_active_before_config",
+      "path": "/api/admin/access",
+      "n": 61,
+      "statuses": {
+        "200": 61
+      },
+      "p50_ms": 4.241,
+      "p95_ms": 9.01,
+      "max_ms": 11.31
+    },
+    {
+      "stage": "new_active_before_config",
+      "path": "/api/prompts/defaults",
+      "n": 61,
+      "statuses": {
+        "200": 61
+      },
+      "p50_ms": 3.957,
+      "p95_ms": 7.071,
+      "max_ms": 14.106
+    },
+    {
+      "stage": "new_active_before_config",
+      "path": "/api/system/access",
+      "n": 61,
+      "statuses": {
+        "200": 61
+      },
+      "p50_ms": 3.93,
+      "p95_ms": 6.726,
+      "max_ms": 13.952
+    },
+    {
+      "stage": "new_active_before_config",
+      "path": "/api/system/settings",
+      "n": 61,
+      "statuses": {
+        "200": 61
+      },
+      "p50_ms": 3.549,
+      "p95_ms": 6.451,
+      "max_ms": 12.076
+    },
+    {
+      "stage": "new_active_before_config",
+      "path": "/api/user/billing/account",
+      "n": 61,
+      "statuses": {
+        "200": 61
+      },
+      "p50_ms": 12.204,
+      "p95_ms": 21.458,
+      "max_ms": 23.73
+    },
+    {
+      "stage": "new_active_before_config",
+      "path": "/api/user/billing/session-costs",
+      "n": 61,
+      "statuses": {
+        "200": 61
+      },
+      "p50_ms": 218.562,
+      "p95_ms": 253.223,
+      "max_ms": 287.204
+    },
+    {
+      "stage": "new_active_before_config",
+      "path": "/api/user/profile",
+      "n": 61,
+      "statuses": {
+        "200": 61
+      },
+      "p50_ms": 4.927,
+      "p95_ms": 10.046,
+      "max_ms": 17.74
+    },
+    {
+      "stage": "new_active_before_config",
+      "path": "/healthz",
+      "n": 61,
+      "statuses": {
+        "200": 61
+      },
+      "p50_ms": 4.125,
+      "p95_ms": 6.043,
+      "max_ms": 10.019
+    },
+    {
+      "stage": "new_active_before_config",
+      "path": "/readyz",
+      "n": 61,
+      "statuses": {
+        "200": 61
+      },
+      "p50_ms": 4.132,
+      "p95_ms": 6.744,
+      "max_ms": 12.504
+    },
+    {
+      "stage": "new_http_new_audio_draining",
+      "path": "/api/admin/access",
+      "n": 62,
+      "statuses": {
+        "200": 62
+      },
+      "p50_ms": 3.791,
+      "p95_ms": 5.463,
+      "max_ms": 6.256
+    },
+    {
+      "stage": "new_http_new_audio_draining",
+      "path": "/api/prompts/defaults",
+      "n": 62,
+      "statuses": {
+        "200": 62
+      },
+      "p50_ms": 3.5045,
+      "p95_ms": 4.794,
+      "max_ms": 6.136
+    },
+    {
+      "stage": "new_http_new_audio_draining",
+      "path": "/api/system/access",
+      "n": 62,
+      "statuses": {
+        "200": 62
+      },
+      "p50_ms": 3.1165000000000003,
+      "p95_ms": 4.691,
+      "max_ms": 4.939
+    },
+    {
+      "stage": "new_http_new_audio_draining",
+      "path": "/api/system/settings",
+      "n": 62,
+      "statuses": {
+        "200": 62
+      },
+      "p50_ms": 3.4770000000000003,
+      "p95_ms": 4.682,
+      "max_ms": 6.45
+    },
+    {
+      "stage": "new_http_new_audio_draining",
+      "path": "/api/user/billing/account",
+      "n": 62,
+      "statuses": {
+        "200": 62
+      },
+      "p50_ms": 11.037500000000001,
+      "p95_ms": 14.169,
+      "max_ms": 17.06
+    },
+    {
+      "stage": "new_http_new_audio_draining",
+      "path": "/api/user/billing/session-costs",
+      "n": 62,
+      "statuses": {
+        "200": 62
+      },
+      "p50_ms": 216.3235,
+      "p95_ms": 240.956,
+      "max_ms": 280.267
+    },
+    {
+      "stage": "new_http_new_audio_draining",
+      "path": "/api/user/profile",
+      "n": 62,
+      "statuses": {
+        "200": 62
+      },
+      "p50_ms": 4.3695,
+      "p95_ms": 6.64,
+      "max_ms": 9.206
+    },
+    {
+      "stage": "new_http_new_audio_draining",
+      "path": "/healthz",
+      "n": 62,
+      "statuses": {
+        "200": 62
+      },
+      "p50_ms": 3.2275,
+      "p95_ms": 4.944,
+      "max_ms": 6.017
+    },
+    {
+      "stage": "new_http_new_audio_draining",
+      "path": "/readyz",
+      "n": 62,
+      "statuses": {
+        "200": 62
+      },
+      "p50_ms": 3.4524999999999997,
+      "p95_ms": 5.024,
+      "max_ms": 5.442
+    },
+    {
+      "stage": "new_http_old_audio_draining",
+      "path": "/api/admin/access",
+      "n": 63,
+      "statuses": {
+        "200": 63
+      },
+      "p50_ms": 4.11,
+      "p95_ms": 7.82,
+      "max_ms": 11.064
+    },
+    {
+      "stage": "new_http_old_audio_draining",
+      "path": "/api/prompts/defaults",
+      "n": 63,
+      "statuses": {
+        "200": 63
+      },
+      "p50_ms": 3.448,
+      "p95_ms": 5.628,
+      "max_ms": 9.3
+    },
+    {
+      "stage": "new_http_old_audio_draining",
+      "path": "/api/system/access",
+      "n": 63,
+      "statuses": {
+        "200": 63
+      },
+      "p50_ms": 3.417,
+      "p95_ms": 5.494,
+      "max_ms": 14.307
+    },
+    {
+      "stage": "new_http_old_audio_draining",
+      "path": "/api/system/settings",
+      "n": 63,
+      "statuses": {
+        "200": 63
+      },
+      "p50_ms": 3.236,
+      "p95_ms": 5.504,
+      "max_ms": 16.537
+    },
+    {
+      "stage": "new_http_old_audio_draining",
+      "path": "/api/user/billing/account",
+      "n": 63,
+      "statuses": {
+        "200": 63
+      },
+      "p50_ms": 11.432,
+      "p95_ms": 16.35,
+      "max_ms": 23.224
+    },
+    {
+      "stage": "new_http_old_audio_draining",
+      "path": "/api/user/billing/session-costs",
+      "n": 63,
+      "statuses": {
+        "200": 63
+      },
+      "p50_ms": 215.168,
+      "p95_ms": 256.948,
+      "max_ms": 298.614
+    },
+    {
+      "stage": "new_http_old_audio_draining",
+      "path": "/api/user/profile",
+      "n": 63,
+      "statuses": {
+        "200": 63
+      },
+      "p50_ms": 4.509,
+      "p95_ms": 7.729,
+      "max_ms": 10.332
+    },
+    {
+      "stage": "new_http_old_audio_draining",
+      "path": "/healthz",
+      "n": 63,
+      "statuses": {
+        "200": 63
+      },
+      "p50_ms": 3.95,
+      "p95_ms": 5.636,
+      "max_ms": 8.857
+    },
+    {
+      "stage": "new_http_old_audio_draining",
+      "path": "/readyz",
+      "n": 63,
+      "statuses": {
+        "200": 63
+      },
+      "p50_ms": 3.977,
+      "p95_ms": 6.026,
+      "max_ms": 15.19
+    },
+    {
+      "stage": "old_active",
+      "path": "/api/admin/access",
+      "n": 61,
+      "statuses": {
+        "200": 61
+      },
+      "p50_ms": 3.99,
+      "p95_ms": 5.315,
+      "max_ms": 15.133
+    },
+    {
+      "stage": "old_active",
+      "path": "/api/prompts/defaults",
+      "n": 61,
+      "statuses": {
+        "200": 61
+      },
+      "p50_ms": 3.408,
+      "p95_ms": 4.884,
+      "max_ms": 6.605
+    },
+    {
+      "stage": "old_active",
+      "path": "/api/system/access",
+      "n": 61,
+      "statuses": {
+        "200": 61
+      },
+      "p50_ms": 3.469,
+      "p95_ms": 4.89,
+      "max_ms": 5.435
+    },
+    {
+      "stage": "old_active",
+      "path": "/api/system/settings",
+      "n": 61,
+      "statuses": {
+        "200": 61
+      },
+      "p50_ms": 3.051,
+      "p95_ms": 4.361,
+      "max_ms": 5.396
+    },
+    {
+      "stage": "old_active",
+      "path": "/api/user/billing/account",
+      "n": 61,
+      "statuses": {
+        "200": 61
+      },
+      "p50_ms": 11.387,
+      "p95_ms": 13.883,
+      "max_ms": 29.57
+    },
+    {
+      "stage": "old_active",
+      "path": "/api/user/billing/session-costs",
+      "n": 61,
+      "statuses": {
+        "200": 61
+      },
+      "p50_ms": 220.131,
+      "p95_ms": 287.103,
+      "max_ms": 315.276
+    },
+    {
+      "stage": "old_active",
+      "path": "/api/user/profile",
+      "n": 61,
+      "statuses": {
+        "200": 61
+      },
+      "p50_ms": 4.465,
+      "p95_ms": 5.867,
+      "max_ms": 17.047
+    },
+    {
+      "stage": "old_active",
+      "path": "/healthz",
+      "n": 61,
+      "statuses": {
+        "200": 61
+      },
+      "p50_ms": 3.424,
+      "p95_ms": 5.194,
+      "max_ms": 5.935
+    },
+    {
+      "stage": "old_active",
+      "path": "/readyz",
+      "n": 61,
+      "statuses": {
+        "200": 61
+      },
+      "p50_ms": 3.73,
+      "p95_ms": 5.439,
+      "max_ms": 10.875
+    },
+    {
+      "stage": "setup",
+      "path": "/api/user/billing/account",
+      "n": 1,
+      "statuses": {
+        "200": 1
+      },
+      "p50_ms": 36.812,
+      "p95_ms": 36.812,
+      "max_ms": 36.812
+    },
+    {
+      "stage": "upgrade_to_new",
+      "path": "/api/admin/access",
+      "n": 23,
+      "statuses": {
+        "200": 23
+      },
+      "p50_ms": 4.209,
+      "p95_ms": 5.71,
+      "max_ms": 9.663
+    },
+    {
+      "stage": "upgrade_to_new",
+      "path": "/api/prompts/defaults",
+      "n": 23,
+      "statuses": {
+        "200": 23
+      },
+      "p50_ms": 3.737,
+      "p95_ms": 5.82,
+      "max_ms": 7.944
+    },
+    {
+      "stage": "upgrade_to_new",
+      "path": "/api/system/access",
+      "n": 23,
+      "statuses": {
+        "200": 23
+      },
+      "p50_ms": 3.702,
+      "p95_ms": 4.823,
+      "max_ms": 7.637
+    },
+    {
+      "stage": "upgrade_to_new",
+      "path": "/api/system/settings",
+      "n": 23,
+      "statuses": {
+        "200": 23
+      },
+      "p50_ms": 3.305,
+      "p95_ms": 5.409,
+      "max_ms": 7.207
+    },
+    {
+      "stage": "upgrade_to_new",
+      "path": "/api/user/billing/account",
+      "n": 23,
+      "statuses": {
+        "200": 23
+      },
+      "p50_ms": 12.856,
+      "p95_ms": 17.809,
+      "max_ms": 20.31
+    },
+    {
+      "stage": "upgrade_to_new",
+      "path": "/api/user/billing/session-costs",
+      "n": 23,
+      "statuses": {
+        "200": 23
+      },
+      "p50_ms": 222.99,
+      "p95_ms": 280.63,
+      "max_ms": 304.011
+    },
+    {
+      "stage": "upgrade_to_new",
+      "path": "/api/user/profile",
+      "n": 23,
+      "statuses": {
+        "200": 23
+      },
+      "p50_ms": 4.869,
+      "p95_ms": 7.901,
+      "max_ms": 12.202
+    },
+    {
+      "stage": "upgrade_to_new",
+      "path": "/healthz",
+      "n": 23,
+      "statuses": {
+        "200": 23
+      },
+      "p50_ms": 3.562,
+      "p95_ms": 5.539,
+      "max_ms": 10.231
+    },
+    {
+      "stage": "upgrade_to_new",
+      "path": "/readyz",
+      "n": 23,
+      "statuses": {
+        "200": 23
+      },
+      "p50_ms": 3.716,
+      "p95_ms": 5.329,
+      "max_ms": 9.675
+    }
+  ],
+  "audio_summary": [
+    {
+      "stage": "configure_edge_same_image",
+      "n": 44,
+      "p50_ms": 0.8765000000000001,
+      "p95_ms": 2.75,
+      "max_ms": 18.796
+    },
+    {
+      "stage": "new_active_after_config",
+      "n": 150,
+      "p50_ms": 0.9045000000000001,
+      "p95_ms": 1.499,
+      "max_ms": 12.42
+    },
+    {
+      "stage": "new_active_before_config",
+      "n": 100,
+      "p50_ms": 1.142,
+      "p95_ms": 6.069,
+      "max_ms": 15.083
+    },
+    {
+      "stage": "new_http_new_audio_draining",
+      "n": 100,
+      "p50_ms": 1.0179999999999998,
+      "p95_ms": 2.04,
+      "max_ms": 13.611
+    },
+    {
+      "stage": "new_http_old_audio_draining",
+      "n": 101,
+      "p50_ms": 1.17,
+      "p95_ms": 3.864,
+      "max_ms": 15.952
+    },
+    {
+      "stage": "old_active",
+      "n": 100,
+      "p50_ms": 1.033,
+      "p95_ms": 1.366,
+      "max_ms": 11.916
+    },
+    {
+      "stage": "upgrade_to_new",
+      "n": 39,
+      "p50_ms": 1.031,
+      "p95_ms": 2.883,
+      "max_ms": 13.964
+    }
+  ]
+}

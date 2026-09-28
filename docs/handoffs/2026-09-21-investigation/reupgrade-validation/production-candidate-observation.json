@@ -1,0 +1,44 @@
+{
+  "source": "User-pasted production outputs; no direct production access by the agent",
+  "state": {
+    "active": "green",
+    "target": "blue",
+    "phase": "candidate",
+    "green_mode": "active",
+    "blue_mode": "standby"
+  },
+  "old_image_digest": "d32344e29bff71713ccfa39ea19f646d95944dead09f0b754fb6202516462b90",
+  "new_image_digest": "a6fcde016bec5d69d78f4bdf0fcdbb9bf85df3c6755f4c1c6b529bbb3661b64d",
+  "before_candidate_seconds": {
+    "fixed_proxy": {
+      "ttfb": 0.001562,
+      "total": 0.001613
+    },
+    "public": {
+      "ttfb": 0.047193,
+      "total": 0.047287
+    }
+  },
+  "candidate_ttfb_seconds": {
+    "fixed_proxy": [
+      0.001285,
+      0.00103,
+      0.001624,
+      0.001028,
+      0.001034
+    ],
+    "public": [
+      0.037262,
+      0.038484,
+      0.055456,
+      0.039174,
+      0.037331
+    ]
+  },
+  "all_statuses": 200,
+  "endpoint": "/api/system/settings",
+  "cli_sha256": "876f0ba2dd670c47287a81086bbcdd967b5162990b8c0f83c5d2d3982a1316ed",
+  "recovery_path": "/root/dreamtrans-transition/recover-e163.sh",
+  "recovery_sha256": "2402eaa44bd231387a632eac50f688c5aa5d789c314781b4b83395c7d5537c80",
+  "interpretation": "Candidate coexistence did not slow the sampled old-active settings endpoint. New-active behavior, authenticated business and real audio remain untested."
+}

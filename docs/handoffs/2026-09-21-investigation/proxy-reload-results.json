@@ -1,0 +1,301 @@
+{
+  "prefix": "dt-proxy-audit-e79121a68b",
+  "description": "Exact release.go proxy config + production pinned nginx image; synthetic HTTP/WebSocket backends; no Cloudflare, application or database",
+  "errors": [],
+  "reload_idle_connection_closures": [
+    {
+      "phase": "cutover-green-with-blue-websocket",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "cutover-green-with-blue-websocket",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "cutover-green-with-blue-websocket",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "cutover-green-with-blue-websocket",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "cutover-recreated-blue-with-green-websocket",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "cutover-recreated-blue-with-green-websocket",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "cutover-recreated-blue-with-green-websocket",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "cutover-recreated-blue-with-green-websocket",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "repeat-reload-same-blue",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "repeat-reload-same-blue",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "repeat-reload-same-blue",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "repeat-reload-same-blue",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "repeat-reload-same-blue",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "repeat-reload-same-blue",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "repeat-reload-same-blue",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "repeat-reload-same-blue",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "repeat-reload-same-blue",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "repeat-reload-same-blue",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "repeat-reload-same-blue",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "repeat-reload-same-blue",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "repeat-reload-same-blue",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "repeat-reload-same-blue",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "repeat-reload-same-blue",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "repeat-reload-same-blue",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "repeat-reload-same-blue",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "repeat-reload-same-blue",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "repeat-reload-same-blue",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    },
+    {
+      "phase": "repeat-reload-same-blue",
+      "kind": "http",
+      "label": "proxy",
+      "error": "Remote end closed connection without response"
+    }
+  ],
+  "http": {
+    "baseline-blue/direct-green": {
+      "n": 503,
+      "p50": 0.853,
+      "p95": 3.563,
+      "max": 14.894
+    },
+    "baseline-blue/proxy": {
+      "n": 1976,
+      "p50": 1.312,
+      "p95": 4.612,
+      "max": 28.645
+    },
+    "cutover-green-with-blue-websocket/direct-green": {
+      "n": 805,
+      "p50": 0.723,
+      "p95": 3.129,
+      "max": 22.176
+    },
+    "cutover-green-with-blue-websocket/proxy": {
+      "n": 3128,
+      "p50": 1.466,
+      "p95": 4.757,
+      "max": 16.008
+    },
+    "cutover-recreated-blue-with-green-websocket/direct-green": {
+      "n": 822,
+      "p50": 0.636,
+      "p95": 1.077,
+      "max": 9.984
+    },
+    "cutover-recreated-blue-with-green-websocket/proxy": {
+      "n": 3219,
+      "p50": 1.128,
+      "p95": 2.369,
+      "max": 9.29
+    },
+    "recreate-inactive-blue/direct-green": {
+      "n": 64,
+      "p50": 0.949,
+      "p95": 4.509,
+      "max": 5.618
+    },
+    "recreate-inactive-blue/proxy": {
+      "n": 246,
+      "p50": 2.189,
+      "p95": 6.186,
+      "max": 11.717
+    },
+    "repeat-reload-same-blue/direct-green": {
+      "n": 762,
+      "p50": 0.575,
+      "p95": 0.941,
+      "max": 10.045
+    },
+    "repeat-reload-same-blue/proxy": {
+      "n": 2957,
+      "p50": 1.098,
+      "p95": 2.236,
+      "max": 11.753
+    },
+    "startup/direct-green": {
+      "n": 2,
+      "p50": 2.656,
+      "p95": 3.448,
+      "max": 3.448
+    },
+    "startup/proxy": {
+      "n": 8,
+      "p50": 3.928,
+      "p95": 5.945,
+      "max": 5.945
+    }
+  },
+  "websocket": {
+    "baseline-blue/blue1": {
+      "n": 159,
+      "p50": 1.106,
+      "p95": 2.905,
+      "max": 5.693
+    },
+    "cutover-green-with-blue-websocket/blue1": {
+      "n": 253,
+      "p50": 1.08,
+      "p95": 3.073,
+      "max": 7.001
+    },
+    "cutover-green-with-blue-websocket/green1": {
+      "n": 239,
+      "p50": 1.15,
+      "p95": 3.321,
+      "max": 6.84
+    },
+    "cutover-recreated-blue-with-green-websocket/blue2": {
+      "n": 239,
+      "p50": 0.984,
+      "p95": 1.539,
+      "max": 2.554
+    },
+    "cutover-recreated-blue-with-green-websocket/green1": {
+      "n": 253,
+      "p50": 0.96,
+      "p95": 1.508,
+      "max": 3.877
+    },
+    "recreate-inactive-blue/green1": {
+      "n": 20,
+      "p50": 1.352,
+      "p95": 4.726,
+      "max": 4.726
+    },
+    "repeat-reload-same-blue/blue2": {
+      "n": 234,
+      "p50": 0.929,
+      "p95": 1.579,
+      "max": 7.386
+    },
+    "repeat-reload-same-blue/green1": {
+      "n": 234,
+      "p50": 0.975,
+      "p95": 1.47,
+      "max": 3.199
+    }
+  },
+  "http_count": 14492,
+  "ws_count": 1631
+}

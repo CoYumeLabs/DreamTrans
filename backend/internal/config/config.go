@@ -42,6 +42,8 @@ var (
 	current Config
 	mu      sync.RWMutex
 	path    string
+	// Writers serialize persistence separately from the readable snapshot.
+	persistenceMu sync.Mutex
 )
 
 // defaults used when file is missing or fields empty.
@@ -100,6 +102,8 @@ var legacyDefaultModels = map[string]bool{
 }
 
 func Load() error {
+	persistenceMu.Lock()
+	defer persistenceMu.Unlock()
 	mu.Lock()
 	defer mu.Unlock()
 	// Decide path
@@ -134,17 +138,25 @@ func Load() error {
 	return nil
 }
 
-// Save persists current config. Callers that mutated via Get/Set must ensure locking.
+// Save persists the complete current snapshot. Use Update for partial changes
+// that must merge with configuration committed by another instance.
 func Save() error {
+	persistenceMu.Lock()
+	defer persistenceMu.Unlock()
 	mu.Lock()
+	if sharedDB != nil {
+		db, cfg := sharedDB, current
+		sharedWriting = true
+		mu.Unlock()
+		err := saveShared(db, &cfg)
+		finishSharedWrite(&cfg, err)
+		return err
+	}
 	defer mu.Unlock()
 	return saveLocked()
 }
 
 func saveLocked() error {
-	if sharedDB != nil {
-		return saveSharedLocked()
-	}
 	if path == "" {
 		return errors.New("config path empty")
 	}
@@ -180,31 +192,35 @@ func saveLocked() error {
 	return os.Rename(tempPath, path)
 }
 
-// Get returns a copy of the current config for read-only usage.
+// Get returns a copy of the current config for read-only usage. PostgreSQL
+// reads refresh at most once per second; concurrent readers use the last
+// successful snapshot while one bounded refresh or a write is in progress.
 func Get() Config {
-	mu.Lock()
-	defer mu.Unlock()
-	if sharedDB != nil {
-		_ = loadSharedLocked()
-	}
-	return current
+	return snapshotWithRefresh()
 }
 
 // Update merges non-zero/non-empty fields from incoming cfg into current and saves.
 func Update(partial *Config) error {
-	mu.Lock()
-	defer mu.Unlock()
 	if partial == nil {
 		return nil
 	}
+	persistenceMu.Lock()
+	defer persistenceMu.Unlock()
+	mu.Lock()
 	if sharedDB != nil {
-		return updateSharedLocked(partial)
+		db := sharedDB
+		sharedWriting = true
+		mu.Unlock()
+		cfg, err := updateShared(db, partial)
+		finishSharedWrite(&cfg, err)
+		return err
 	}
-	mergeLocked(partial)
+	defer mu.Unlock()
+	mergeConfig(&current, partial)
 	return saveLocked()
 }
 
-func mergeLocked(partial *Config) {
+func mergeConfig(current *Config, partial *Config) {
 	// prompts
 	if partial.Prompts.Chat != "" {
 		current.Prompts.Chat = partial.Prompts.Chat

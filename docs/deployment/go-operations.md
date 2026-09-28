@@ -122,3 +122,11 @@ Edge 通过独立节点身份调用 `POST /api/edge-control/provider-credential`
 **升级顺序：**先升级主站及宿主机 Go CLI，再更新 `EDGE_RELEASE_IMAGE` 为包含此能力的固定 Edge digest，再创建/安装新节点。新主站继续兼容旧 Edge 的手动凭证模式；旧主站没有临时授权接口，不能服务 `main` 模式的新节点。发行清单新增 `provider_credentials: 1`，新版控制器拒绝回切到缺失该能力的主站或 Edge 镜像。回切须选择同样支持该能力的发行版本；迁移和生产写入均保留。
 
 **OpenAI：**本阶段 Edge 仍只承担 Speechmatics 实时转录，OpenAI 现有调用留在主站，无需复制 Key。后续接入 OpenAI Realtime 可由主站通过 `/v1/realtime/client_secrets` 创建短期 `ek_` 凭证，支持实时/转录会话；它同样可在过期前多次建连，不能代替主站额度控制。普通 OpenAI API 另有 Workload Identity Federation，可将配置好的受信任外部身份兑换为短期访问令牌，但需要配置身份提供方和服务账号，不接受任意自签 JWT。本次未实现 OpenAI Edge 适配器或 WIF；没有对应机制的供应商继续使用手动独立凭证。官方资料：[Realtime client secrets](https://developers.openai.com/api/reference/resources/realtime/subresources/client_secrets/methods/create)、[Workload Identity Federation](https://developers.openai.com/api/reference/workload-identity-federation)。
+
+## 主站共享配置的读取时效
+
+PostgreSQL 中的提示词、模型和翻译/摘要阈值配置使用进程内最近成功快照。每次成功加载或刷新后的 1 秒内直接读取快照；过期后的第一个读取者负责刷新，数据库等待上限 3 秒，同期其他读取者继续使用快照，不会按请求数量串行累积数据库等待。刷新失败继续保留快照，并在 1 秒后允许下一次读取重试；数据库持续不可用时，快照可能持续陈旧。此机制不适用于独立的 `/api/system/settings` 内存设置接口。
+
+本机配置更新在 PostgreSQL 事务提交成功后立即发布到快照；事务仍读取并锁定数据库中的最新配置，再合并局部修改，失败不会发布未提交内容。其他蓝绿实例在其缓存到期后的下一次读取刷新时看到更新；正常情况下是最多 1 秒缓存间隔加数据库读取耗时，并非即时广播。刷新或写入期间的读取者可能暂时拿到旧快照。启动仍必须成功加载数据库中的配置，不会因缓存机制接受缺失、损坏或无法读取的初始配置。
+
+此改动消除已复现的配置读取串行等待放大现象，不能据此认定 2026-09-21 生产全站延迟的根因已定位或修复。

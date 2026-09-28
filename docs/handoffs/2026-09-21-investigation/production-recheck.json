@@ -1,0 +1,249 @@
+{
+  "source": "User-pasted production results; agent has not directly accessed production",
+  "cutover_timestamp": "2026-09-21T16:08:23.962555655Z",
+  "active": "blue",
+  "phase": "ready",
+  "active_image_digest": "a6fcde016bec5d69d78f4bdf0fcdbb9bf85df3c6755f4c1c6b529bbb3661b64d",
+  "green": "old e163d7b image retained, stopped/unreachable",
+  "config_fix_deployed": false,
+  "http_probes": [
+    {
+      "round": 1,
+      "layer": "direct",
+      "path": "/healthz",
+      "status": 200,
+      "total_seconds": 0.006604
+    },
+    {
+      "round": 1,
+      "layer": "direct",
+      "path": "/readyz",
+      "status": 200,
+      "total_seconds": 0.005363
+    },
+    {
+      "round": 1,
+      "layer": "direct",
+      "path": "/api/system/settings",
+      "status": 200,
+      "total_seconds": 0.012924
+    },
+    {
+      "round": 2,
+      "layer": "direct",
+      "path": "/healthz",
+      "status": 200,
+      "total_seconds": 0.002496
+    },
+    {
+      "round": 2,
+      "layer": "direct",
+      "path": "/readyz",
+      "status": 200,
+      "total_seconds": 0.00927
+    },
+    {
+      "round": 2,
+      "layer": "direct",
+      "path": "/api/system/settings",
+      "status": 200,
+      "total_seconds": 0.002074
+    },
+    {
+      "round": 3,
+      "layer": "direct",
+      "path": "/healthz",
+      "status": 200,
+      "total_seconds": 0.000541
+    },
+    {
+      "round": 3,
+      "layer": "direct",
+      "path": "/readyz",
+      "status": 200,
+      "total_seconds": 0.000849
+    },
+    {
+      "round": 3,
+      "layer": "direct",
+      "path": "/api/system/settings",
+      "status": 200,
+      "total_seconds": 0.002326
+    },
+    {
+      "round": 1,
+      "layer": "fixed_proxy",
+      "path": "/healthz",
+      "status": 200,
+      "total_seconds": 0.00312
+    },
+    {
+      "round": 1,
+      "layer": "fixed_proxy",
+      "path": "/readyz",
+      "status": 200,
+      "total_seconds": 0.005792
+    },
+    {
+      "round": 1,
+      "layer": "fixed_proxy",
+      "path": "/api/system/settings",
+      "status": 200,
+      "total_seconds": 0.002404
+    },
+    {
+      "round": 2,
+      "layer": "fixed_proxy",
+      "path": "/healthz",
+      "status": 200,
+      "total_seconds": 0.001439
+    },
+    {
+      "round": 2,
+      "layer": "fixed_proxy",
+      "path": "/readyz",
+      "status": 200,
+      "total_seconds": 0.003238
+    },
+    {
+      "round": 2,
+      "layer": "fixed_proxy",
+      "path": "/api/system/settings",
+      "status": 200,
+      "total_seconds": 0.003222
+    },
+    {
+      "round": 3,
+      "layer": "fixed_proxy",
+      "path": "/healthz",
+      "status": 200,
+      "total_seconds": 0.008905
+    },
+    {
+      "round": 3,
+      "layer": "fixed_proxy",
+      "path": "/readyz",
+      "status": 200,
+      "total_seconds": 0.001624
+    },
+    {
+      "round": 3,
+      "layer": "fixed_proxy",
+      "path": "/api/system/settings",
+      "status": 200,
+      "total_seconds": 0.003464
+    },
+    {
+      "round": 1,
+      "layer": "public",
+      "path": "/healthz",
+      "status": 200,
+      "total_seconds": 0.077785
+    },
+    {
+      "round": 1,
+      "layer": "public",
+      "path": "/readyz",
+      "status": 200,
+      "total_seconds": 0.066669
+    },
+    {
+      "round": 1,
+      "layer": "public",
+      "path": "/api/system/settings",
+      "status": 200,
+      "total_seconds": 0.063708
+    },
+    {
+      "round": 2,
+      "layer": "public",
+      "path": "/healthz",
+      "status": 200,
+      "total_seconds": 0.059529
+    },
+    {
+      "round": 2,
+      "layer": "public",
+      "path": "/readyz",
+      "status": 200,
+      "total_seconds": 0.047162
+    },
+    {
+      "round": 2,
+      "layer": "public",
+      "path": "/api/system/settings",
+      "status": 200,
+      "total_seconds": 0.062419
+    },
+    {
+      "round": 3,
+      "layer": "public",
+      "path": "/healthz",
+      "status": 200,
+      "total_seconds": 0.054517
+    },
+    {
+      "round": 3,
+      "layer": "public",
+      "path": "/readyz",
+      "status": 200,
+      "total_seconds": 0.054257
+    },
+    {
+      "round": 3,
+      "layer": "public",
+      "path": "/api/system/settings",
+      "status": 200,
+      "total_seconds": 0.062512
+    }
+  ],
+  "http_summary": {
+    "direct": {
+      "count": 9,
+      "min_ms": 0.541,
+      "median_ms": 2.496,
+      "max_ms": 12.924
+    },
+    "fixed_proxy": {
+      "count": 9,
+      "min_ms": 1.439,
+      "median_ms": 3.222,
+      "max_ms": 8.905
+    },
+    "public": {
+      "count": 9,
+      "min_ms": 47.162,
+      "median_ms": 62.419,
+      "max_ms": 77.785
+    }
+  },
+  "user_subjective_feedback": "好像是正常的",
+  "audio": {
+    "sent_seconds": 31,
+    "outbound_queue_ms": 0,
+    "partial": {
+      "last_ms": 1100,
+      "ema_ms": 1200,
+      "max_ms": 2800,
+      "samples": 60,
+      "live_behind_ms": 1300,
+      "last_age_ms": 178
+    },
+    "final": {
+      "last_ms": 2500,
+      "ema_ms": 2900,
+      "max_ms": 4800,
+      "samples": 31,
+      "live_behind_ms": 3300,
+      "last_age_ms": 795
+    },
+    "ai_pending": 0,
+    "ai_buffered_chars": 32
+  },
+  "limits": [
+    "Short window; does not exclude intermittent or long-running failure.",
+    "UI lag is local accepted PCM cursor minus result audio end timestamp, not a network RTT.",
+    "No segment-specific receive/forward timing is available from these figures.",
+    "The original production incident root cause remains undetermined."
+  ]
+}

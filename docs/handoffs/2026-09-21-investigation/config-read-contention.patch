@@ -1,0 +1,642 @@
+diff --git a/backend/internal/config/config.go b/backend/internal/config/config.go
+index e4eec73..f796b47 100644
+--- a/backend/internal/config/config.go
++++ b/backend/internal/config/config.go
+@@ -42,6 +42,8 @@ var (
+ 	current Config
+ 	mu      sync.RWMutex
+ 	path    string
++	// Writers serialize persistence separately from the readable snapshot.
++	persistenceMu sync.Mutex
+ )
+ 
+ // defaults used when file is missing or fields empty.
+@@ -100,6 +102,8 @@ var legacyDefaultModels = map[string]bool{
+ }
+ 
+ func Load() error {
++	persistenceMu.Lock()
++	defer persistenceMu.Unlock()
+ 	mu.Lock()
+ 	defer mu.Unlock()
+ 	// Decide path
+@@ -134,17 +138,25 @@ func Load() error {
+ 	return nil
+ }
+ 
+-// Save persists current config. Callers that mutated via Get/Set must ensure locking.
++// Save persists the complete current snapshot. Use Update for partial changes
++// that must merge with configuration committed by another instance.
+ func Save() error {
++	persistenceMu.Lock()
++	defer persistenceMu.Unlock()
+ 	mu.Lock()
++	if sharedDB != nil {
++		db, cfg := sharedDB, current
++		sharedWriting = true
++		mu.Unlock()
++		err := saveShared(db, &cfg)
++		finishSharedWrite(&cfg, err)
++		return err
++	}
+ 	defer mu.Unlock()
+ 	return saveLocked()
+ }
+ 
+ func saveLocked() error {
+-	if sharedDB != nil {
+-		return saveSharedLocked()
+-	}
+ 	if path == "" {
+ 		return errors.New("config path empty")
+ 	}
+@@ -180,31 +192,35 @@ func saveLocked() error {
+ 	return os.Rename(tempPath, path)
+ }
+ 
+-// Get returns a copy of the current config for read-only usage.
++// Get returns a copy of the current config for read-only usage. PostgreSQL
++// reads refresh at most once per second; concurrent readers use the last
++// successful snapshot while one bounded refresh or a write is in progress.
+ func Get() Config {
+-	mu.Lock()
+-	defer mu.Unlock()
+-	if sharedDB != nil {
+-		_ = loadSharedLocked()
+-	}
+-	return current
++	return snapshotWithRefresh()
+ }
+ 
+ // Update merges non-zero/non-empty fields from incoming cfg into current and saves.
+ func Update(partial *Config) error {
+-	mu.Lock()
+-	defer mu.Unlock()
+ 	if partial == nil {
+ 		return nil
+ 	}
++	persistenceMu.Lock()
++	defer persistenceMu.Unlock()
++	mu.Lock()
+ 	if sharedDB != nil {
+-		return updateSharedLocked(partial)
++		db := sharedDB
++		sharedWriting = true
++		mu.Unlock()
++		cfg, err := updateShared(db, partial)
++		finishSharedWrite(&cfg, err)
++		return err
+ 	}
+-	mergeLocked(partial)
++	defer mu.Unlock()
++	mergeConfig(&current, partial)
+ 	return saveLocked()
+ }
+ 
+-func mergeLocked(partial *Config) {
++func mergeConfig(current *Config, partial *Config) {
+ 	// prompts
+ 	if partial.Prompts.Chat != "" {
+ 		current.Prompts.Chat = partial.Prompts.Chat
+diff --git a/backend/internal/config/config_test.go b/backend/internal/config/config_test.go
+index d6afa1a..c0fd2a3 100644
+--- a/backend/internal/config/config_test.go
++++ b/backend/internal/config/config_test.go
+@@ -5,12 +5,18 @@ import (
+ 	"os"
+ 	"path/filepath"
+ 	"testing"
++	"time"
+ )
+ 
+ func resetConfigForTest() {
+ 	mu.Lock()
+ 	current = Config{}
+ 	path = ""
++	sharedDB = nil
++	sharedRevision++
++	sharedRefreshing = false
++	sharedWriting = false
++	sharedRefreshAfter = time.Time{}
+ 	mu.Unlock()
+ }
+ 
+diff --git a/backend/internal/config/postgres.go b/backend/internal/config/postgres.go
+index 1c5418f..314d3fd 100644
+--- a/backend/internal/config/postgres.go
++++ b/backend/internal/config/postgres.go
+@@ -7,66 +7,128 @@ import (
+ 	"time"
+ )
+ 
+-var sharedDB *sql.DB
++// A healthy remote change is observed by the next read after this interval.
++// Failed refreshes retain the last successful snapshot and use the same retry
++// interval. Only the caller performing a refresh can wait for its DB timeout.
++const sharedRefreshInterval = time.Second
+ 
+-// LoadPostgres uses the configuration imported during the initial maintenance window.
++// These fields and current are protected by mu. No PostgreSQL I/O holds mu.
++var (
++	sharedDB           *sql.DB
++	sharedRevision     uint64
++	sharedRefreshing   bool
++	sharedWriting      bool
++	sharedRefreshAfter time.Time
++)
++
++// LoadPostgres synchronously validates the imported configuration at startup.
++// An unavailable or missing configuration is an error, never a default fallback.
+ func LoadPostgres(db *sql.DB) error {
++	persistenceMu.Lock()
++	defer persistenceMu.Unlock()
++	mu.Lock()
++	sharedWriting = true
++	mu.Unlock()
++	cfg, err := loadShared(db)
+ 	mu.Lock()
+ 	defer mu.Unlock()
++	sharedWriting = false
++	if err != nil {
++		return err
++	}
+ 	sharedDB = db
+-	return loadSharedLocked()
++	current = cfg
++	sharedRevision++
++	sharedRefreshAfter = time.Now().Add(sharedRefreshInterval)
++	return nil
++}
++
++func snapshotWithRefresh() Config {
++	mu.Lock()
++	if sharedDB == nil || sharedWriting || sharedRefreshing || time.Now().Before(sharedRefreshAfter) {
++		cfg := current
++		mu.Unlock()
++		return cfg
++	}
++	db, revision := sharedDB, sharedRevision
++	sharedRefreshing = true
++	mu.Unlock()
++
++	cfg, err := loadShared(db)
++	mu.Lock()
++	defer mu.Unlock()
++	sharedRefreshing = false
++	// An in-flight read must not overwrite a committed local update or a newly
++	// loaded backend. A concurrent writer publishes only after its own commit.
++	if err == nil && sharedDB == db && sharedRevision == revision && !sharedWriting {
++		current = cfg
++		sharedRevision++
++	}
++	sharedRefreshAfter = time.Now().Add(sharedRefreshInterval)
++	return current
+ }
+ 
+-func loadSharedLocked() error {
++func loadShared(db *sql.DB) (Config, error) {
+ 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+ 	defer cancel()
++	var cfg Config
+ 	var data string
+-	if err := sharedDB.QueryRowContext(ctx, `SELECT value FROM deployment_metadata WHERE key='server_config'`).Scan(&data); err != nil {
+-		return err
++	if err := db.QueryRowContext(ctx, `SELECT value FROM deployment_metadata WHERE key='server_config'`).Scan(&data); err != nil {
++		return cfg, err
+ 	}
+-	var cfg Config
+ 	if err := json.Unmarshal([]byte(data), &cfg); err != nil {
+-		return err
++		return cfg, err
+ 	}
+ 	setDefaults(&cfg)
+-	current = cfg
+-	return nil
++	return cfg, nil
++}
++
++func finishSharedWrite(cfg *Config, err error) {
++	mu.Lock()
++	defer mu.Unlock()
++	sharedWriting = false
++	if err == nil {
++		current = *cfg
++		sharedRevision++
++		sharedRefreshAfter = time.Now().Add(sharedRefreshInterval)
++	}
+ }
+ 
+-func saveSharedLocked() error {
+-	data, err := json.Marshal(current)
++func saveShared(db *sql.DB, cfg *Config) error {
++	data, err := json.Marshal(cfg)
+ 	if err != nil {
+ 		return err
+ 	}
+ 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+ 	defer cancel()
+-	_, err = sharedDB.ExecContext(ctx, `UPDATE deployment_metadata SET value=$1 WHERE key='server_config'`, string(data))
++	_, err = db.ExecContext(ctx, `UPDATE deployment_metadata SET value=$1 WHERE key='server_config'`, string(data))
+ 	return err
+ }
+ 
+-func updateSharedLocked(partial *Config) error {
++func updateShared(db *sql.DB, partial *Config) (Config, error) {
++	var cfg Config
+ 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+ 	defer cancel()
+-	tx, err := sharedDB.BeginTx(ctx, nil)
++	tx, err := db.BeginTx(ctx, nil)
+ 	if err != nil {
+-		return err
++		return cfg, err
+ 	}
+ 	defer func() { _ = tx.Rollback() }()
+ 	var data string
+ 	if err := tx.QueryRowContext(ctx, `SELECT value FROM deployment_metadata WHERE key='server_config' FOR UPDATE`).Scan(&data); err != nil {
+-		return err
++		return cfg, err
+ 	}
+-	if err := json.Unmarshal([]byte(data), &current); err != nil {
+-		return err
++	if err := json.Unmarshal([]byte(data), &cfg); err != nil {
++		return cfg, err
+ 	}
+-	setDefaults(&current)
+-	mergeLocked(partial)
+-	encoded, err := json.Marshal(current)
++	setDefaults(&cfg)
++	mergeConfig(&cfg, partial)
++	encoded, err := json.Marshal(cfg)
+ 	if err != nil {
+-		return err
++		return cfg, err
+ 	}
+ 	if _, err = tx.ExecContext(ctx, `UPDATE deployment_metadata SET value=$1 WHERE key='server_config'`, string(encoded)); err != nil {
+-		return err
++		return cfg, err
+ 	}
+-	return tx.Commit()
++	return cfg, tx.Commit()
+ }
+diff --git a/backend/internal/config/postgres_test.go b/backend/internal/config/postgres_test.go
+new file mode 100644
+index 0000000..5049f0e
+--- /dev/null
++++ b/backend/internal/config/postgres_test.go
+@@ -0,0 +1,339 @@
++package config
++
++import (
++	"context"
++	"database/sql"
++	"database/sql/driver"
++	"encoding/json"
++	"errors"
++	"io"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++)
++
++// This database/sql driver deterministically gates reads and injects transaction
++// failures without external database state or timing-dependent sleeps.
++type configTestDatabase struct {
++	mu                 sync.Mutex
++	data               string
++	missing            bool
++	reads              int
++	read               func(context.Context, string) error
++	execErr, commitErr error
++}
++type configTestConnector struct{ db *configTestDatabase }
++type configTestConn struct {
++	db      *configTestDatabase
++	inTx    bool
++	pending string
++}
++type configTestRows struct {
++	data string
++	done bool
++}
++
++func (c configTestConnector) Connect(context.Context) (driver.Conn, error) {
++	return &configTestConn{db: c.db}, nil
++}
++func (c configTestConnector) Driver() driver.Driver { return c }
++func (c configTestConnector) Open(string) (driver.Conn, error) {
++	return c.Connect(context.Background())
++}
++func (c *configTestConn) Close() error { return nil }
++func (c *configTestConn) Prepare(string) (driver.Stmt, error) {
++	return nil, errors.New("unexpected prepared statement")
++}
++func (c *configTestConn) Begin() (driver.Tx, error) { c.inTx = true; return c, nil }
++func (c *configTestConn) Commit() error {
++	c.db.mu.Lock()
++	defer c.db.mu.Unlock()
++	if c.db.commitErr != nil {
++		c.inTx = false
++		return c.db.commitErr
++	}
++	if c.pending != "" {
++		c.db.data = c.pending
++	}
++	c.inTx, c.pending = false, ""
++	return nil
++}
++func (c *configTestConn) Rollback() error { c.inTx, c.pending = false, ""; return nil }
++func (c *configTestConn) QueryContext(ctx context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
++	c.db.mu.Lock()
++	c.db.reads++
++	data, missing, read := c.db.data, c.db.missing, c.db.read
++	c.db.mu.Unlock()
++	if read != nil {
++		if err := read(ctx, query); err != nil {
++			return nil, err
++		}
++	}
++	return &configTestRows{data: data, done: missing}, nil
++}
++func (c *configTestConn) ExecContext(_ context.Context, _ string, args []driver.NamedValue) (driver.Result, error) {
++	c.db.mu.Lock()
++	defer c.db.mu.Unlock()
++	if c.db.execErr != nil {
++		return nil, c.db.execErr
++	}
++	data, ok := args[0].Value.(string)
++	if !ok {
++		return nil, errors.New("unexpected config value")
++	}
++	if c.inTx {
++		c.pending = data
++	} else {
++		c.db.data = data
++	}
++	return driver.RowsAffected(1), nil
++}
++func (r *configTestRows) Columns() []string { return []string{"value"} }
++func (r *configTestRows) Close() error      { return nil }
++func (r *configTestRows) Next(values []driver.Value) error {
++	if r.done {
++		return io.EOF
++	}
++	r.done = true
++	values[0] = r.data
++	return nil
++}
++func postgresConfigFixture(t *testing.T) *configTestDatabase {
++	t.Helper()
++	resetConfigForTest()
++	t.Cleanup(resetConfigForTest)
++	storage := &configTestDatabase{data: `{"models":{"chat_model":"initial-chat"}}`}
++	db := sql.OpenDB(configTestConnector{db: storage})
++	t.Cleanup(func() { _ = db.Close() })
++	if err := LoadPostgres(db); err != nil {
++		t.Fatal(err)
++	}
++	return storage
++}
++func expireConfigSnapshot() { mu.Lock(); sharedRefreshAfter = time.Time{}; mu.Unlock() }
++func waitConfigSignal(t *testing.T, signal <-chan struct{}) {
++	t.Helper()
++	select {
++	case <-signal:
++	case <-time.After(2 * time.Second):
++		t.Fatal("database operation did not reach its gate")
++	}
++}
++func receiveConfig(t *testing.T, result <-chan Config) Config {
++	t.Helper()
++	select {
++	case cfg := <-result:
++		return cfg
++	case <-time.After(2 * time.Second):
++		t.Fatal("snapshot reader blocked behind database I/O")
++		return Config{}
++	}
++}
++func configReadGate(t *testing.T, storage *configTestDatabase, transactional bool) (<-chan struct{}, func()) {
++	t.Helper()
++	entered, release := make(chan struct{}), make(chan struct{})
++	var enteredOnce, releaseOnce sync.Once
++	unblock := func() { releaseOnce.Do(func() { close(release) }) }
++	t.Cleanup(unblock)
++	storage.mu.Lock()
++	storage.read = func(ctx context.Context, query string) error {
++		if strings.Contains(query, "FOR UPDATE") != transactional {
++			return nil
++		}
++		enteredOnce.Do(func() { close(entered) })
++		select {
++		case <-release:
++			return nil
++		case <-ctx.Done():
++			return ctx.Err()
++		}
++	}
++	storage.mu.Unlock()
++	return entered, unblock
++}
++func TestPostgresConcurrentReadsUseSnapshotDuringOneRefresh(t *testing.T) {
++	storage := postgresConfigFixture(t)
++	entered, release := configReadGate(t, storage, false)
++	expireConfigSnapshot()
++	leader := make(chan Config, 1)
++	go func() { leader <- Get() }()
++	waitConfigSignal(t, entered)
++	followers := make(chan Config, 5)
++	for range 5 {
++		go func() { followers <- Get() }()
++	}
++	for range 5 {
++		if got := receiveConfig(t, followers).Models.Chat; got != "initial-chat" {
++			t.Fatalf("concurrent reader lost successful snapshot: %s", got)
++		}
++	}
++	storage.mu.Lock()
++	reads := storage.reads
++	storage.mu.Unlock()
++	if reads != 2 {
++		t.Fatalf("concurrent refreshes = %d, want 1", reads-1)
++	}
++	release()
++	receiveConfig(t, leader)
++}
++func TestPostgresReadersContinueDuringBlockedUpdate(t *testing.T) {
++	storage := postgresConfigFixture(t)
++	entered, release := configReadGate(t, storage, true)
++	expireConfigSnapshot()
++	partial := &Config{}
++	partial.Models.Chat = "committed-chat"
++	updated := make(chan error, 1)
++	go func() { updated <- Update(partial) }()
++	waitConfigSignal(t, entered)
++	read := make(chan Config, 1)
++	go func() { read <- Get() }()
++	if got := receiveConfig(t, read).Models.Chat; got != "initial-chat" {
++		t.Fatalf("uncommitted update visible: %s", got)
++	}
++	release()
++	if err := <-updated; err != nil {
++		t.Fatal(err)
++	}
++	if got := Get().Models.Chat; got != "committed-chat" {
++		t.Fatalf("committed update not immediately visible: %s", got)
++	}
++}
++func TestPostgresLateRefreshCannotOverwriteCommittedUpdate(t *testing.T) {
++	storage := postgresConfigFixture(t)
++	entered, release := configReadGate(t, storage, false)
++	expireConfigSnapshot()
++	leader := make(chan Config, 1)
++	go func() { leader <- Get() }()
++	waitConfigSignal(t, entered)
++	partial := &Config{}
++	partial.Models.Chat = "new-local-chat"
++	if err := Update(partial); err != nil {
++		t.Fatal(err)
++	}
++	release()
++	if got := receiveConfig(t, leader).Models.Chat; got != "new-local-chat" {
++		t.Fatalf("late read replaced committed configuration: %s", got)
++	}
++}
++func TestPostgresRefreshObservesOtherReplicaAndUpdateMergesDatabaseState(t *testing.T) {
++	storage := postgresConfigFixture(t)
++	// Independent connection models another main instance committing a config.
++	other := sql.OpenDB(configTestConnector{db: storage})
++	defer func() { _ = other.Close() }()
++	if _, err := other.Exec(`UPDATE deployment_metadata SET value=$1 WHERE key='server_config'`, `{"models":{"chat_model":"remote-chat"},"summary":{"max_lines":71}}`); err != nil {
++		t.Fatal(err)
++	}
++	if got := Get().Models.Chat; got != "initial-chat" {
++		t.Fatalf("fresh snapshot unexpectedly refreshed: %s", got)
++	}
++	expireConfigSnapshot()
++	if got := Get().Models.Chat; got != "remote-chat" {
++		t.Fatalf("remote committed update not refreshed: %s", got)
++	}
++	if _, err := other.Exec(`UPDATE deployment_metadata SET value=$1 WHERE key='server_config'`, `{"models":{"chat_model":"newer-remote-chat"},"summary":{"max_lines":83}}`); err != nil {
++		t.Fatal(err)
++	}
++	partial := &Config{}
++	partial.Summary.ParMinChars = 456
++	if err := Update(partial); err != nil {
++		t.Fatal(err)
++	}
++	cfg := Get()
++	if cfg.Models.Chat != "newer-remote-chat" || cfg.Summary.MaxLines != 83 || cfg.Summary.ParMinChars != 456 {
++		t.Fatalf("partial update did not merge latest database: %#v", cfg)
++	}
++	storage.mu.Lock()
++	data := storage.data
++	storage.mu.Unlock()
++	var persisted Config
++	if err := json.Unmarshal([]byte(data), &persisted); err != nil {
++		t.Fatal(err)
++	}
++	if persisted != cfg {
++		t.Fatal("published snapshot differs from committed data")
++	}
++}
++func TestPostgresFailedRefreshRetainsSnapshotAndBacksOff(t *testing.T) {
++	storage := postgresConfigFixture(t)
++	storage.mu.Lock()
++	storage.read = func(context.Context, string) error { return context.DeadlineExceeded }
++	storage.mu.Unlock()
++	expireConfigSnapshot()
++	for range 5 {
++		if got := Get().Models.Chat; got != "initial-chat" {
++			t.Fatalf("failed refresh lost successful snapshot: %s", got)
++		}
++	}
++	storage.mu.Lock()
++	reads := storage.reads
++	storage.mu.Unlock()
++	if reads != 2 {
++		t.Fatalf("failed refresh retried without cooldown: %d reads", reads)
++	}
++}
++func TestPostgresFailedWritesNeverPublishUncommittedState(t *testing.T) {
++	for _, stage := range []string{"read", "decode", "exec", "commit"} {
++		t.Run(stage, func(t *testing.T) {
++			storage := postgresConfigFixture(t)
++			storage.mu.Lock()
++			switch stage {
++			case "read":
++				storage.read = func(context.Context, string) error { return errors.New("read rejected") }
++			case "decode":
++				storage.data = `{"models":{"chat_model":"must-not-leak"},"summary":{"max_lines":"invalid"}}`
++			case "exec":
++				storage.execErr = errors.New("write rejected")
++			case "commit":
++				storage.commitErr = errors.New("commit rejected")
++			}
++			storage.mu.Unlock()
++			partial := &Config{}
++			partial.Models.Chat = "must-not-publish"
++			if err := Update(partial); err == nil {
++				t.Fatal("injected database failure accepted")
++			}
++			if got := Get().Models.Chat; got != "initial-chat" {
++				t.Fatalf("failed write leaked into snapshot: %s", got)
++			}
++		})
++	}
++}
++func TestLoadPostgresFailsClosedWithoutImportedConfiguration(t *testing.T) {
++	for _, data := range []string{"missing", "invalid-json"} {
++		t.Run(data, func(t *testing.T) {
++			resetConfigForTest()
++			t.Cleanup(resetConfigForTest)
++			storage := &configTestDatabase{data: data, missing: data == "missing"}
++			db := sql.OpenDB(configTestConnector{db: storage})
++			defer func() { _ = db.Close() }()
++			if err := LoadPostgres(db); err == nil {
++				t.Fatal("invalid startup configuration accepted")
++			}
++			mu.RLock()
++			defer mu.RUnlock()
++			if sharedDB != nil || current != (Config{}) {
++				t.Fatal("failed startup published defaults or enabled failed backend")
++			}
++		})
++	}
++}
++
++func TestPostgresLateRefreshCannotOverwriteReloadedBackend(t *testing.T) {
++	storage := postgresConfigFixture(t)
++	entered, release := configReadGate(t, storage, false)
++	expireConfigSnapshot()
++	leader := make(chan Config, 1)
++	go func() { leader <- Get() }()
++	waitConfigSignal(t, entered)
++	replacement := &configTestDatabase{data: `{"models":{"chat_model":"replacement-chat"}}`}
++	db := sql.OpenDB(configTestConnector{db: replacement})
++	defer func() { _ = db.Close() }()
++	if err := LoadPostgres(db); err != nil {
++		t.Fatal(err)
++	}
++	release()
++	if got := receiveConfig(t, leader).Models.Chat; got != "replacement-chat" {
++		t.Fatalf("old backend read replaced current snapshot: %s", got)
++	}
++}
+diff --git a/docs/deployment/go-operations.md b/docs/deployment/go-operations.md
+index 7b4ac67..b91bf22 100644
+--- a/docs/deployment/go-operations.md
++++ b/docs/deployment/go-operations.md
+@@ -122,3 +122,11 @@ Edge 通过独立节点身份调用 `POST /api/edge-control/provider-credential`
+ **升级顺序：**先升级主站及宿主机 Go CLI，再更新 `EDGE_RELEASE_IMAGE` 为包含此能力的固定 Edge digest，再创建/安装新节点。新主站继续兼容旧 Edge 的手动凭证模式；旧主站没有临时授权接口，不能服务 `main` 模式的新节点。发行清单新增 `provider_credentials: 1`，新版控制器拒绝回切到缺失该能力的主站或 Edge 镜像。回切须选择同样支持该能力的发行版本；迁移和生产写入均保留。
+ 
+ **OpenAI：**本阶段 Edge 仍只承担 Speechmatics 实时转录，OpenAI 现有调用留在主站，无需复制 Key。后续接入 OpenAI Realtime 可由主站通过 `/v1/realtime/client_secrets` 创建短期 `ek_` 凭证，支持实时/转录会话；它同样可在过期前多次建连，不能代替主站额度控制。普通 OpenAI API 另有 Workload Identity Federation，可将配置好的受信任外部身份兑换为短期访问令牌，但需要配置身份提供方和服务账号，不接受任意自签 JWT。本次未实现 OpenAI Edge 适配器或 WIF；没有对应机制的供应商继续使用手动独立凭证。官方资料：[Realtime client secrets](https://developers.openai.com/api/reference/resources/realtime/subresources/client_secrets/methods/create)、[Workload Identity Federation](https://developers.openai.com/api/reference/workload-identity-federation)。
++
++## 主站共享配置的读取时效
++
++PostgreSQL 中的提示词、模型和翻译/摘要阈值配置使用进程内最近成功快照。每次成功加载或刷新后的 1 秒内直接读取快照；过期后的第一个读取者负责刷新，数据库等待上限 3 秒，同期其他读取者继续使用快照，不会按请求数量串行累积数据库等待。刷新失败继续保留快照，并在 1 秒后允许下一次读取重试；数据库持续不可用时，快照可能持续陈旧。此机制不适用于独立的 `/api/system/settings` 内存设置接口。
++
++本机配置更新在 PostgreSQL 事务提交成功后立即发布到快照；事务仍读取并锁定数据库中的最新配置，再合并局部修改，失败不会发布未提交内容。其他蓝绿实例在其缓存到期后的下一次读取刷新时看到更新；正常情况下是最多 1 秒缓存间隔加数据库读取耗时，并非即时广播。刷新或写入期间的读取者可能暂时拿到旧快照。启动仍必须成功加载数据库中的配置，不会因缓存机制接受缺失、损坏或无法读取的初始配置。
++
++此改动消除已复现的配置读取串行等待放大现象，不能据此认定 2026-09-21 生产全站延迟的根因已定位或修复。

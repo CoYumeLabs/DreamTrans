@@ -1,0 +1,32 @@
+{
+  "go": "1.26.5",
+  "golangci_lint": "2.12.2 (built with go1.26.5)",
+  "format": "pass",
+  "go_mod_tidy_download_verify": "pass",
+  "migration_manifest": "pass",
+  "migrations_001_057": "pass",
+  "provider_model_key_check": "pass",
+  "legacy_provider_model_migration": "pass",
+  "legacy_model_catalog_constraints": "pass",
+  "acquisition_replay": "pass",
+  "lint_event_worker": "pass",
+  "backend_race": {
+    "passed_top_level_tests": 581,
+    "skipped_tests": 0,
+    "failures": 0,
+    "race_warnings": 0
+  },
+  "event_worker_race": {
+    "passed_top_level_tests": 7,
+    "skipped_tests": 0,
+    "failures": 0,
+    "race_warnings": 0
+  },
+  "unrun": [
+    "frontend E2E: frontend unchanged",
+    "remote CI: no commit or push",
+    "production deployment/performance: not executed",
+    "real supplier transcription: mock PCM forwarding only",
+    "new production container image build/publication: not executed"
+  ]
+}

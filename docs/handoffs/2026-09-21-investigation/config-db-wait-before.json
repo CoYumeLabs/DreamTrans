@@ -1,0 +1,219 @@
+{
+  "images": {
+    "old": "ghcr.io/coyumelabs/dreamtrans@sha256:d32344e29bff71713ccfa39ea19f646d95944dead09f0b754fb6202516462b90",
+    "new": "ghcr.io/coyumelabs/dreamtrans@sha256:a6fcde016bec5d69d78f4bdf0fcdbb9bf85df3c6755f4c1c6b529bbb3661b64d"
+  },
+  "mode": "active",
+  "stages": [
+    {
+      "image": "old",
+      "stage": "baseline",
+      "requests": [
+        {
+          "kind": "/healthz",
+          "status": 200,
+          "milliseconds": 1.14
+        },
+        {
+          "kind": "/readyz",
+          "status": 200,
+          "milliseconds": 0.88
+        },
+        {
+          "kind": "/api/system/settings",
+          "status": 200,
+          "milliseconds": 0.7
+        },
+        {
+          "kind": "/api/system/access",
+          "status": 200,
+          "milliseconds": 1.57
+        },
+        {
+          "kind": "/api/user/profile",
+          "status": 200,
+          "milliseconds": 2.6
+        },
+        {
+          "kind": "empty_registration",
+          "status": 401,
+          "milliseconds": 0.86
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 1.64
+        }
+      ]
+    },
+    {
+      "image": "old",
+      "stage": "config_table_lock_5_prompts",
+      "pg_wait_snapshot": "Lock|relation|1\nTimeout|PgSleep|1",
+      "requests": [
+        {
+          "kind": "/healthz",
+          "status": 200,
+          "milliseconds": 2.68
+        },
+        {
+          "kind": "/readyz",
+          "status": 200,
+          "milliseconds": 1.69
+        },
+        {
+          "kind": "/api/system/settings",
+          "status": 200,
+          "milliseconds": 2.07
+        },
+        {
+          "kind": "/api/user/profile",
+          "status": 200,
+          "milliseconds": 2.9
+        },
+        {
+          "kind": "prompts",
+          "status": 200,
+          "milliseconds": 6007.42
+        },
+        {
+          "kind": "prompts",
+          "status": 200,
+          "milliseconds": 3003.72
+        },
+        {
+          "kind": "prompts",
+          "status": 200,
+          "milliseconds": 9009.67
+        },
+        {
+          "kind": "prompts",
+          "status": 200,
+          "milliseconds": 12014.02
+        },
+        {
+          "kind": "prompts",
+          "status": 200,
+          "milliseconds": 15016.83
+        }
+      ]
+    },
+    {
+      "image": "new",
+      "stage": "baseline",
+      "requests": [
+        {
+          "kind": "/healthz",
+          "status": 200,
+          "milliseconds": 3.31
+        },
+        {
+          "kind": "/readyz",
+          "status": 200,
+          "milliseconds": 1.4
+        },
+        {
+          "kind": "/api/system/settings",
+          "status": 200,
+          "milliseconds": 0.89
+        },
+        {
+          "kind": "/api/system/access",
+          "status": 200,
+          "milliseconds": 1.72
+        },
+        {
+          "kind": "/api/user/profile",
+          "status": 200,
+          "milliseconds": 2.82
+        },
+        {
+          "kind": "empty_registration",
+          "status": 401,
+          "milliseconds": 0.81
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 1.58
+        }
+      ]
+    },
+    {
+      "image": "new",
+      "stage": "config_table_lock_5_prompts",
+      "pg_wait_snapshot": "Lock|relation|1\nTimeout|PgSleep|1",
+      "requests": [
+        {
+          "kind": "/healthz",
+          "status": 200,
+          "milliseconds": 1.93
+        },
+        {
+          "kind": "/readyz",
+          "status": 200,
+          "milliseconds": 2.23
+        },
+        {
+          "kind": "/api/system/settings",
+          "status": 200,
+          "milliseconds": 1.45
+        },
+        {
+          "kind": "/api/user/profile",
+          "status": 200,
+          "milliseconds": 2.33
+        },
+        {
+          "kind": "prompts",
+          "status": 200,
+          "milliseconds": 9010.22
+        },
+        {
+          "kind": "prompts",
+          "status": 200,
+          "milliseconds": 3004.6
+        },
+        {
+          "kind": "prompts",
+          "status": 200,
+          "milliseconds": 6007.13
+        },
+        {
+          "kind": "prompts",
+          "status": 200,
+          "milliseconds": 12014.0
+        },
+        {
+          "kind": "prompts",
+          "status": 200,
+          "milliseconds": 15014.42
+        }
+      ]
+    }
+  ],
+  "deployment_status": {
+    "old": {
+      "protocol": 1,
+      "mode": "active",
+      "requests": 0,
+      "websockets": 0,
+      "tasks": 0,
+      "drained": false,
+      "pending": 0,
+      "handoff_supported": true,
+      "handoff_streams": 0
+    },
+    "new": {
+      "protocol": 1,
+      "mode": "active",
+      "requests": 0,
+      "websockets": 0,
+      "tasks": 0,
+      "drained": false,
+      "pending": 0,
+      "handoff_supported": true,
+      "handoff_streams": 0
+    }
+  }
+}

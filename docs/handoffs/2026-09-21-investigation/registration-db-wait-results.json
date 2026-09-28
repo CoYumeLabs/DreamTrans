@@ -1,0 +1,523 @@
+{
+  "images": {
+    "old": "ghcr.io/coyumelabs/dreamtrans@sha256:d32344e29bff71713ccfa39ea19f646d95944dead09f0b754fb6202516462b90",
+    "new": "ghcr.io/coyumelabs/dreamtrans@sha256:a6fcde016bec5d69d78f4bdf0fcdbb9bf85df3c6755f4c1c6b529bbb3661b64d"
+  },
+  "mode": "active",
+  "stages": [
+    {
+      "image": "old",
+      "stage": "baseline",
+      "requests": [
+        {
+          "kind": "/healthz",
+          "status": 200,
+          "milliseconds": 1.02
+        },
+        {
+          "kind": "/readyz",
+          "status": 200,
+          "milliseconds": 0.74
+        },
+        {
+          "kind": "/api/system/settings",
+          "status": 200,
+          "milliseconds": 0.65
+        },
+        {
+          "kind": "/api/system/access",
+          "status": 200,
+          "milliseconds": 1.51
+        },
+        {
+          "kind": "/api/user/profile",
+          "status": 200,
+          "milliseconds": 2.32
+        },
+        {
+          "kind": "empty_registration",
+          "status": 401,
+          "milliseconds": 0.71
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 1.47
+        }
+      ]
+    },
+    {
+      "image": "old",
+      "stage": "row_lock_1_registrations",
+      "pg_wait_snapshot": "Lock|transactionid|1\nTimeout|PgSleep|1",
+      "requests": [
+        {
+          "kind": "/healthz",
+          "status": 200,
+          "milliseconds": 2.22
+        },
+        {
+          "kind": "/readyz",
+          "status": 200,
+          "milliseconds": 2.57
+        },
+        {
+          "kind": "/api/system/settings",
+          "status": 200,
+          "milliseconds": 2.93
+        },
+        {
+          "kind": "/api/system/access",
+          "status": 200,
+          "milliseconds": 7.56
+        },
+        {
+          "kind": "/api/user/profile",
+          "status": 200,
+          "milliseconds": 4.2
+        },
+        {
+          "kind": "empty_registration",
+          "status": 401,
+          "milliseconds": 1.09
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5993.66
+        }
+      ]
+    },
+    {
+      "image": "old",
+      "stage": "row_lock_25_registrations",
+      "pg_wait_snapshot": "Lock|transactionid|1\nLock|tuple|24\nTimeout|PgSleep|1",
+      "requests": [
+        {
+          "kind": "/healthz",
+          "status": 200,
+          "milliseconds": 1.55
+        },
+        {
+          "kind": "/readyz",
+          "status": 503,
+          "milliseconds": 2003.7
+        },
+        {
+          "kind": "/api/system/settings",
+          "status": 200,
+          "milliseconds": 2.62
+        },
+        {
+          "kind": "/api/system/access",
+          "status": 200,
+          "milliseconds": 5741.5
+        },
+        {
+          "kind": "/api/user/profile",
+          "status": 200,
+          "milliseconds": 5704.5
+        },
+        {
+          "kind": "empty_registration",
+          "status": 401,
+          "milliseconds": 1.65
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 6015.59
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 6016.19
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 6014.1
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 6003.48
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 6034.03
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 6013.44
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 6050.87
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 6009.9
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 6006.62
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 6001.33
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 6007.26
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 6018.8
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 6029.7
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 6034.01
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 6027.79
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5998.88
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 6018.36
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 6025.18
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5996.6
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 6009.7
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5993.98
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5992.65
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 6031.76
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 6010.65
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 6035.31
+        }
+      ]
+    },
+    {
+      "image": "new",
+      "stage": "baseline",
+      "requests": [
+        {
+          "kind": "/healthz",
+          "status": 200,
+          "milliseconds": 2.01
+        },
+        {
+          "kind": "/readyz",
+          "status": 200,
+          "milliseconds": 3.06
+        },
+        {
+          "kind": "/api/system/settings",
+          "status": 200,
+          "milliseconds": 2.14
+        },
+        {
+          "kind": "/api/system/access",
+          "status": 200,
+          "milliseconds": 4.83
+        },
+        {
+          "kind": "/api/user/profile",
+          "status": 200,
+          "milliseconds": 5.0
+        },
+        {
+          "kind": "empty_registration",
+          "status": 401,
+          "milliseconds": 1.54
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 3.04
+        }
+      ]
+    },
+    {
+      "image": "new",
+      "stage": "row_lock_1_registrations",
+      "pg_wait_snapshot": "Lock|transactionid|1\nTimeout|PgSleep|1",
+      "requests": [
+        {
+          "kind": "/healthz",
+          "status": 200,
+          "milliseconds": 3.35
+        },
+        {
+          "kind": "/readyz",
+          "status": 200,
+          "milliseconds": 3.04
+        },
+        {
+          "kind": "/api/system/settings",
+          "status": 200,
+          "milliseconds": 2.61
+        },
+        {
+          "kind": "/api/system/access",
+          "status": 200,
+          "milliseconds": 5.33
+        },
+        {
+          "kind": "/api/user/profile",
+          "status": 200,
+          "milliseconds": 5.93
+        },
+        {
+          "kind": "empty_registration",
+          "status": 401,
+          "milliseconds": 2.8
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5959.0
+        }
+      ]
+    },
+    {
+      "image": "new",
+      "stage": "row_lock_25_registrations",
+      "pg_wait_snapshot": "Lock|transactionid|1\nLock|tuple|24\nTimeout|PgSleep|1",
+      "requests": [
+        {
+          "kind": "/healthz",
+          "status": 200,
+          "milliseconds": 3.59
+        },
+        {
+          "kind": "/readyz",
+          "status": 503,
+          "milliseconds": 2003.3
+        },
+        {
+          "kind": "/api/system/settings",
+          "status": 200,
+          "milliseconds": 1.64
+        },
+        {
+          "kind": "/api/system/access",
+          "status": 200,
+          "milliseconds": 5501.99
+        },
+        {
+          "kind": "/api/user/profile",
+          "status": 200,
+          "milliseconds": 5505.14
+        },
+        {
+          "kind": "empty_registration",
+          "status": 401,
+          "milliseconds": 1.04
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5844.38
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5847.23
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5847.05
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5843.59
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5852.4
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5843.43
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5854.08
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5865.42
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5840.91
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5848.23
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5835.55
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5848.97
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5838.09
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5856.63
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5844.53
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5831.7
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5827.0
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5821.43
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5864.33
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5855.55
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5856.98
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5857.37
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5870.97
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5858.79
+        },
+        {
+          "kind": "valid_registration",
+          "status": 200,
+          "milliseconds": 5866.62
+        }
+      ]
+    }
+  ],
+  "deployment_status": {
+    "old": {
+      "protocol": 1,
+      "mode": "active",
+      "requests": 0,
+      "websockets": 0,
+      "tasks": 0,
+      "drained": false,
+      "pending": 0,
+      "handoff_supported": true,
+      "handoff_streams": 0
+    },
+    "new": {
+      "protocol": 1,
+      "mode": "active",
+      "requests": 0,
+      "websockets": 0,
+      "tasks": 0,
+      "drained": false,
+      "pending": 0,
+      "handoff_supported": true,
+      "handoff_streams": 0
+    }
+  }
+}

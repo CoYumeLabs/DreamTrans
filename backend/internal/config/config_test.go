@@ -5,12 +5,18 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func resetConfigForTest() {
 	mu.Lock()
 	current = Config{}
 	path = ""
+	sharedDB = nil
+	sharedRevision++
+	sharedRefreshing = false
+	sharedWriting = false
+	sharedRefreshAfter = time.Time{}
 	mu.Unlock()
 }
 

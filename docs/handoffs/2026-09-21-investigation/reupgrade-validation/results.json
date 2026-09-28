@@ -1,0 +1,39 @@
+{
+  "valid": true,
+  "old_id": "sha256:40c4c0f560ac8bb121ebe4e23c6fa1caae4d5fd105cc86938b4eadc7c3c7f3e2",
+  "new_id": "sha256:61d6c453b24d818e8be185e87644ce8144399a71230c155d1d4c1c935e17cf0d",
+  "samples": 1139,
+  "failures": [],
+  "max_ms": 21.174,
+  "stages": {
+    "abort_candidate": {
+      "samples": 13,
+      "max_ms": 2.386
+    },
+    "baseline": {
+      "samples": 31,
+      "max_ms": 21.174
+    },
+    "pause_again": {
+      "samples": 134,
+      "max_ms": 3.582
+    },
+    "pause_candidate": {
+      "samples": 214,
+      "max_ms": 8.055
+    },
+    "resume_new": {
+      "samples": 124,
+      "max_ms": 3.529
+    },
+    "special_recovery": {
+      "samples": 623,
+      "max_ms": 9.888
+    }
+  },
+  "ordinary_rollback_error": "[\u5931\u8d25] candidate cannot preserve central provider credentials; use a compatible release",
+  "limitations": [
+    "No WebSockets or tasks; recovery requires ready phase and disabled Edge.",
+    "Isolated synthetic DB; not a reproduction of original latency."
+  ]
+}
