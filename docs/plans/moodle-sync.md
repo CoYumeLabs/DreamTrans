@@ -41,7 +41,7 @@ content script ─① Discovery─② Fetch─③ Extract─▶ DreamTrans API �
 | 页类型 | 上传 | 服务端保留 |
 |---|---|---|
 | 纯文本 | 文本 | 文本 |
-| 含图 / 图为主 | 文本 + 页面渲染图 ~1024px | VLM 描述 + OCR + bbox；图片 24h 内删除 |
+| 含图 / 图为主 | 文本 + 页面渲染图（最宽 2048px，放不进 1.9MB 时降到 1600/1280/1024/768；logo 等小图不触发） | VLM 描述 + OCR + bbox；图片 24h 内删除 |
 
 原文件和渲染图留 IndexedDB，按 sha256 引用，看原图本机渲染。云存图 / 全文件上传为 opt-in。
 

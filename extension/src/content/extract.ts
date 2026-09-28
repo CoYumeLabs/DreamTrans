@@ -15,7 +15,37 @@ pdfjs.GlobalWorkerOptions.workerSrc = 'pdf.worker.mjs'
 export interface ExtractOptions {
   renderFigures: boolean
   maxFigures: number
+  /** Preferred width; a render that is too large steps down the ladder. */
   renderWidth: number
+}
+
+// The server drops any figure over 2 MiB decoded and any request over 64 MiB,
+// so renders step down until they fit and a file stops adding renders once
+// its budget is spent (text pages still upload).
+const FIGURE_MAX_BYTES = 1_900_000
+const FIGURE_BUDGET_BYTES = 36_000_000
+const WIDTH_LADDER = [2048, 1600, 1280, 1024, 768]
+
+function widthsFrom(preferred: number): number[] {
+  const ladder = WIDTH_LADDER.filter((width) => width < preferred)
+  return [preferred, ...ladder]
+}
+
+function decodedBytes(base64: string): number {
+  return Math.floor((base64.length * 3) / 4)
+}
+
+/** Renders at the widest width whose PNG fits, or null if none does. */
+async function renderFitting(widths: number[], draw: (width: number) => Promise<HTMLCanvasElement | null>): Promise<string | null> {
+  for (const width of widths) {
+    const canvas = await draw(width)
+    if (!canvas) return null
+    const png = canvasToPngBase64(canvas)
+    canvas.width = 0
+    canvas.height = 0
+    if (decodedBytes(png) <= FIGURE_MAX_BYTES) return png
+  }
+  return null
 }
 
 export interface Extracted {
@@ -104,6 +134,7 @@ async function extractPDF(bytes: ArrayBuffer, options: ExtractOptions): Promise<
   const pdf = await pdfjs.getDocument({ data: new Uint8Array(bytes), isEvalSupported: false, useSystemFonts: true }).promise
   const pages: DerivedPage[] = []
   let figuresRendered = 0
+  let figureBytes = 0
   for (let n = 1; n <= pdf.numPages; n += 1) {
     const page = await pdf.getPage(n)
     const textContent = await page.getTextContent()
@@ -123,21 +154,23 @@ async function extractPDF(bytes: ArrayBuffer, options: ExtractOptions): Promise<
     // Scanned or image-only pages, or pages with a real figure. A slide whose
     // only image is the template logo already has its text layer.
     const figurePage = textless || coverage >= FIGURE_COVERAGE
-    if (options.renderFigures && figurePage && figuresRendered < options.maxFigures) {
+    if (options.renderFigures && figurePage && figuresRendered < options.maxFigures && figureBytes < FIGURE_BUDGET_BYTES) {
       const base = page.getViewport({ scale: 1 })
-      const scale = options.renderWidth / base.width
-      const viewport = page.getViewport({ scale })
-      const canvas = document.createElement('canvas')
-      canvas.width = Math.ceil(viewport.width)
-      canvas.height = Math.ceil(viewport.height)
-      const context = canvas.getContext('2d')
-      if (context) {
+      const png = await renderFitting(widthsFrom(options.renderWidth), async (width) => {
+        const viewport = page.getViewport({ scale: width / base.width })
+        const canvas = document.createElement('canvas')
+        canvas.width = Math.ceil(viewport.width)
+        canvas.height = Math.ceil(viewport.height)
+        const context = canvas.getContext('2d')
+        if (!context) return null
         await page.render({ canvasContext: context, viewport }).promise
-        figures.push({ png_base64: canvasToPngBase64(canvas), bbox: [0, 0, 1, 1] })
+        return canvas
+      })
+      if (png) {
+        figures.push({ png_base64: png, bbox: [0, 0, 1, 1] })
         figuresRendered += 1
+        figureBytes += decodedBytes(png)
       }
-      canvas.width = 0
-      canvas.height = 0
     }
     pages.push({ n, text, ...(figures.length ? { figures } : {}) })
     page.cleanup()
@@ -200,12 +233,16 @@ async function extractImage(bytes: ArrayBuffer, mimetype: string, options: Extra
       element.onerror = () => reject(new Error('image decode failed'))
       element.src = url
     })
-    const scale = Math.min(1, options.renderWidth / image.naturalWidth)
-    const canvas = document.createElement('canvas')
-    canvas.width = Math.ceil(image.naturalWidth * scale)
-    canvas.height = Math.ceil(image.naturalHeight * scale)
-    canvas.getContext('2d')?.drawImage(image, 0, 0, canvas.width, canvas.height)
-    return { pages: [{ n: 1, text: '', figures: [{ png_base64: canvasToPngBase64(canvas), bbox: [0, 0, 1, 1] }] }], extractor: 'image' }
+    const png = await renderFitting(widthsFrom(options.renderWidth), async (width) => {
+      const scale = Math.min(1, width / image.naturalWidth)
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.ceil(image.naturalWidth * scale)
+      canvas.height = Math.ceil(image.naturalHeight * scale)
+      canvas.getContext('2d')?.drawImage(image, 0, 0, canvas.width, canvas.height)
+      return canvas
+    })
+    if (!png) return { pages: [], extractor: 'image' }
+    return { pages: [{ n: 1, text: '', figures: [{ png_base64: png, bbox: [0, 0, 1, 1] }] }], extractor: 'image' }
   } finally {
     URL.revokeObjectURL(url)
   }

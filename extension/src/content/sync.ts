@@ -111,7 +111,7 @@ export async function runSync(ctx: MoodleContext, doc: Document, options: SyncOp
           if (limiter.cancelled) throw new Error('cancelled')
           report({ phase: 'extract', message: `抽取 ${file.filename}`, done, total })
           const extracted = await extractFile(file, {
-            renderFigures: options.uploadFigures, maxFigures: 60, renderWidth: 1024,
+            renderFigures: options.uploadFigures, maxFigures: 60, renderWidth: 2048,
           })
           if (!extracted || extracted.pages.length === 0) {
             summary.skipped += 1
