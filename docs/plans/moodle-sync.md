@@ -8,7 +8,7 @@
 |---|---|---|
 | 抓取 | DOM 爬取 | AJAX API 优先，HTML 解析兜底 |
 | 同步 | 手动全量 | `timemodified` 增量 + 新材料通知 |
-| 存储 | 整份 PDF 上云 | 文本 + 图像描述持久化，图片处理完即删 |
+| 存储 | 整份 PDF 上云 | 默认只存文本 + 图像描述，图片处理完即删；原文件由用户手动开启后保存 |
 | 录播 | 通用转写 | 转写 ↔ 当周 slides 按页对齐 |
 
 ## 2. 架构
@@ -43,7 +43,7 @@ content script ─① Discovery─② Fetch─③ Extract─▶ DreamTrans API �
 | 纯文本 | 文本 | 文本 |
 | 含图 / 图为主 | 文本 + 页面渲染图（最宽 2048px，放不进 1.9MB 时降到 1600/1280/1024/768；logo 等小图不触发） | VLM 描述 + OCR + bbox；图片 24h 内删除 |
 
-原文件和渲染图留 IndexedDB，按 sha256 引用，看原图本机渲染。云存图 / 全文件上传为 opt-in。
+原文件默认不上传。弹窗「保存原文件」（默认关）打开后，扩展把 PDF / PPTX / DOCX / 图片原件 PUT 到 `/sources/{id}/original`，服务器校验 sha256 与大小后按手动上传的方式保存，学习页可下载（2026-09-28 实现）。IndexedDB 本地缓存未实现。
 
 **④ Process / Align**
 sha256 内容寻址去重。转写分段与每页文本+图像描述做 embedding 相似度 + 时序 DP，输出 `[{t0, t1, page}]`。Echo360 侧另有 content script 读 media 元数据和自带字幕作对齐锚点；不抓音频流。
@@ -66,7 +66,7 @@ Alignment   { transcript_id, sha256, segments: [{t0, t1, page}] }
 2. 无后台轮询。
 3. 只读：manifest 无写权限，代码无向 Moodle 的写路径。
 4. 讨论区、提交物、成绩不同步；不跨用户共享；图书馆资源不抓。
-5. 图像不持久化，opt-in 除外。
+5. 图像与原文件不持久化，opt-in（保存原文件）除外。
 
 ## 5. 分发（不走 Chrome Web Store）
 

@@ -108,7 +108,7 @@ func parseAIProjectRoute(path string) (aiProjectRoute, int, error) {
 			}
 			route.ResourceID = parts[2]
 			return route, http.StatusOK, nil
-		case len(parts) == 4 && parts[3] == "retry":
+		case len(parts) == 4 && (parts[3] == "retry" || parts[3] == "original"):
 			if uuid.Validate(parts[2]) != nil {
 				return aiProjectRoute{}, http.StatusBadRequest,
 					errors.New("source id must be a UUID")
@@ -169,6 +169,8 @@ func (h *RAGHandler) HandleProjects(w http.ResponseWriter, r *http.Request) {
 			h.handleDerivedSources(w, r, project)
 		} else if route.Action == "retry" {
 			h.handleKnowledgeSourceRetry(w, r, project, route.ResourceID)
+		} else if route.Action == "original" {
+			h.handleKnowledgeSourceOriginal(w, r, project, route.ResourceID)
 		} else if route.ResourceID != "" {
 			h.handleKnowledgeSourceItem(w, r, project, route.ResourceID)
 		} else {

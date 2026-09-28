@@ -115,6 +115,8 @@ export interface SyncModuleState {
   timemodified: number
   sha256s: string[]
   uploadedAt: number
+  /** Every file of this module that can keep an original has one. */
+  originalsKept?: boolean
 }
 
 export interface SyncState {
@@ -130,6 +132,8 @@ export interface SyncOptions {
   uploadFigures: boolean
   /** Opt-in: forum posts (announcements and discussions), post bodies only. */
   includeForums?: boolean
+  /** Opt-in: also upload PDF/PPTX/DOCX/images themselves, kept for download. */
+  keepOriginals?: boolean
 }
 
 export interface SyncProgress {
@@ -150,6 +154,8 @@ export interface SyncSummary {
   requests: number
   durationMs: number
   errors: string[]
+  /** Originals uploaded in this run (keepOriginals only). */
+  originals?: number
   /** The user pressed 停止; counts cover what finished before that. */
   stopped?: boolean
 }
@@ -196,4 +202,6 @@ export interface ServerDerivedRef {
   size_bytes: number
   lms: Partial<DerivedLMS>
   created_at: string
+  /** The server keeps the file itself (opt-in 保存原文件). */
+  has_original?: boolean
 }

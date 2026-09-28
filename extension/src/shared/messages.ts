@@ -42,6 +42,7 @@ export type BackgroundRequest =
   | { type: 'dt.projects' }
   | { type: 'dt.derived.list'; projectId: string }
   | { type: 'dt.derived.upload'; projectId: string; document: DerivedDocument }
+  | { type: 'dt.original.upload'; projectId: string; sourceId: string; mimetype: string; base64: string }
 
 export type BackgroundResponse =
   | { ok: true; status: DreamTransStatus }

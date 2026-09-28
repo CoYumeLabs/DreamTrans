@@ -9,6 +9,7 @@ import {
   deleteAIProject,
   deleteCourseSlot,
   deleteKnowledgeSource,
+  downloadKnowledgeSourceOriginal,
   formatUsageUSD,
   generateProjectSkillMap,
   getProjectSkillMap,
@@ -491,6 +492,15 @@ export function StudyView({ onOpenSession }: StudyViewProps) {
       setMaterials((current) => (current ?? []).map((item) => (item.id === updated.id ? updated : item)))
     } catch (reason) {
       setError(errorMessage(reason, v.errors.retryExtract))
+    }
+  }
+
+  const downloadOriginal = async (source: KnowledgeSource) => {
+    if (!course) return
+    try {
+      await downloadKnowledgeSourceOriginal(course.id, source)
+    } catch (reason) {
+      setError(errorMessage(reason, v.errors.downloadOriginal))
     }
   }
 
@@ -1335,6 +1345,17 @@ export function StudyView({ onOpenSession }: StudyViewProps) {
                     type="button"
                   >
                     <Icon name="wave" size={14} />
+                  </button>
+                )}
+                {source.has_original && (
+                  <button
+                    aria-label={v.downloadOriginalAria(source.name)}
+                    className="st-iconbtn"
+                    onClick={() => { void downloadOriginal(source) }}
+                    title={v.downloadOriginal}
+                    type="button"
+                  >
+                    <Icon name="download" size={14} />
                   </button>
                 )}
                 <button

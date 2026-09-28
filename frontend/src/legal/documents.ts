@@ -1,6 +1,6 @@
 import type { Locale } from '../i18n'
 
-export const LEGAL_EFFECTIVE_DATE = '2026-09-09'
+export const LEGAL_EFFECTIVE_DATE = '2026-09-28'
 export const LEGAL_OPERATOR = 'Coyume Pty Ltd'
 export const LEGAL_PRODUCT = 'Yufolo'
 export const LEGAL_CONTACT_EMAIL = 'support@coyume.com'
@@ -158,7 +158,7 @@ const privacyZh: LegalDocument = {
         },
         {
           type: 'p',
-          text: '若法律要求，或为保护人身、财产与服务安全所必需，我们也可能披露信息。浏览器扩展在同步课程材料时，只向 Yufolo 服务器上传派生文本（以及用于即时 OCR 的临时渲染图，识别后丢弃）；扩展不会把 Moodle 登录 Cookie 或令牌发送给我们。',
+          text: '若法律要求，或为保护人身、财产与服务安全所必需，我们也可能披露信息。浏览器扩展在同步课程材料时，默认只向 Yufolo 服务器上传派生文本（以及用于即时 OCR 的临时渲染图，识别后丢弃）；只有你在扩展里打开「保存原文件」时，才会同时上传课件原文件，它与你手动上传的资料一样保存，删除资料时一并删除。扩展不会把 Moodle 登录 Cookie 或令牌发送给我们。',
         },
       ],
     },
@@ -689,7 +689,7 @@ const privacyEn: LegalDocument = {
         },
         {
           type: 'p',
-          text: 'We may also disclose information if the law requires it, or if it is necessary to protect people, property or the service. The browser extension uploads derived page text to Yufolo (and a temporary render used for on-the-spot OCR, which is discarded afterwards). It does not send Moodle session cookies or tokens to us.',
+          text: 'We may also disclose information if the law requires it, or if it is necessary to protect people, property or the service. By default the browser extension uploads only derived page text to Yufolo (and a temporary render used for on-the-spot OCR, which is discarded afterwards). Only if you turn on \u201c保存原文件\u201d (save original files) in the extension does it also upload the course files themselves; they are stored like materials you upload by hand and are deleted when you delete the material. It does not send Moodle session cookies or tokens to us.',
         },
       ],
     },

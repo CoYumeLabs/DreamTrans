@@ -1,12 +1,11 @@
 import { sendToBackground } from '../shared/messages'
 import type {
-  CourseModule, DerivedDocument, MoodleContext, ServerDerivedRef, SyncModuleState,
+  CourseModule, DerivedDocument, FetchedFile, MoodleContext, ServerDerivedRef, SyncModuleState,
   SyncOptions, SyncProgress, SyncState, SyncSummary,
 } from '../shared/types'
-import { discoverCourse } from './discovery'
+import { discoverCourse, FORUM_MODTYPE } from './discovery'
 import { extractFile, sha256Hex } from './extract'
 import { fetchForumFiles, fetchModuleFiles } from './fetcher'
-import { FORUM_MODTYPE } from './discovery'
 import { RateLimiter } from './limits'
 
 // Sync: incremental by timemodified, idempotent by sha256. One pass over the
@@ -47,6 +46,27 @@ export function report(progress: SyncProgress): void {
 
 let activeLimiter: RateLimiter | null = null
 
+// 保存原文件 (opt-in): which files the server may keep, and the most a message
+// to the background can carry once base64'd. The server's own limit is 50 MB.
+const ORIGINAL_TYPES = new Set([
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'image/png', 'image/jpeg', 'image/webp',
+])
+const MAX_ORIGINAL_BYTES = 45 * 1024 * 1024
+
+function toBase64(bytes: ArrayBuffer): string {
+  const view = new Uint8Array(bytes)
+  let binary = ''
+  for (let i = 0; i < view.length; i += 0x8000) {
+    binary += String.fromCharCode(...view.subarray(i, i + 0x8000))
+  }
+  return btoa(binary)
+}
+
+interface KnownSource { id: string; hasOriginal: boolean }
+
 export function cancelSync(): void {
   activeLimiter?.cancel()
 }
@@ -61,7 +81,7 @@ export async function runSync(ctx: MoodleContext, doc: Document, options: SyncOp
   activeLimiter = limiter
   const summary: SyncSummary = {
     scanned: 0, uploaded: 0, duplicates: 0, unchanged: 0, skipped: 0, failed: 0,
-    recordings: [], requests: 0, durationMs: 0, errors: [],
+    recordings: [], requests: 0, durationMs: 0, errors: [], originals: 0,
   }
   try {
     report({ phase: 'discover', message: '正在读取课程结构…' })
@@ -71,7 +91,33 @@ export async function runSync(ctx: MoodleContext, doc: Document, options: SyncOp
     const serverRefs = await sendToBackground<{ ok: true; sources: ServerDerivedRef[] }>({
       type: 'dt.derived.list', projectId: options.projectId,
     })
-    const known = new Set(serverRefs.sources.map((ref) => ref.sha256))
+    const known = new Map<string, KnownSource>(
+      serverRefs.sources.map((ref) => [ref.sha256, { id: ref.id, hasOriginal: Boolean(ref.has_original) }]),
+    )
+
+    /** Attaches the file itself when the user asked; true when nothing is left to keep. */
+    const keepOriginal = async (sha: string, file: FetchedFile): Promise<boolean> => {
+      const ref = known.get(sha)
+      if (!options.keepOriginals || !ref || ref.hasOriginal || !ORIGINAL_TYPES.has(file.mimetype)) return true
+      if (file.bytes.byteLength > MAX_ORIGINAL_BYTES) {
+        summary.errors.push(`${file.filename}: 原文件超过 45 MB，只保存了文字`)
+        return false
+      }
+      if (limiter.cancelled) throw new Error('cancelled')
+      report({ phase: 'upload', message: `保存原文件 ${file.filename}` })
+      try {
+        await sendToBackground({
+          type: 'dt.original.upload', projectId: options.projectId, sourceId: ref.id,
+          mimetype: file.mimetype, base64: toBase64(file.bytes),
+        })
+      } catch (reason) {
+        summary.errors.push(`${file.filename}: 原文件未保存（${reason instanceof Error ? reason.message : String(reason)}）`)
+        return false
+      }
+      ref.hasOriginal = true
+      summary.originals = (summary.originals ?? 0) + 1
+      return true
+    }
     const state = options.full ? { modules: {} } : await loadSyncState(ctx)
 
     const modules = tree.sections.flatMap((section) => section.modules.map((module) => ({ section, module })))
@@ -93,12 +139,17 @@ export async function runSync(ctx: MoodleContext, doc: Document, options: SyncOp
       }
       const previous = state.modules[String(module.cmid)]
       const fingerprint = moduleFingerprint(module)
-      if (previous && fingerprint > 0 && previous.timemodified === fingerprint && previous.sha256s.every((sha) => known.has(sha))) {
+      if (
+        previous && fingerprint > 0 && previous.timemodified === fingerprint
+        && previous.sha256s.every((sha) => known.has(sha))
+        && (!options.keepOriginals || previous.originalsKept === true)
+      ) {
         summary.unchanged += 1
         continue
       }
       report({ phase: 'fetch', message: `${section.name} / ${module.name}`, done, total })
       const moduleState: SyncModuleState = { timemodified: fingerprint, sha256s: [], uploadedAt: Date.now() }
+      let originalsKept = true
       try {
         const files = optedForum ? await fetchForumFiles(limiter, ctx, module) : await fetchModuleFiles(limiter, ctx, module)
         for (const file of files) {
@@ -106,6 +157,7 @@ export async function runSync(ctx: MoodleContext, doc: Document, options: SyncOp
           moduleState.sha256s.push(sha)
           if (known.has(sha)) {
             summary.duplicates += 1
+            originalsKept = (await keepOriginal(sha, file)) && originalsKept
             continue
           }
           if (limiter.cancelled) throw new Error('cancelled')
@@ -144,10 +196,12 @@ export async function runSync(ctx: MoodleContext, doc: Document, options: SyncOp
           const uploaded = await sendToBackground<{ ok: true; uploaded: { id: string; duplicate: boolean } }>({
             type: 'dt.derived.upload', projectId: options.projectId, document,
           })
-          known.add(sha)
+          known.set(sha, { id: uploaded.uploaded.id, hasOriginal: false })
           if (uploaded.uploaded.duplicate) summary.duplicates += 1
           else summary.uploaded += 1
+          originalsKept = (await keepOriginal(sha, file)) && originalsKept
         }
+        moduleState.originalsKept = Boolean(options.keepOriginals) && originalsKept
         state.modules[String(module.cmid)] = moduleState
         await saveSyncState(ctx, state)
       } catch (reason) {

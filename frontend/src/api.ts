@@ -373,6 +373,8 @@ export interface KnowledgeSource {
   status: 'queued' | 'processing' | 'ready' | 'error'
   /** Provenance of a material synced from an LMS by the browser extension. */
   lms?: { host?: string; course_shortname?: string; section?: string; modtype?: string; cmid?: number; timemodified?: number }
+  /** The file itself is kept (manual uploads, and Moodle syncs with 保存原文件 on). */
+  has_original?: boolean
   error_message?: string
   chunk_count: number
   content?: string
@@ -1186,6 +1188,36 @@ export async function retryKnowledgeSource(
     { method: 'POST' },
   )
   return body.source
+}
+
+/**
+ * Save a material's original file. Like the statement export, the endpoint
+ * needs an Authorization header, so the body goes through a blob URL.
+ */
+export async function downloadKnowledgeSourceOriginal(
+  projectId: string, source: Pick<KnowledgeSource, 'id' | 'name'>,
+): Promise<void> {
+  const token = await ensureValidAccessToken()
+  const base = isProduction ? '' : BACKEND_URL
+  const response = await fetch(
+    `${base}/api/ai/projects/${encodeURIComponent(projectId)}/sources/${encodeURIComponent(source.id)}/original`,
+    { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' },
+  )
+  if (!response.ok) throw new AIRequestError(response.status, `Original download failed: ${response.status}`)
+  const blob = await response.blob()
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(response.headers.get('Content-Disposition') ?? '')?.[1]
+  const filename = encoded ? decodeURIComponent(encoded) : source.name
+  const objectURL = URL.createObjectURL(blob)
+  try {
+    const link = document.createElement('a')
+    link.href = objectURL
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(objectURL), 10_000)
+  }
 }
 
 export async function deleteKnowledgeSource(

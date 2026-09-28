@@ -14,6 +14,12 @@ func TestParseAIProjectRouteAcceptsDerivedSources(t *testing.T) {
 	if err != nil || status != 200 || route.Resource != "sources" || route.Action != "derived" {
 		t.Fatalf("sources/derived: status=%d err=%v route=%+v", status, err, route)
 	}
+	route, status, err = parseAIProjectRoute(
+		"/api/ai/projects/6f1de0f8-51d2-4c0b-9f0e-1f22a67f9a01/sources/0b0d5c7e-7f7a-4a53-9c0f-3f3c0e1b2a10/original",
+	)
+	if err != nil || status != 200 || route.Action != "original" || route.ResourceID != "0b0d5c7e-7f7a-4a53-9c0f-3f3c0e1b2a10" {
+		t.Fatalf("sources/{id}/original: status=%d err=%v route=%+v", status, err, route)
+	}
 	if _, _, err := parseAIProjectRoute(
 		"/api/ai/projects/6f1de0f8-51d2-4c0b-9f0e-1f22a67f9a01/sources/not-a-uuid",
 	); err == nil {

@@ -127,6 +127,18 @@ async function uploadDerived(projectId: string, document: DerivedDocument): Prom
   return { id: body.source.id, duplicate: Boolean(body.duplicate) }
 }
 
+async function uploadOriginal(projectId: string, sourceId: string, mimetype: string, base64: string): Promise<{ id: string; duplicate: boolean }> {
+  // Messages are JSON, so the bytes arrive as base64.
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+  const body = await api<{ source: { id: string }; duplicate: boolean }>(
+    `/api/ai/projects/${encodeURIComponent(projectId)}/sources/${encodeURIComponent(sourceId)}/original`,
+    { method: 'PUT', headers: { 'Content-Type': mimetype }, body: bytes },
+  )
+  return { id: body.source.id, duplicate: Boolean(body.duplicate) }
+}
+
 async function handle(request: BackgroundRequest): Promise<BackgroundResponse> {
   switch (request.type) {
     case 'dt.status':
@@ -142,6 +154,8 @@ async function handle(request: BackgroundRequest): Promise<BackgroundResponse> {
       return { ok: true, sources: await listDerived(request.projectId) }
     case 'dt.derived.upload':
       return { ok: true, uploaded: await uploadDerived(request.projectId, request.document) }
+    case 'dt.original.upload':
+      return { ok: true, uploaded: await uploadOriginal(request.projectId, request.sourceId, request.mimetype, request.base64) }
     default:
       return { ok: false, error: 'unknown request' }
   }

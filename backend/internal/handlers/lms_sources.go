@@ -2,16 +2,22 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/dreamtrans/backend/internal/models"
 	"github.com/dreamtrans/backend/internal/store"
@@ -24,8 +30,14 @@ import (
 //	POST /api/ai/projects/{id}/sources/derived — one material, per-page text
 //	                                              plus renders of figure pages
 //
+//	PUT  /api/ai/projects/{id}/sources/{sourceId}/original — opt-in: the file
+//	                                              itself, for a synced material
+//	GET  /api/ai/projects/{id}/sources/{sourceId}/original — download any
+//	                                              source whose file is kept
+//
 // Figure-page renders are OCR'd on arrival and discarded; the server never
-// keeps an image of a slide. The original file never leaves the browser.
+// keeps an image of a slide. The original file stays in the browser unless
+// the user turns on 保存原文件, and then it is stored like a manual upload.
 
 const (
 	derivedMaxPages         = 2000
@@ -335,4 +347,200 @@ func tesseractFigureOCR(ctx context.Context, png []byte, languages []string) str
 		return ""
 	}
 	return string(output)
+}
+
+// derivedOriginalExtensions maps the media types the extension may attach
+// as originals to the extension the blob is stored and validated under.
+var derivedOriginalExtensions = map[string]string{
+	"application/pdf": ".pdf",
+	"application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+	"application/vnd.openxmlformats-officedocument.wordprocessingml.document":   ".docx",
+	"image/png":  ".png",
+	"image/jpeg": ".jpg",
+	"image/webp": ".webp",
+}
+
+func (h *RAGHandler) handleKnowledgeSourceOriginal(
+	w http.ResponseWriter, r *http.Request, project *models.AIProject, sourceID string,
+) {
+	switch r.Method {
+	case http.MethodGet:
+		h.serveKnowledgeSourceOriginal(w, r, project, sourceID)
+	case http.MethodPut:
+		h.attachDerivedSourceOriginal(w, r, project, sourceID)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// attachDerivedSourceOriginal stores the file a synced material was derived
+// from. The body must hash to the sha256 the material was registered with,
+// so an original can never be swapped for different content, and its size
+// must match the size already counted against the tenant's quota.
+func (h *RAGHandler) attachDerivedSourceOriginal(
+	w http.ResponseWriter, r *http.Request, project *models.AIProject, sourceID string,
+) {
+	source, err := h.store.GetKnowledgeSource(r.Context(), sourceID, project.ID, project.TenantID, project.UserID)
+	if err != nil {
+		http.Error(w, "failed to load material", http.StatusInternalServerError)
+		return
+	}
+	if source == nil || source.SourceType != "lms" {
+		http.Error(w, "synced material not found", http.StatusNotFound)
+		return
+	}
+	if source.BlobPath != "" {
+		WriteJSON(w, map[string]any{"source": source, "duplicate": true})
+		return
+	}
+	extension, ok := derivedOriginalExtensions[strings.ToLower(source.MediaType)]
+	if !ok {
+		http.Error(w, "this material type has no original to keep", http.StatusUnsupportedMediaType)
+		return
+	}
+	maxBytes := knowledgeFileLimit()
+	if source.SizeBytes <= 0 || source.SizeBytes > maxBytes {
+		http.Error(w, "file upload is too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, source.SizeBytes)
+	root, err := knowledgeStorageRoot()
+	if err != nil {
+		http.Error(w, "invalid knowledge storage path", http.StatusInternalServerError)
+		return
+	}
+	projectID, err := uuid.Parse(project.ID)
+	if err != nil {
+		http.Error(w, "invalid project storage identifier", http.StatusInternalServerError)
+		return
+	}
+	if err := os.MkdirAll(root, 0o750); err != nil {
+		http.Error(w, "failed to create knowledge storage", http.StatusInternalServerError)
+		return
+	}
+	storageRoot, err := os.OpenRoot(root)
+	if err != nil {
+		http.Error(w, "failed to open knowledge storage", http.StatusInternalServerError)
+		return
+	}
+	defer func() { _ = storageRoot.Close() }()
+	projectDir := projectID.String()
+	if err := storageRoot.MkdirAll(projectDir, 0o750); err != nil {
+		http.Error(w, "failed to create project storage", http.StatusInternalServerError)
+		return
+	}
+	relativeBlobPath := filepath.Join(projectDir, uuid.NewString()+extension)
+	destination, err := storageRoot.OpenFile(relativeBlobPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o640)
+	if err != nil {
+		http.Error(w, "failed to store file", http.StatusInternalServerError)
+		return
+	}
+	hasher := sha256.New()
+	written, copyErr := io.Copy(io.MultiWriter(destination, hasher), r.Body)
+	closeErr := destination.Close()
+	discard := func() { _ = removeKnowledgeBlobFromRoot(storageRoot, relativeBlobPath) }
+	if copyErr != nil || closeErr != nil {
+		discard()
+		http.Error(w, "failed to store file or file exceeds its registered size", http.StatusRequestEntityTooLarge)
+		return
+	}
+	if written != source.SizeBytes || hex.EncodeToString(hasher.Sum(nil)) != source.SHA256 {
+		discard()
+		http.Error(w, "file does not match the synced material", http.StatusBadRequest)
+		return
+	}
+	blobPath := filepath.Join(root, relativeBlobPath)
+	if _, err := validateKnowledgeUpload(blobPath, extension, source.MediaType); err != nil {
+		discard()
+		http.Error(w, err.Error(), http.StatusUnsupportedMediaType)
+		return
+	}
+	attached, err := h.store.AttachLMSSourceOriginal(
+		r.Context(), source.ID, project.ID, project.TenantID, project.UserID, blobPath,
+	)
+	if err != nil || !attached {
+		discard()
+		if err != nil {
+			http.Error(w, "failed to save original", http.StatusInternalServerError)
+			return
+		}
+		// Lost a race: deleted meanwhile, or another upload attached first.
+		http.Error(w, "material changed while uploading; sync again", http.StatusConflict)
+		return
+	}
+	source.BlobPath = blobPath
+	source.HasOriginal = true
+	source.Content = ""
+	WriteJSON(w, map[string]any{"source": source, "duplicate": false})
+}
+
+// serveKnowledgeSourceOriginal streams a kept file to its owner. The blob
+// path comes from the database but is still resolved inside the storage
+// root, so a bad row cannot read outside it.
+func (h *RAGHandler) serveKnowledgeSourceOriginal(
+	w http.ResponseWriter, r *http.Request, project *models.AIProject, sourceID string,
+) {
+	source, err := h.store.GetKnowledgeSource(r.Context(), sourceID, project.ID, project.TenantID, project.UserID)
+	if err != nil {
+		http.Error(w, "failed to load material", http.StatusInternalServerError)
+		return
+	}
+	if source == nil || source.BlobPath == "" {
+		http.Error(w, "original file not kept", http.StatusNotFound)
+		return
+	}
+	root, err := knowledgeStorageRoot()
+	if err != nil {
+		http.Error(w, "invalid knowledge storage path", http.StatusInternalServerError)
+		return
+	}
+	relative, err := filepath.Rel(root, source.BlobPath)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		http.Error(w, "original file not kept", http.StatusNotFound)
+		return
+	}
+	storageRoot, err := os.OpenRoot(root)
+	if err != nil {
+		http.Error(w, "failed to open knowledge storage", http.StatusInternalServerError)
+		return
+	}
+	defer func() { _ = storageRoot.Close() }()
+	file, err := storageRoot.Open(relative)
+	if err != nil {
+		http.Error(w, "original file not kept", http.StatusNotFound)
+		return
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil || info.IsDir() {
+		http.Error(w, "original file not kept", http.StatusNotFound)
+		return
+	}
+	filename := originalDownloadName(source.Name, filepath.Ext(source.BlobPath))
+	w.Header().Set("Content-Type", source.MediaType)
+	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(filename))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "private, no-store")
+	http.ServeContent(w, r, "", info.ModTime(), file)
+}
+
+// originalDownloadName is the material's display name (a synced material
+// is named "Section · file.pdf") with the stored extension guaranteed.
+func originalDownloadName(name, extension string) string {
+	if index := strings.LastIndex(name, " · "); index >= 0 {
+		name = name[index+len(" · "):]
+	}
+	name = strings.Map(func(r rune) rune {
+		if r == '/' || r == '\\' || r < 0x20 {
+			return '_'
+		}
+		return r
+	}, strings.TrimSpace(name))
+	if name == "" {
+		name = "material"
+	}
+	if !strings.EqualFold(filepath.Ext(name), extension) {
+		name += extension
+	}
+	return name
 }

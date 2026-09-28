@@ -25,6 +25,9 @@ type LMSSourceRef struct {
 	SizeBytes int64           `json:"size_bytes"`
 	LMS       json.RawMessage `json:"lms"`
 	CreatedAt string          `json:"created_at"`
+	// HasOriginal tells the extension whether the file itself is kept, so an
+	// opted-in sync can attach originals to materials synced text-only.
+	HasOriginal bool `json:"has_original"`
 }
 
 func normalizeLMSSource(
@@ -195,6 +198,7 @@ func (s *PostgresStore) GetKnowledgeSourceBySHA256(
 	if len(lms) > 0 {
 		source.LMS = json.RawMessage(lms)
 	}
+	source.HasOriginal = source.BlobPath != ""
 	// The stored text is not needed by callers that only check existence.
 	source.Content = ""
 	return &source, nil
@@ -206,7 +210,7 @@ func (s *PostgresStore) ListLMSSources(
 	ctx context.Context, projectID, userID string,
 ) ([]LMSSourceRef, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, sha256, size_bytes, lms, created_at
+		SELECT id, name, sha256, size_bytes, lms, created_at, blob_path <> ''
 		FROM knowledge_sources
 		WHERE project_id=$1 AND user_id=$2 AND source_type='lms'
 		ORDER BY created_at DESC
@@ -220,7 +224,9 @@ func (s *PostgresStore) ListLMSSources(
 		var ref LMSSourceRef
 		var lms []byte
 		var createdAt sql.NullTime
-		if err := rows.Scan(&ref.ID, &ref.Name, &ref.SHA256, &ref.SizeBytes, &lms, &createdAt); err != nil {
+		if err := rows.Scan(
+			&ref.ID, &ref.Name, &ref.SHA256, &ref.SizeBytes, &lms, &createdAt, &ref.HasOriginal,
+		); err != nil {
 			return nil, err
 		}
 		if len(lms) > 0 {
@@ -234,4 +240,27 @@ func (s *PostgresStore) ListLMSSources(
 		refs = append(refs, ref)
 	}
 	return refs, rows.Err()
+}
+
+// AttachLMSSourceOriginal records where a synced material's original file
+// was stored. It only fills an empty slot: false means the source is gone,
+// is not a synced material, or already has its original, and the caller
+// removes the blob it just wrote.
+func (s *PostgresStore) AttachLMSSourceOriginal(
+	ctx context.Context, sourceID, projectID, tenantID, userID, blobPath string,
+) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE knowledge_sources
+		SET blob_path=$5, updated_at=NOW()
+		WHERE id=$1 AND project_id=$2 AND tenant_id=$3 AND user_id=$4
+		  AND source_type='lms' AND blob_path=''
+	`, sourceID, projectID, tenantID, userID, blobPath)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected == 1, nil
 }

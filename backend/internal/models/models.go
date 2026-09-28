@@ -181,16 +181,18 @@ type CourseSlot struct {
 }
 
 type KnowledgeSource struct {
-	ID           string   `json:"id"`
-	ProjectID    string   `json:"project_id"`
-	TenantID     string   `json:"tenant_id,omitempty"`
-	UserID       string   `json:"user_id,omitempty"`
-	SourceType   string   `json:"source_type"`
-	Name         string   `json:"name"`
-	MediaType    string   `json:"media_type"`
-	SizeBytes    int64    `json:"size_bytes"`
-	SHA256       string   `json:"sha256,omitempty"`
-	BlobPath     string   `json:"-"`
+	ID         string `json:"id"`
+	ProjectID  string `json:"project_id"`
+	TenantID   string `json:"tenant_id,omitempty"`
+	UserID     string `json:"user_id,omitempty"`
+	SourceType string `json:"source_type"`
+	Name       string `json:"name"`
+	MediaType  string `json:"media_type"`
+	SizeBytes  int64  `json:"size_bytes"`
+	SHA256     string `json:"sha256,omitempty"`
+	BlobPath   string `json:"-"`
+	// HasOriginal: the uploaded file itself is kept and can be downloaded.
+	HasOriginal  bool     `json:"has_original,omitempty"`
 	Content      string   `json:"content,omitempty"`
 	OCRLanguages []string `json:"ocr_languages,omitempty"`
 	// Where an LMS-synced source came from (source_type "lms" only).

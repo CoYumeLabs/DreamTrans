@@ -18,6 +18,7 @@ type rowScanner interface {
 }
 
 func scanKnowledgeSource(scanner rowScanner, source *models.KnowledgeSource) error {
+	defer func() { source.HasOriginal = source.BlobPath != "" }()
 	return scanner.Scan(
 		&source.ID, &source.ProjectID, &source.TenantID, &source.UserID,
 		&source.SourceType, &source.Name, &source.MediaType,
