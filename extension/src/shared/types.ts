@@ -62,7 +62,7 @@ export interface CourseSection {
 }
 
 export interface CourseTree {
-  source: 'ajax' | 'html' | 'links'
+  source: 'state' | 'html' | 'links'
   courseId: number
   sections: CourseSection[]
 }

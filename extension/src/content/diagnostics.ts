@@ -14,14 +14,17 @@ function guessMoodleVersion(doc: Document, ctx: MoodleContext): string {
   return 'unknown'
 }
 
-function echo360Embeds(doc: Document): string[] {
-  const hosts = new Set<string>()
+function recordingEmbeds(doc: Document): Array<{ provider: RecordingProvider; url: string }> {
+  const embeds: Array<{ provider: RecordingProvider; url: string }> = []
   for (const frame of Array.from(doc.querySelectorAll<HTMLIFrameElement>('iframe[src]'))) {
-    if (/echo360|echovideo/i.test(frame.src)) {
-      try { hosts.add(new URL(frame.src).host) } catch { hosts.add(frame.src.slice(0, 60)) }
-    }
+    const recording = detectRecording(frame.src)
+    if (recording) embeds.push(recording)
   }
-  return Array.from(hosts)
+  return embeds
+}
+
+function hostOf(url: string): string {
+  try { return new URL(url).host } catch { return url.slice(0, 60) }
 }
 
 export async function runDiagnostics(ctx: MoodleContext, doc: Document): Promise<DiagnosticsReport> {
@@ -52,7 +55,7 @@ export async function runDiagnostics(ctx: MoodleContext, doc: Document): Promise
   try {
     const { tree, ajaxError } = await discoverCourse(limiter, ctx, doc)
     discoverySource = tree.source
-    ajaxDetail = ajaxError ?? `core_course_get_contents 返回 ${tree.sections.length} 个 section`
+    ajaxDetail = ajaxError ?? `返回 ${tree.sections.length} 个 section`
     for (const section of tree.sections) {
       for (const module of section.modules) {
         modtypes[module.modtype] = (modtypes[module.modtype] ?? 0) + 1
@@ -65,8 +68,8 @@ export async function runDiagnostics(ctx: MoodleContext, doc: Document): Promise
   }
   const discoveryMs = Date.now() - started
   checks.push({
-    key: 'ajax_contents', label: 'core_course_get_contents AJAX',
-    ok: discoverySource === 'ajax',
+    key: 'ajax_state', label: 'core_courseformat_get_state AJAX',
+    ok: discoverySource === 'state',
     detail: ajaxDetail,
   })
   checks.push({
@@ -88,19 +91,27 @@ export async function runDiagnostics(ctx: MoodleContext, doc: Document): Promise
     })
   }
 
-  const embeds = echo360Embeds(doc)
+  const embeds = recordingEmbeds(doc)
   for (const anchor of Array.from(doc.querySelectorAll<HTMLAnchorElement>('a[href]'))) {
+    if (LIBRARY_PATTERN.test(anchor.href)) libraryLinks += 1
+    // Only real off-site players: skips javascript:/itpc: links and in-page
+    // anchors of Moodle's own recording blocks.
+    if (!/^https?:/i.test(anchor.href) || hostOf(anchor.href) === ctx.host) continue
     const recording = detectRecording(anchor.href, anchor.textContent ?? '')
     if (recording && !recordings.some((r) => r.url === recording.url)) recordings.push(recording)
-    if (LIBRARY_PATTERN.test(anchor.href)) libraryLinks += 1
   }
-  const echoHosts = Array.from(new Set([...embeds, ...recordings.filter((r) => r.provider === 'echo360').map((r) => { try { return new URL(r.url).host } catch { return r.url } })]))
+  const platforms = new Map<string, Set<string>>()
+  for (const r of [...embeds, ...recordings]) {
+    const hosts = platforms.get(r.provider) ?? new Set<string>()
+    hosts.add(hostOf(r.url))
+    platforms.set(r.provider, hosts)
+  }
   checks.push({
-    key: 'echo360', label: 'Echo360 嵌入方式',
-    ok: echoHosts.length > 0 ? true : null,
-    detail: echoHosts.length > 0
-      ? `${embeds.length > 0 ? 'iframe' : '链接'} · 域名 ${echoHosts.join(', ')}`
-      : '这一页上没有 Echo360 嵌入或链接',
+    key: 'recordings', label: '录播平台',
+    ok: platforms.size > 0 ? true : null,
+    detail: platforms.size > 0
+      ? `${Array.from(platforms, ([provider, hosts]) => `${provider}（${Array.from(hosts).join(', ')}）`).join('；')} · ${embeds.length > 0 ? 'iframe 嵌入' : '链接'}`
+      : '这一页上没有录播嵌入或链接',
   })
   checks.push({
     key: 'library', label: 'Leganto / eReserve 链接',

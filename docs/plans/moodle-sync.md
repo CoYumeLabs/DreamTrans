@@ -18,7 +18,7 @@ content script ─① Discovery─② Fetch─③ Extract─▶ DreamTrans API �
 ```
 
 **① Discovery**
-`POST /lib/ajax/service.php?sesskey=<M.cfg.sesskey>&info=core_course_get_contents` → section/module/contents，含 `fileurl timemodified mimetype`。课程列表用 `core_course_get_enrolled_courses_by_timeline_classification`。AJAX 返回 `servicenotavailable` 时解析 HTML：3.x `li.section.main`，4.x `[data-for="section"]`，再兜底扫 `[role="main"] a[href]`。
+`POST /lib/ajax/service.php?sesskey=<M.cfg.sesskey>&info=core_courseformat_get_state` → section / cm 列表（4.0+ 课程目录自身用的接口；`core_course_get_contents` 在核心里没有 ajax 标记，Monash 实测不可用）。state 不含文件列表和 `timemodified`，文件在抓取时从模块页取，增量靠 sha256。课程列表用 `core_course_get_enrolled_courses_by_timeline_classification`。AJAX 失败时解析 HTML：3.x `li.section.main`，4.x `[data-for="section"]`，再兜底扫 `[role="main"] a[href]`。
 
 **② Fetch**
 
@@ -80,9 +80,9 @@ manifest 用 `optional_host_permissions`，首次在 Moodle 域上手动授权�
 
 ## 6. 上线前在 Monash Moodle 验证
 
-- [ ] `core_course_get_contents` AJAX 是否开放
-- [ ] `sesskey` 在 HTML 中的位置
+- [x] `core_course_get_contents` AJAX 是否开放 —— 否（2026-09-28 PSY2041：servicenotavailable），改用 `core_courseformat_get_state`
+- [x] `sesskey` 在 HTML 中的位置 —— `M.cfg.sesskey`；Moodle 4.1（Panopto instance 名 Moodle-41-Prod）
 - [ ] 四门课 modtype 分布
-- [ ] Echo360 嵌入方式、域名、字幕接口
+- [ ] Echo360 嵌入方式、域名、字幕接口 —— PSY2041 用的是 Panopto（`monash.au.panopto.com`，Moodle Panopto block + 播客 feed），未见 Echo360；M2 对齐需改以 Panopto 为主
 - [ ] Leganto 链接特征
 - [ ] 单课全量请求数与耗时

@@ -1,4 +1,4 @@
-import type { CourseFile, CourseModule, CourseSection, CourseTree, MoodleContext, RecordingProvider } from '../shared/types'
+import type { CourseModule, CourseSection, CourseTree, MoodleContext, RecordingProvider } from '../shared/types'
 import { moodleFetch, type RateLimiter } from './limits'
 
 // Discovery: the course tree. API first, HTML second, bare links last. Every
@@ -75,72 +75,63 @@ export async function moodleAjax<T>(
   return first.data as T
 }
 
-interface AjaxContent {
-  type?: string
-  filename?: string
-  fileurl?: string
-  filesize?: number
-  mimetype?: string
-  timemodified?: number
+// core_courseformat_get_state is what the Moodle 4 course index itself calls,
+// so it is AJAX-enabled everywhere 4.0+ runs. core_course_get_contents is not
+// (it has no ajax flag in core), which Monash confirmed. The state has no file
+// lists or timestamps: files come from each module's view page at fetch time.
+
+interface StateSection {
+  id: number
+  number?: number
+  section?: number
+  title?: string
+  rawtitle?: string
+  cmlist?: Array<number | string>
 }
 
-interface AjaxModule {
-  id: number
-  modname: string
+interface StateCm {
+  id: number | string
   name: string
+  module?: string
   url?: string
-  description?: string
-  contents?: AjaxContent[]
-  dates?: Array<{ label?: string; timestamp?: number; dataid?: string }>
+  sectionid?: number | string
+  uservisible?: boolean
 }
 
-interface AjaxSection {
-  id: number
-  name: string
-  section: number
-  modules: AjaxModule[]
+interface CourseState {
+  section?: StateSection[]
+  cm?: StateCm[]
 }
 
-function latestTimemodified(contents: CourseFile[]): number | undefined {
-  const values = contents.map((c) => c.timemodified ?? 0).filter((v) => v > 0)
-  return values.length ? Math.max(...values) : undefined
+function decodeEntities(value: string): string {
+  return value.replace(/&amp;/g, '&')
 }
 
-export async function discoverViaAjax(limiter: RateLimiter, ctx: MoodleContext): Promise<CourseTree> {
-  const sections = await moodleAjax<AjaxSection[]>(limiter, ctx, 'core_course_get_contents', {
-    courseid: ctx.courseId,
-    options: [{ name: 'includestealthmodules', value: 1 }],
-  })
+export async function discoverViaState(limiter: RateLimiter, ctx: MoodleContext): Promise<CourseTree> {
+  const raw = await moodleAjax<string | CourseState>(limiter, ctx, 'core_courseformat_get_state', { courseid: ctx.courseId })
+  const state = (typeof raw === 'string' ? JSON.parse(raw) : raw) as CourseState
+  const cms = new Map((state.cm ?? []).map((cm) => [String(cm.id), cm]))
   return {
-    source: 'ajax',
+    source: 'state',
     courseId: ctx.courseId,
-    sections: sections.map((section) => ({
-      id: section.id,
-      name: (section.name || `Section ${section.section}`).trim(),
-      order: section.section,
-      modules: (section.modules ?? []).map((module) => {
-        const contents: CourseFile[] = (module.contents ?? [])
-          .filter((content) => content.fileurl)
-          .map((content) => ({
-            fileurl: content.fileurl!,
-            filename: content.filename ?? '',
-            filesize: content.filesize,
-            mimetype: content.mimetype,
-            timemodified: content.timemodified,
-          }))
-        const due = module.dates?.find((d) => d.dataid === 'duedate' || /due/i.test(d.label ?? ''))?.timestamp
-        return classifyModule({
-          cmid: module.id,
-          modtype: module.modname,
-          name: module.name,
-          url: module.url,
-          description: module.description ? htmlToText(module.description) : undefined,
-          dueAt: due,
-          timemodified: latestTimemodified(contents),
-          contents,
-        })
-      }),
-    })),
+    sections: (state.section ?? []).map((section, index) => {
+      const order = section.number ?? section.section ?? index
+      return {
+        id: Number(section.id),
+        name: (section.title || section.rawtitle || `Section ${order}`).replace(/\s+/g, ' ').trim(),
+        order,
+        modules: (section.cmlist ?? [])
+          .map((id) => cms.get(String(id)))
+          .filter((cm): cm is StateCm => Boolean(cm) && cm!.uservisible !== false)
+          .map((cm) => classifyModule({
+            cmid: Number(cm.id),
+            modtype: cm.module ?? 'other',
+            name: cm.name.replace(/\s+/g, ' ').trim(),
+            url: cm.url ? decodeEntities(cm.url) : undefined,
+            contents: [],
+          })),
+      }
+    }),
   }
 }
 
@@ -228,9 +219,9 @@ export async function discoverCourse(
 ): Promise<DiscoveryOutcome> {
   let ajaxError: string | undefined
   try {
-    const tree = await discoverViaAjax(limiter, ctx)
+    const tree = await discoverViaState(limiter, ctx)
     if (tree.sections.some((section) => section.modules.length > 0)) return { tree }
-    ajaxError = 'AJAX returned no modules'
+    ajaxError = 'course state returned no modules'
   } catch (reason) {
     ajaxError = reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason)
   }
