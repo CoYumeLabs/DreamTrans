@@ -40,5 +40,21 @@ for (const [label, finalUrl, contentType, allow, shouldRefuse] of cases) {
   const wasRefused = await refused(() => moodleFetch(new RateLimiter(1, 0), start, undefined, { allowFileRedirect: allow }))
   if (wasRefused !== shouldRefuse) throw new Error(`Redirect policy wrong for ${label}`)
 }
-globalThis.fetch = realFetch
 console.log('Redirects leave Moodle only for https file downloads.')
+
+// 停止 aborts a download that is already in flight instead of waiting for it.
+let started = 0
+globalThis.fetch = ((_url: string, init?: RequestInit) => new Promise((_resolve, reject) => {
+  started += 1
+  init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+})) as typeof fetch
+const stopper = new RateLimiter(1, 0)
+const inFlight = moodleFetch(stopper, start)
+const queued = moodleFetch(stopper, start)
+await new Promise((resolve) => setTimeout(resolve, 20))
+if (started !== 1) throw new Error(`expected one download in flight, saw ${started}`)
+stopper.cancel()
+if (!(await refused(() => inFlight)) || !(await refused(() => queued))) throw new Error('Cancel left a request running')
+if (started !== 1) throw new Error('Cancel let a queued request start')
+globalThis.fetch = realFetch
+console.log('Cancel aborts in-flight and queued Moodle requests.')

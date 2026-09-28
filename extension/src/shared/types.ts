@@ -150,6 +150,8 @@ export interface SyncSummary {
   requests: number
   durationMs: number
   errors: string[]
+  /** The user pressed 停止; counts cover what finished before that. */
+  stopped?: boolean
 }
 
 export interface DiagnosticCheck {

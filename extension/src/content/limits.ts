@@ -7,11 +7,18 @@ export class RateLimiter {
   private queue: Array<() => void> = []
   requests = 0
   cancelled = false
+  private readonly aborter = new AbortController()
+
+  /** Aborts in-flight downloads the moment the user presses 停止. */
+  get signal(): AbortSignal {
+    return this.aborter.signal
+  }
 
   constructor(private readonly concurrency = 3, private readonly minGapMs = 200) {}
 
   cancel(): void {
     this.cancelled = true
+    this.aborter.abort()
     for (const wake of this.queue.splice(0)) wake()
   }
 
@@ -67,7 +74,7 @@ export async function moodleFetch(
   limiter: RateLimiter, url: string, init?: RequestInit, options: MoodleFetchOptions = {},
 ): Promise<Response> {
   return limiter.run(async () => {
-    const response = await fetch(url, { credentials: 'same-origin', redirect: 'follow', ...init })
+    const response = await fetch(url, { credentials: 'same-origin', redirect: 'follow', signal: limiter.signal, ...init })
     const final = new URL(response.url)
     if (final.host !== new URL(url, location.href).host) {
       const contentType = (response.headers.get('content-type') ?? '').toLowerCase()

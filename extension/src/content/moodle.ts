@@ -1,7 +1,7 @@
 import type { ContentRequest, ContentResponse } from '../shared/messages'
 import { runDiagnostics } from './diagnostics'
 import { readMoodleContext } from './moodle-cfg'
-import { cancelSync, runSync } from './sync'
+import { cancelSync, currentProgress, runSync } from './sync'
 
 // Injected into the Moodle tab on demand (activeTab + scripting). It answers
 // the popup's requests and keeps a sync running after the popup closes.
@@ -23,6 +23,9 @@ if (!window.__dreamtransMoodleSync) {
         return false
       case 'moodle.context':
         respond({ ok: true, context: readMoodleContext(document, window.location) })
+        return false
+      case 'moodle.state':
+        respond({ ok: true, syncing, progress: syncing ? currentProgress() : null })
         return false
       case 'moodle.cancel':
         cancelSync()

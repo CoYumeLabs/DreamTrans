@@ -17,12 +17,14 @@ export type ContentRequest =
   | { type: 'moodle.diagnose' }
   | { type: 'moodle.sync'; options: SyncOptions }
   | { type: 'moodle.cancel' }
+  | { type: 'moodle.state' }
 
 export type ContentResponse =
   | { ok: true; pong: true }
   | { ok: true; context: MoodleContext }
   | { ok: true; report: DiagnosticsReport }
   | { ok: true; summary: SyncSummary }
+  | { ok: true; syncing: boolean; progress: SyncProgress | null }
   | { ok: true }
   | { ok: false; error: string }
 

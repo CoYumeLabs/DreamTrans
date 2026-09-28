@@ -29,7 +29,15 @@ async function saveSyncState(ctx: MoodleContext, state: SyncState): Promise<void
   await chrome.storage.local.set({ [stateKey(ctx)]: state })
 }
 
+let lastProgress: SyncProgress | null = null
+
+/** What a reopened popup shows while a sync is still running. */
+export function currentProgress(): SyncProgress | null {
+  return lastProgress
+}
+
 export function report(progress: SyncProgress): void {
+  lastProgress = progress
   try {
     chrome.runtime.sendMessage({ type: 'moodle.progress', progress })
   } catch {
@@ -100,6 +108,7 @@ export async function runSync(ctx: MoodleContext, doc: Document, options: SyncOp
             summary.duplicates += 1
             continue
           }
+          if (limiter.cancelled) throw new Error('cancelled')
           report({ phase: 'extract', message: `抽取 ${file.filename}`, done, total })
           const extracted = await extractFile(file, {
             renderFigures: options.uploadFigures, maxFigures: 60, renderWidth: 1024,
@@ -130,6 +139,7 @@ export async function runSync(ctx: MoodleContext, doc: Document, options: SyncOp
               extractor: extracted.extractor,
             },
           }
+          if (limiter.cancelled) throw new Error('cancelled')
           report({ phase: 'upload', message: `上传 ${file.filename}（${extracted.pages.length} 页）`, done, total })
           const uploaded = await sendToBackground<{ ok: true; uploaded: { id: string; duplicate: boolean } }>({
             type: 'dt.derived.upload', projectId: options.projectId, document,
@@ -141,7 +151,8 @@ export async function runSync(ctx: MoodleContext, doc: Document, options: SyncOp
         state.modules[String(module.cmid)] = moduleState
         await saveSyncState(ctx, state)
       } catch (reason) {
-        if (reason instanceof Error && reason.message === 'cancelled') throw reason
+        // An aborted download surfaces as AbortError: that is a stop, not a failure.
+        if (limiter.cancelled) throw new Error('cancelled')
         summary.failed += 1
         summary.errors.push(`${module.name}: ${reason instanceof Error ? reason.message : String(reason)}`)
       }
@@ -155,6 +166,11 @@ export async function runSync(ctx: MoodleContext, doc: Document, options: SyncOp
   } catch (reason) {
     summary.requests = limiter.requests
     summary.durationMs = Date.now() - started
+    if (limiter.cancelled) {
+      summary.stopped = true
+      report({ phase: 'done', message: `已停止：上传 ${summary.uploaded}，重复 ${summary.duplicates}` })
+      return summary
+    }
     const message = reason instanceof Error ? reason.message : String(reason)
     summary.errors.push(message)
     report({ phase: 'error', message })

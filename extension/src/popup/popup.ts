@@ -1,5 +1,5 @@
 import { sendToBackground, sendToTab, type ContentRequest, type ContentResponse, type ProgressMessage } from '../shared/messages'
-import type { DiagnosticsReport, DreamTransProject, DreamTransStatus, MoodleContext, SyncSummary } from '../shared/types'
+import type { DiagnosticsReport, DreamTransProject, DreamTransStatus, MoodleContext, SyncProgress, SyncSummary } from '../shared/types'
 import { projectOptions, reportContents, summaryContents } from './safeDom'
 
 // The popup: log in to DreamTrans once, pick which DreamTrans course this
@@ -39,6 +39,7 @@ let tabId = 0
 let moodle: MoodleContext | null = null
 let projects: DreamTransProject[] = []
 let lastReport: DiagnosticsReport | null = null
+let syncing = false
 
 function mappingKey(ctx: MoodleContext): string {
   return `dt.map.${ctx.host}.${ctx.courseId}`
@@ -97,8 +98,16 @@ async function loadProjects(): Promise<void> {
 
 function updateButtons(): void {
   const ready = Boolean(moodle && moodle.courseId > 0)
-  ui.diagnose.disabled = !ready
-  ui.sync.disabled = !ready || !ui.project.value
+  ui.diagnose.disabled = !ready || syncing
+  ui.sync.disabled = !ready || !ui.project.value || syncing
+}
+
+function setSyncing(on: boolean): void {
+  syncing = on
+  ui.cancel.hidden = !on
+  ui.cancel.disabled = false
+  ui.cancel.textContent = '停止'
+  updateButtons()
 }
 
 function showProgress(message: string, done?: number, total?: number): void {
@@ -151,6 +160,14 @@ async function init(): Promise<void> {
     ui.moodleCourse.textContent = '打开 course/view.php?id=… 再点这里'
   }
   if (status.status.connected) await loadProjects()
+  if (moodle.courseId > 0) {
+    // The sync lives in the tab: a reopened popup picks it back up.
+    const state = await ask<{ ok: true; syncing: boolean; progress: SyncProgress | null }>({ type: 'moodle.state' }).catch(() => null)
+    if (state?.syncing) {
+      setSyncing(true)
+      showProgress(state.progress?.message ?? '同步进行中…', state.progress?.done, state.progress?.total)
+    }
+  }
   updateButtons()
 }
 
@@ -208,8 +225,7 @@ ui.diagnose.addEventListener('click', async () => {
 
 ui.sync.addEventListener('click', async () => {
   if (!ui.project.value) return
-  ui.sync.disabled = true
-  ui.cancel.hidden = false
+  setSyncing(true)
   ui.summary.hidden = true
   showProgress('开始同步…')
   try {
@@ -221,12 +237,13 @@ ui.sync.addEventListener('click', async () => {
   } catch (reason) {
     showProgress(`同步失败：${reason instanceof Error ? reason.message : String(reason)}`, 1, 1)
   } finally {
-    ui.cancel.hidden = true
-    updateButtons()
+    setSyncing(false)
   }
 })
 
 ui.cancel.addEventListener('click', () => {
+  ui.cancel.disabled = true
+  ui.cancel.textContent = '正在停止…'
   void ask({ type: 'moodle.cancel' }).catch(() => undefined)
 })
 
@@ -241,6 +258,8 @@ chrome.runtime.onMessage.addListener((message: ProgressMessage) => {
   if (message?.type !== 'moodle.progress') return
   const { progress } = message
   showProgress(progress.message, progress.done, progress.total)
+  // A popup reopened mid-sync never gets the summary; the last broadcast ends it.
+  if (progress.phase === 'done' || progress.phase === 'error') setSyncing(false)
 })
 
 void init()
