@@ -4,6 +4,7 @@ package openaiprovider
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -226,12 +227,14 @@ func marshalProviderRequest(value any) ([]byte, error) {
 
 // openAIChatRequest represents minimal Chat Completions payload.
 type openAIChatRequest struct {
-	Model               string              `json:"model"`
-	Messages            []map[string]string `json:"messages"`
-	Temperature         float64             `json:"temperature,omitempty"`
-	MaxCompletionTokens int                 `json:"max_completion_tokens,omitempty"`
-	ReasoningEffort     string              `json:"reasoning_effort,omitempty"`
-	Stream              bool                `json:"stream,omitempty"`
+	Model string `json:"model"`
+	// Messages is []map[string]string for text, or content-part arrays for
+	// requests that carry an image.
+	Messages            any     `json:"messages"`
+	Temperature         float64 `json:"temperature,omitempty"`
+	MaxCompletionTokens int     `json:"max_completion_tokens,omitempty"`
+	ReasoningEffort     string  `json:"reasoning_effort,omitempty"`
+	Stream              bool    `json:"stream,omitempty"`
 }
 
 type openAIChatResponse struct {
@@ -553,6 +556,11 @@ func (t *Translator) responsesComplete(
 	if t.cfg.Temperature != 0 {
 		reqBody.Temperature = t.cfg.Temperature
 	}
+	return t.postResponses(ctx, &reqBody)
+}
+
+// postResponses sends one Responses API request and parses text and usage.
+func (t *Translator) postResponses(ctx context.Context, reqBody *responsesRequest) (string, *Usage, error) {
 	b, err := marshalProviderRequest(reqBody)
 	if err != nil {
 		return "", nil, err
@@ -746,9 +754,12 @@ func (t *Translator) RespondWithUsageRetry(
 
 // ChatWithUsage calls the API once with the configured model and returns usage if provided by the server.
 // Note: This does not include model fallback logic to keep response parsing simple; callers can handle errors.
-//
-//nolint:gocyclo // Usage compatibility parsing intentionally supports three upstream shapes.
 func (t *Translator) ChatWithUsage(ctx context.Context, messages []map[string]string) (string, *Usage, error) {
+	return t.chatWithUsage(ctx, messages)
+}
+
+//nolint:gocyclo // Usage compatibility parsing intentionally supports three upstream shapes.
+func (t *Translator) chatWithUsage(ctx context.Context, messages any) (string, *Usage, error) {
 	reqBody := openAIChatRequest{
 		Model:               t.cfg.Model,
 		Messages:            messages,
@@ -813,6 +824,47 @@ func (t *Translator) ChatWithUsage(ctx context.Context, messages []map[string]st
 	}
 	// No usage information present: return without usage (OpenAI should provide usage)
 	return content, nil, nil
+}
+
+// DescribeImageWithUsage sends one instruction and one PNG to a vision-capable
+// model and returns its text. Responses is used where the endpoint supports
+// it, falling back to Chat Completions content parts like RespondWithUsage.
+func (t *Translator) DescribeImageWithUsage(
+	ctx context.Context, instruction string, png []byte,
+) (string, *Usage, error) {
+	if len(png) == 0 {
+		return "", nil, errors.New("image is empty")
+	}
+	dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+	if t.cfg.UseResponsesAPI {
+		reqBody := responsesRequest{
+			Model: t.cfg.Model,
+			Input: []map[string]any{{
+				"role": "user",
+				"content": []respContentPart{
+					{"type": "input_text", "text": instruction},
+					{"type": "input_image", "image_url": dataURL, "detail": "high"},
+				},
+			}},
+			Store:           false,
+			MaxOutputTokens: t.cfg.MaxOutputTokens,
+		}
+		if t.cfg.ReasoningEffort != "" {
+			reqBody.Reasoning = &reasoningConfig{Effort: t.cfg.ReasoningEffort}
+		}
+		out, usage, err := t.postResponses(ctx, &reqBody)
+		if err == nil || !shouldFallbackResponses(err) {
+			return out, usage, err
+		}
+	}
+	messages := []map[string]any{{
+		"role": "user",
+		"content": []map[string]any{
+			{"type": "text", "text": instruction},
+			{"type": "image_url", "image_url": map[string]string{"url": dataURL, "detail": "high"}},
+		},
+	}}
+	return t.chatWithUsage(ctx, messages)
 }
 
 // IsRetryableError reports whether a provider failure is safe to retry with

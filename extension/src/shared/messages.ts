@@ -3,6 +3,7 @@ import type {
   DiagnosticsReport,
   DreamTransProject,
   DreamTransStatus,
+  FigureStats,
   MoodleContext,
   ServerDerivedRef,
   SyncOptions,
@@ -48,7 +49,7 @@ export type BackgroundResponse =
   | { ok: true; status: DreamTransStatus }
   | { ok: true; projects: DreamTransProject[] }
   | { ok: true; sources: ServerDerivedRef[] }
-  | { ok: true; uploaded: { id: string; duplicate: boolean } }
+  | { ok: true; uploaded: { id: string; duplicate: boolean; figures?: FigureStats } }
   | { ok: true }
   | { ok: false; error: string }
 

@@ -41,7 +41,7 @@ content script ─① Discovery─② Fetch─③ Extract─▶ DreamTrans API �
 | 页类型 | 上传 | 服务端保留 |
 |---|---|---|
 | 纯文本 | 文本 | 文本 |
-| 含图 / 图为主 | 文本 + 页面渲染图（最宽 2048px，放不进 1.9MB 时降到 1600/1280/1024/768；logo 等小图不触发） | VLM 描述 + OCR + bbox；图片 24h 内删除 |
+| 含图 / 图为主 | 文本 + 页面渲染图（最宽 2048px，放不进 1.9MB 时降到 1600/1280/1024/768；logo 等小图不触发） | gpt-5.6-luna 读图（图中文字 + 图表描述，并行 6 张，按用量向用户计费，feature `moodle_figures`）；余额不足/失败退回 tesseract；图片读完即删 |
 
 原文件默认不上传。弹窗「保存原文件」（默认关）打开后，扩展把 PDF / PPTX / DOCX / 图片原件 PUT 到 `/sources/{id}/original`，服务器校验 sha256 与大小后按手动上传的方式保存，学习页可下载（2026-09-28 实现）。IndexedDB 本地缓存未实现。
 

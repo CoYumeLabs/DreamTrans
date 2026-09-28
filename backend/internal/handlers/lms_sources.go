@@ -16,10 +16,15 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 
 	"github.com/dreamtrans/backend/internal/models"
+	"github.com/dreamtrans/backend/internal/rag"
 	"github.com/dreamtrans/backend/internal/store"
 )
 
@@ -90,9 +95,90 @@ type derivedSourceRequest struct {
 	LMS       derivedLMS    `json:"lms"`
 }
 
-// figureOCR turns one figure render into text, or "" when OCR is not
-// available. It is injected so tests never shell out.
-type figureOCR func(ctx context.Context, png []byte, languages []string) string
+// figureOCR turns one figure render into text, or "" when nothing could be
+// read. pageText is what the page's text layer already said. It is injected
+// so tests never shell out or call a model.
+type figureOCR func(ctx context.Context, png []byte, pageText string) string
+
+// derivedFigureConcurrency bounds how many renders of one upload are read at
+// once; model calls dominate and run in parallel, tesseract fallbacks still
+// queue on the shared extraction budget.
+const (
+	derivedFigureConcurrency = 6
+	derivedUploadTimeout     = 5 * time.Minute
+	// derivedFigureFeature attributes figure-model charges on the statement.
+	derivedFigureFeature = "moodle_figures"
+)
+
+// derivedFigureModel is the vision model that reads figure pages, billed to
+// the user. MOODLE_FIGURE_MODEL=off keeps tesseract only.
+func derivedFigureModel() string {
+	model := strings.TrimSpace(os.Getenv("MOODLE_FIGURE_MODEL"))
+	if model == "" {
+		return "gpt-5.6-luna"
+	}
+	if strings.EqualFold(model, "off") {
+		return ""
+	}
+	return model
+}
+
+// derivedFigureStats is what the extension shows after an upload.
+type derivedFigureStats struct {
+	Vision     int64   `json:"vision"`
+	OCR        int64   `json:"ocr"`
+	ChargedUSD float64 `json:"charged_usd"`
+	// VisionStopped: why the model was not used for the rest of the file
+	// ("insufficient_balance", "billing_unavailable"), or empty.
+	VisionStopped string `json:"vision_stopped,omitempty"`
+}
+
+// figureDescriber reads one render with a vision model (rag.Service.DescribeFigure).
+type figureDescriber func(ctx context.Context, model string, png []byte, pageText string) (string, error)
+
+// derivedFigureReader tries the vision model first and falls back to
+// tesseract. A payment or billing failure stops model calls for the rest of
+// the upload so one empty balance does not fail every page.
+func (h *RAGHandler) derivedFigureReader(stats *derivedFigureStats) figureOCR {
+	var describe figureDescriber
+	if h.svc != nil {
+		describe = h.svc.DescribeFigure
+	}
+	return newDerivedFigureReader(derivedFigureModel(), describe, h.isRAGAccountingError, tesseractFigureOCR, stats)
+}
+
+func newDerivedFigureReader(
+	model string, describe figureDescriber, isAccountingError func(error) bool,
+	fallback figureOCR, stats *derivedFigureStats,
+) figureOCR {
+	var stopped atomic.Bool
+	var mu sync.Mutex
+	return func(ctx context.Context, png []byte, pageText string) string {
+		if model != "" && describe != nil && !stopped.Load() {
+			text, err := describe(ctx, model, png, pageText)
+			switch {
+			case err == nil || errors.Is(err, rag.ErrFigureNothingToAdd):
+				atomic.AddInt64(&stats.Vision, 1)
+				return text
+			case isAccountingError(err):
+				if stopped.CompareAndSwap(false, true) {
+					mu.Lock()
+					stats.VisionStopped = "billing_unavailable"
+					if errors.Is(err, errRAGPaymentRequired) {
+						stats.VisionStopped = "insufficient_balance"
+					}
+					mu.Unlock()
+				}
+			case ctx.Err() != nil:
+				return ""
+			default:
+				log.Printf("moodle figure model failed, using tesseract: %v", err)
+			}
+		}
+		atomic.AddInt64(&stats.OCR, 1)
+		return fallback(ctx, png, pageText)
+	}
+}
 
 func (h *RAGHandler) handleDerivedSources(
 	w http.ResponseWriter, r *http.Request, project *models.AIProject,
@@ -121,8 +207,9 @@ func (h *RAGHandler) handleDerivedSourceUpload(
 		return
 	}
 	defer derivedUploads.release(project.UserID)
-	ctx, cancel := context.WithTimeout(r.Context(), knowledgeCommandTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), derivedUploadTimeout)
 	defer cancel()
+	meter, ctx := h.newRAGMeter(ctx, "", "", derivedFigureFeature, project.ID)
 	r = r.WithContext(ctx)
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<20)
 	var req derivedSourceRequest
@@ -143,7 +230,9 @@ func (h *RAGHandler) handleDerivedSourceUpload(
 		WriteJSON(w, map[string]any{"source": existing, "duplicate": true})
 		return
 	}
-	text := renderDerivedText(r.Context(), &req, tesseractFigureOCR)
+	var figures derivedFigureStats
+	text := renderDerivedText(r.Context(), &req, h.derivedFigureReader(&figures))
+	figures.ChargedUSD = meter.ChargedUSD()
 	if err := ctx.Err(); err != nil {
 		http.Error(w, "material extraction timed out or was cancelled", http.StatusRequestTimeout)
 		return
@@ -188,7 +277,7 @@ func (h *RAGHandler) handleDerivedSourceUpload(
 	source.Content = ""
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	WriteJSON(w, map[string]any{"source": source, "duplicate": false})
+	WriteJSON(w, map[string]any{"source": source, "duplicate": false, "figures": figures})
 }
 
 func clampDerivedText(value string, maxRunes int) string {
@@ -287,32 +376,64 @@ func derivedSourceName(req *derivedSourceRequest) string {
 
 // renderDerivedText flattens pages into one document. Each page keeps its
 // number so transcript ↔ slide alignment can cite it, and figure renders
-// contribute only their OCR text.
+// contribute only the text read from them. Renders are read in parallel
+// (bounded) and dropped as soon as they have been read.
 func renderDerivedText(ctx context.Context, req *derivedSourceRequest, ocr figureOCR) string {
-	var builder strings.Builder
-	for index := range req.Pages {
-		if ctx.Err() != nil {
-			return ""
+	type figureJob struct{ page, figure int }
+	var jobs []figureJob
+	for pageIndex := range req.Pages {
+		for figureIndex := range req.Pages[pageIndex].Figures {
+			jobs = append(jobs, figureJob{pageIndex, figureIndex})
 		}
-		page := &req.Pages[index]
+	}
+	results := make([]string, len(jobs))
+	if ocr != nil && len(jobs) > 0 {
+		slots := make(chan struct{}, derivedFigureConcurrency)
+		var wg sync.WaitGroup
+		for index, job := range jobs {
+			if ctx.Err() != nil {
+				break
+			}
+			figure := &req.Pages[job.page].Figures[job.figure]
+			png, err := base64.StdEncoding.DecodeString(figure.PNGBase64)
+			// The render is gone from the request as soon as it is decoded.
+			figure.PNGBase64 = ""
+			if err != nil || len(png) == 0 || len(png) > derivedMaxFigureBytes {
+				continue
+			}
+			select {
+			case slots <- struct{}{}:
+			case <-ctx.Done():
+			}
+			if ctx.Err() != nil {
+				break
+			}
+			wg.Add(1)
+			go func(index int, png []byte, pageText string) {
+				defer wg.Done()
+				defer func() { <-slots }()
+				results[index] = strings.TrimSpace(ocr(ctx, png, pageText))
+			}(index, png, req.Pages[job.page].Text)
+		}
+		wg.Wait()
+	}
+	if ctx.Err() != nil {
+		return ""
+	}
+	var builder strings.Builder
+	next := 0
+	for pageIndex := range req.Pages {
+		page := &req.Pages[pageIndex]
 		var parts []string
 		if page.Text != "" {
 			parts = append(parts, page.Text)
 		}
 		for figureIndex := range page.Figures {
-			if ctx.Err() != nil {
-				return ""
-			}
-			png, err := base64.StdEncoding.DecodeString(page.Figures[figureIndex].PNGBase64)
-			if err != nil || len(png) == 0 || len(png) > derivedMaxFigureBytes || ocr == nil {
-				continue
-			}
-			text := strings.TrimSpace(ocr(ctx, png, []string{"eng", "chi_sim"}))
-			// The render is gone as soon as this call returns.
 			page.Figures[figureIndex].PNGBase64 = ""
-			if text != "" {
+			if text := results[next]; text != "" {
 				parts = append(parts, fmt.Sprintf("[图 %d] %s", figureIndex+1, text))
 			}
+			next++
 		}
 		if len(parts) == 0 {
 			continue
@@ -322,10 +443,29 @@ func renderDerivedText(ctx context.Context, req *derivedSourceRequest, ocr figur
 	return clampDerivedText(builder.String(), derivedMaxTextRunes)
 }
 
+// figureOCRLanguages skips the Chinese model, which roughly doubles
+// tesseract's time, when the page's own text is essentially ASCII.
+func figureOCRLanguages(pageText string) []string {
+	letters, ascii := 0, 0
+	for _, r := range pageText {
+		if unicode.IsLetter(r) {
+			letters++
+			if r < unicode.MaxASCII {
+				ascii++
+			}
+		}
+	}
+	if letters >= 20 && ascii*100 >= letters*95 {
+		return []string{"eng"}
+	}
+	return []string{"eng", "chi_sim"}
+}
+
 // tesseractFigureOCR runs the same OCR the file pipeline uses on a temp
 // file that is removed before returning. Missing tesseract means no text,
 // not an error: the page text still lands.
-func tesseractFigureOCR(ctx context.Context, png []byte, languages []string) string {
+func tesseractFigureOCR(ctx context.Context, png []byte, pageText string) string {
+	languages := figureOCRLanguages(pageText)
 	dir, err := os.MkdirTemp("", "dt-figure-*")
 	if err != nil {
 		return ""

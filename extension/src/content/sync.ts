@@ -1,6 +1,6 @@
 import { sendToBackground } from '../shared/messages'
 import type {
-  CourseModule, DerivedDocument, FetchedFile, MoodleContext, ServerDerivedRef, SyncModuleState,
+  CourseModule, DerivedDocument, FetchedFile, FigureStats, MoodleContext, ServerDerivedRef, SyncModuleState,
   SyncOptions, SyncProgress, SyncState, SyncSummary,
 } from '../shared/types'
 import { discoverCourse, FORUM_MODTYPE } from './discovery'
@@ -67,6 +67,22 @@ function toBase64(bytes: ArrayBuffer): string {
 
 interface KnownSource { id: string; hasOriginal: boolean }
 
+/** Modules fetched and extracted at once; Moodle requests still share the limiter. */
+const MODULE_WORKERS = 3
+
+interface UploadResult { id: string; duplicate: boolean; figures?: FigureStats }
+
+function addFigureStats(summary: SyncSummary, figures?: FigureStats): void {
+  if (!figures) return
+  summary.visionPages = (summary.visionPages ?? 0) + (figures.vision ?? 0)
+  summary.figureUSD = (summary.figureUSD ?? 0) + (figures.charged_usd ?? 0)
+  if (figures.vision_stopped === 'insufficient_balance' && !summary.errors.some((e) => e.startsWith('余额不足'))) {
+    summary.errors.push('余额不足：之后的图片改用普通 OCR（只认字，不描述图表）。充值后开「全量重检」可重新读图。')
+  } else if (figures.vision_stopped === 'billing_unavailable' && !summary.errors.some((e) => e.startsWith('计费服务'))) {
+    summary.errors.push('计费服务暂时不可用：部分图片改用普通 OCR。')
+  }
+}
+
 export function cancelSync(): void {
   activeLimiter?.cancel()
 }
@@ -123,19 +139,27 @@ export async function runSync(ctx: MoodleContext, doc: Document, options: SyncOp
     const modules = tree.sections.flatMap((section) => section.modules.map((module) => ({ section, module })))
     const total = modules.length
     let done = 0
-    for (const { section, module } of modules) {
+    // Uploads go one at a time: the server reads one material per user at a
+    // time. Fetching and extracting the next modules overlaps with it.
+    let uploadChain: Promise<unknown> = Promise.resolve()
+    const serialUpload = <T>(task: () => Promise<T>): Promise<T> => {
+      const run = uploadChain.then(task, task)
+      uploadChain = run.catch(() => undefined)
+      return run
+    }
+
+    const processModule = async ({ section, module }: typeof modules[number]): Promise<void> => {
       if (limiter.cancelled) throw new Error('cancelled')
-      done += 1
       summary.scanned += 1
       if (module.recording) {
         summary.recordings.push({ provider: module.recording.provider, name: module.name, url: module.recording.url, section: section.name })
-        continue
+        return
       }
       // Forums are private unless the user opted in for this sync.
       const optedForum = module.skipped === 'private' && Boolean(options.includeForums) && FORUM_MODTYPE.test(module.modtype)
       if (!optedForum && (module.skipped || !FETCHABLE.has(module.modtype))) {
         summary.skipped += 1
-        continue
+        return
       }
       const previous = state.modules[String(module.cmid)]
       const fingerprint = moduleFingerprint(module)
@@ -145,7 +169,7 @@ export async function runSync(ctx: MoodleContext, doc: Document, options: SyncOp
         && (!options.keepOriginals || previous.originalsKept === true)
       ) {
         summary.unchanged += 1
-        continue
+        return
       }
       report({ phase: 'fetch', message: `${section.name} / ${module.name}`, done, total })
       const moduleState: SyncModuleState = { timemodified: fingerprint, sha256s: [], uploadedAt: Date.now() }
@@ -169,6 +193,7 @@ export async function runSync(ctx: MoodleContext, doc: Document, options: SyncOp
             summary.skipped += 1
             continue
           }
+          const figureCount = extracted.pages.reduce((sum, page) => sum + (page.figures?.length ?? 0), 0)
           const document: DerivedDocument = {
             sha256: sha,
             filename: file.filename,
@@ -191,14 +216,23 @@ export async function runSync(ctx: MoodleContext, doc: Document, options: SyncOp
               extractor: extracted.extractor,
             },
           }
-          if (limiter.cancelled) throw new Error('cancelled')
-          report({ phase: 'upload', message: `上传 ${file.filename}（${extracted.pages.length} 页）`, done, total })
-          const uploaded = await sendToBackground<{ ok: true; uploaded: { id: string; duplicate: boolean } }>({
-            type: 'dt.derived.upload', projectId: options.projectId, document,
+          const uploaded = await serialUpload(async () => {
+            if (limiter.cancelled) throw new Error('cancelled')
+            report({
+              phase: 'upload',
+              message: figureCount
+                ? `上传 ${file.filename}（${extracted.pages.length} 页，服务器读图 ${figureCount} 张）`
+                : `上传 ${file.filename}（${extracted.pages.length} 页）`,
+              done, total,
+            })
+            return sendToBackground<{ ok: true; uploaded: UploadResult }>({
+              type: 'dt.derived.upload', projectId: options.projectId, document,
+            })
           })
           known.set(sha, { id: uploaded.uploaded.id, hasOriginal: false })
           if (uploaded.uploaded.duplicate) summary.duplicates += 1
           else summary.uploaded += 1
+          addFigureStats(summary, uploaded.uploaded.figures)
           originalsKept = (await keepOriginal(sha, file)) && originalsKept
         }
         moduleState.originalsKept = Boolean(options.keepOriginals) && originalsKept
@@ -209,8 +243,20 @@ export async function runSync(ctx: MoodleContext, doc: Document, options: SyncOp
         if (limiter.cancelled) throw new Error('cancelled')
         summary.failed += 1
         summary.errors.push(`${module.name}: ${reason instanceof Error ? reason.message : String(reason)}`)
+      } finally {
+        done += 1
       }
     }
+
+    let next = 0
+    const worker = async (): Promise<void> => {
+      while (next < modules.length) {
+        const item = modules[next]
+        next += 1
+        await processModule(item)
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(MODULE_WORKERS, modules.length) }, worker))
     state.lastSyncedAt = Date.now()
     await saveSyncState(ctx, state)
     summary.requests = limiter.requests

@@ -143,6 +143,14 @@ export interface SyncProgress {
   total?: number
 }
 
+/** What the server did with an upload's figure renders. */
+export interface FigureStats {
+  vision?: number
+  ocr?: number
+  charged_usd?: number
+  vision_stopped?: string
+}
+
 export interface SyncSummary {
   scanned: number
   uploaded: number
@@ -154,6 +162,9 @@ export interface SyncSummary {
   requests: number
   durationMs: number
   errors: string[]
+  /** Figure pages read by the AI model, and what that cost the user. */
+  visionPages?: number
+  figureUSD?: number
   /** Originals uploaded in this run (keepOriginals only). */
   originals?: number
   /** The user pressed 停止; counts cover what finished before that. */

@@ -1,5 +1,5 @@
 import type { BackgroundRequest, BackgroundResponse } from './shared/messages'
-import type { DerivedDocument, DreamTransProject, DreamTransStatus, ServerDerivedRef } from './shared/types'
+import type { DerivedDocument, DreamTransProject, DreamTransStatus, FigureStats, ServerDerivedRef } from './shared/types'
 
 // The only code that talks to DreamTrans. Holds the DreamTrans session
 // (never a Moodle one) and relays uploads from the content script, which
@@ -119,12 +119,12 @@ async function listDerived(projectId: string): Promise<ServerDerivedRef[]> {
   return body.sources ?? []
 }
 
-async function uploadDerived(projectId: string, document: DerivedDocument): Promise<{ id: string; duplicate: boolean }> {
-  const body = await api<{ source: { id: string }; duplicate: boolean }>(
+async function uploadDerived(projectId: string, document: DerivedDocument): Promise<{ id: string; duplicate: boolean; figures?: FigureStats }> {
+  const body = await api<{ source: { id: string }; duplicate: boolean; figures?: FigureStats }>(
     `/api/ai/projects/${encodeURIComponent(projectId)}/sources/derived`,
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(document) },
   )
-  return { id: body.source.id, duplicate: Boolean(body.duplicate) }
+  return { id: body.source.id, duplicate: Boolean(body.duplicate), figures: body.figures }
 }
 
 async function uploadOriginal(projectId: string, sourceId: string, mimetype: string, base64: string): Promise<{ id: string; duplicate: boolean }> {

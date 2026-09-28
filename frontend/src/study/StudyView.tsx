@@ -1396,7 +1396,7 @@ export function StudyView({ onOpenSession }: StudyViewProps) {
                 <span>{v.courseCalls(costs.summary.operations)}</span>
               </div>
               <div className="dt-study__cost-split">
-                {(['skill_map', 'study_lesson', 'study_bank', 'study_grade'] as const).map((feature) => (
+                {(['skill_map', 'study_lesson', 'study_bank', 'study_grade', 'moodle_figures'] as const).map((feature) => (
                   <span key={feature}>
                     <small>{v.features[feature]}</small>
                     <b>{formatUsageUSD(costs.summary.by_feature[feature] ?? 0)}</b>

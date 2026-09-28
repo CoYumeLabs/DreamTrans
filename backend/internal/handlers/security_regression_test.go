@@ -87,7 +87,7 @@ func TestDerivedRenderStopsOnCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	req := validDerivedRequest()
-	text := renderDerivedText(ctx, &req, func(context.Context, []byte, []string) string { t.Fatal("OCR ran after cancellation"); return "" })
+	text := renderDerivedText(ctx, &req, func(context.Context, []byte, string) string { t.Fatal("OCR ran after cancellation"); return "" })
 	if text != "" {
 		t.Fatal("cancelled extraction returned partial material")
 	}

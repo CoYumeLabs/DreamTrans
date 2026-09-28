@@ -69,7 +69,8 @@ export function summaryContents(container: HTMLElement, summary: SyncSummary): v
   }
   const meta = document.createElement('p')
   meta.className = 'meta'
-  meta.textContent = `${summary.stopped ? '已停止 · ' : ''}${summary.originals ? `原文件 ${summary.originals} · ` : ''}${summary.requests} 次请求 · ${(summary.durationMs / 1000).toFixed(1)} s`
+  const vision = summary.visionPages ? `AI 读图 ${summary.visionPages} 页 · $${(summary.figureUSD ?? 0).toFixed(4)} · ` : ''
+  meta.textContent = `${summary.stopped ? '已停止 · ' : ''}${vision}${summary.originals ? `原文件 ${summary.originals} · ` : ''}${summary.requests} 次请求 · ${(summary.durationMs / 1000).toFixed(1)} s`
   const parts: HTMLElement[] = [stats, meta]
   if (summary.recordings.length) {
     parts.push(...listSection(`录播 ${summary.recordings.length} 个（只记录，不抓取）`,

@@ -2,6 +2,7 @@ package openaiprovider
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"math"
@@ -598,5 +599,53 @@ func TestSanitizeTranslationOutputKeepsTranslationsEqualToSource(t *testing.T) {
 		if got := sanitizeTranslationOutput("ctx", tc.segment, tc.out); got != tc.want {
 			t.Fatalf("sanitize(%q, %q) = %q, want %q", tc.segment, tc.out, got, tc.want)
 		}
+	}
+}
+
+func TestDescribeImageSendsInputImageAndFallsBackToChatParts(t *testing.T) {
+	png := []byte("\x89PNG fake")
+	for _, responses := range []bool{true, false} {
+		var sawPath string
+		translator := NewTranslator(&Config{
+			BaseURL: "https://provider.example/v1", APIKey: "key", Model: "vision-a",
+			Timeout: time.Second, MaxOutputTokens: 800, UseResponsesAPI: responses,
+		})
+		translator.httpClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			body, err := io.ReadAll(request.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sawPath = request.URL.Path
+			dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+			if !strings.Contains(string(body), dataURL) || !strings.Contains(string(body), "read this page") {
+				t.Fatalf("image or instruction missing: %s", body)
+			}
+			reply := `{"model":"vision-a","choices":[{"message":{"role":"assistant","content":"A bar chart"},"finish_reason":"stop"}],` +
+				`"usage":{"prompt_tokens":1105,"completion_tokens":40,"total_tokens":1145}}`
+			if responses {
+				if !strings.Contains(string(body), `"type":"input_image"`) || !strings.Contains(string(body), `"detail":"high"`) {
+					t.Fatalf("Responses image part missing: %s", body)
+				}
+				reply = `{"model":"vision-a","output":[{"content":[{"type":"output_text","text":"A bar chart"}]}],` +
+					`"usage":{"input_tokens":1105,"output_tokens":40,"total_tokens":1145}}`
+			} else if !strings.Contains(string(body), `"type":"image_url"`) {
+				t.Fatalf("chat image part missing: %s", body)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(reply))}, nil
+		})}
+		content, usage, err := translator.DescribeImageWithUsage(context.Background(), "read this page", png)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantPath := "/v1/chat/completions"
+		if responses {
+			wantPath = "/v1/responses"
+		}
+		if sawPath != wantPath || content != "A bar chart" || usage == nil || usage.PromptTokens != 1105 || usage.CompletionTokens != 40 {
+			t.Fatalf("responses=%v path=%s content=%q usage=%+v", responses, sawPath, content, usage)
+		}
+	}
+	if _, _, err := NewTranslator(&Config{Model: "m"}).DescribeImageWithUsage(context.Background(), "x", nil); err == nil {
+		t.Fatal("an empty image must be rejected before any request")
 	}
 }

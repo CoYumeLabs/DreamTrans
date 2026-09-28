@@ -3,8 +3,14 @@ package handlers
 import (
 	"context"
 	"encoding/base64"
+	"errors"
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/dreamtrans/backend/internal/rag"
 )
 
 func TestParseAIProjectRouteAcceptsDerivedSources(t *testing.T) {
@@ -81,7 +87,7 @@ func TestRenderDerivedTextKeepsPagesAndDropsRenders(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := 0
-	text := renderDerivedText(context.Background(), &req, func(_ context.Context, png []byte, _ []string) string {
+	text := renderDerivedText(context.Background(), &req, func(_ context.Context, png []byte, _ string) string {
 		calls++
 		if string(png) != "png" {
 			t.Fatalf("ocr got %q", png)
@@ -108,5 +114,103 @@ func TestRenderDerivedTextKeepsPagesAndDropsRenders(t *testing.T) {
 	plain := renderDerivedText(context.Background(), &req, nil)
 	if strings.Contains(plain, "第 2 页") || !strings.Contains(plain, "第 1 页") {
 		t.Fatalf("without OCR only text pages remain:\n%s", plain)
+	}
+}
+
+func TestRenderDerivedTextReadsFiguresInParallelAndKeepsOrder(t *testing.T) {
+	req := validDerivedRequest()
+	req.Pages = nil
+	for n := 1; n <= 18; n++ {
+		req.Pages = append(req.Pages, derivedPage{N: n, Text: fmt.Sprintf("page %d text", n), Figures: []derivedFigure{
+			{PNGBase64: base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("fig-%d", n)))},
+		}})
+	}
+	var active, peak int32
+	started := time.Now()
+	text := renderDerivedText(context.Background(), &req, func(_ context.Context, png []byte, pageText string) string {
+		now := atomic.AddInt32(&active, 1)
+		defer atomic.AddInt32(&active, -1)
+		for {
+			seen := atomic.LoadInt32(&peak)
+			if now <= seen || atomic.CompareAndSwapInt32(&peak, seen, now) {
+				break
+			}
+		}
+		time.Sleep(40 * time.Millisecond)
+		return "read " + string(png) + " beside " + pageText
+	})
+	if peak < 2 || peak > derivedFigureConcurrency {
+		t.Fatalf("peak concurrency = %d, want 2..%d", peak, derivedFigureConcurrency)
+	}
+	if elapsed := time.Since(started); elapsed > 18*40*time.Millisecond/2 {
+		t.Fatalf("figures were not read in parallel: %v", elapsed)
+	}
+	last := -1
+	for n := 1; n <= 18; n++ {
+		want := fmt.Sprintf("## 第 %d 页\npage %d text\n[图 1] read fig-%d beside page %d text", n, n, n, n)
+		at := strings.Index(text, want)
+		if at <= last {
+			t.Fatalf("page %d missing or out of order:\n%s", n, text)
+		}
+		last = at
+	}
+	for _, page := range req.Pages {
+		if page.Figures[0].PNGBase64 != "" {
+			t.Fatal("renders must be dropped")
+		}
+	}
+}
+
+func TestDerivedFigureReaderFallsBackAndStopsOnEmptyBalance(t *testing.T) {
+	var stats derivedFigureStats
+	describeCalls, fallbackCalls := 0, 0
+	answers := []error{nil, rag.ErrFigureNothingToAdd, errors.New("provider 500"), fmt.Errorf("%w: reserve", errRAGPaymentRequired)}
+	reader := newDerivedFigureReader("gpt-5.6-luna",
+		func(_ context.Context, model string, _ []byte, _ string) (string, error) {
+			if model != "gpt-5.6-luna" {
+				t.Fatalf("model %q", model)
+			}
+			err := answers[describeCalls]
+			describeCalls++
+			if err == nil {
+				return "a scatter plot", nil
+			}
+			return "", err
+		},
+		(&RAGHandler{}).isRAGAccountingError,
+		func(context.Context, []byte, string) string { fallbackCalls++; return "ocr text" },
+		&stats,
+	)
+	got := []string{}
+	for i := 0; i < 6; i++ {
+		got = append(got, reader(context.Background(), []byte("png"), "page"))
+	}
+	want := []string{"a scatter plot", "", "ocr text", "ocr text", "ocr text", "ocr text"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("reads = %q, want %q", got, want)
+	}
+	if describeCalls != 4 {
+		t.Fatalf("model kept being called after the balance ran out: %d calls", describeCalls)
+	}
+	if stats.Vision != 2 || stats.OCR != 4 || stats.VisionStopped != "insufficient_balance" || fallbackCalls != 4 {
+		t.Fatalf("stats = %+v fallback=%d", stats, fallbackCalls)
+	}
+	off := newDerivedFigureReader("", func(context.Context, string, []byte, string) (string, error) {
+		t.Fatal("model called while disabled")
+		return "", nil
+	}, (&RAGHandler{}).isRAGAccountingError, func(context.Context, []byte, string) string { return "ocr" }, &derivedFigureStats{})
+	if off(context.Background(), []byte("png"), "") != "ocr" {
+		t.Fatal("MOODLE_FIGURE_MODEL=off must use tesseract")
+	}
+}
+
+func TestFigureOCRLanguagesSkipsChineseForEnglishPages(t *testing.T) {
+	if got := figureOCRLanguages("Reliability refers to the consistency of a measure over time"); len(got) != 1 || got[0] != "eng" {
+		t.Fatalf("english page: %v", got)
+	}
+	for _, text := range []string{"", "信度是指测量结果的一致性 reliability", "short"} {
+		if got := figureOCRLanguages(text); len(got) != 2 {
+			t.Fatalf("%q: %v", text, got)
+		}
 	}
 }
