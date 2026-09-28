@@ -98,6 +98,7 @@ export default function UnifiedApp({ proEntry: explicitProEntry }: UnifiedAppPro
       transportDiagnostics={workspace.transportDiagnostics}
       feedGeneration={workspace.feedGeneration}
       feedItems={workspace.feedItems}
+      historyHasMore={workspace.historyHasMore}
       historyLoading={workspace.historyLoading}
       historyOpening={workspace.historyOpening}
       historySessions={workspace.historySessions}
@@ -124,6 +125,7 @@ export default function UnifiedApp({ proEntry: explicitProEntry }: UnifiedAppPro
       onDownloadAudio={workspace.downloadAudio}
       onDownloadText={workspace.downloadText}
       onLoadHistory={workspace.loadHistory}
+      onLoadMoreHistory={workspace.loadMoreHistory}
       onMigrateLegacyHistory={workspace.migrateLegacyHistory}
       onLogout={async () => {
         await workspace.stop()

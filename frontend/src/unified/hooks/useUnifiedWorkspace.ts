@@ -16,8 +16,8 @@ export function useUnifiedWorkspace(options: UnifiedWorkspaceOptions): UnifiedWo
   const recording = useWorkspaceRecording({ ...runtime, ...persistence, ...historyindex })
   const history = useWorkspaceHistory({ ...runtime, ...persistence, ...historyindex, ...recording })
   const sync = useWorkspaceSync({ ...runtime, ...persistence, ...historyindex, ...recording, ...history })
-  const { paymentRequired, recorderStatus, localAudioHealthyRef, clientSnapshot, user, repositoryOwnerRef, elapsedSeconds, error, feedSnapshot, historyLoading, historyOpening, historySessions, legacyHistoryCount, localPending, cloudPending, sessionId, settings, sessionSourceLanguage, transcriptSnapshot, topWords, title, transportDiagnostics, transcriptContext, setError, titleGenerating } = runtime
-  const { migrateLegacyHistory, refreshHistory } = historyindex
+  const { paymentRequired, recorderStatus, localAudioHealthyRef, clientSnapshot, user, repositoryOwnerRef, elapsedSeconds, error, feedSnapshot, historyHasMore, historyLoading, historyOpening, historySessions, legacyHistoryCount, localPending, cloudPending, sessionId, settings, sessionSourceLanguage, transcriptSnapshot, topWords, title, transportDiagnostics, transcriptContext, setError, titleGenerating } = runtime
+  const { loadMoreHistory, migrateLegacyHistory, refreshHistory } = historyindex
   const { pauseToggle, continueSession, start, stop } = recording
   const { deleteHistory, endHistorySession, uploadHistorySessionToCloud, downloadAudio, downloadText, loadHistory, updateTitle, generateTitle } = history
   const { sessionCost } = sync
@@ -45,6 +45,7 @@ export function useUnifiedWorkspace(options: UnifiedWorkspaceOptions): UnifiedWo
     error,
     feedGeneration: feedSnapshot.generation,
     feedItems: ownerTransitioning ? [] : feedSnapshot.items,
+    historyHasMore: ownerTransitioning ? false : historyHasMore,
     historyLoading: ownerTransitioning ? true : historyLoading,
     historyOpening: ownerTransitioning ? null : historyOpening,
     historySessions: ownerTransitioning ? [] : historySessions,
@@ -74,6 +75,7 @@ export function useUnifiedWorkspace(options: UnifiedWorkspaceOptions): UnifiedWo
     downloadAudio,
     downloadText,
     loadHistory,
+    loadMoreHistory,
     migrateLegacyHistory,
     pauseToggle,
     refreshHistory,

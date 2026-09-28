@@ -18,7 +18,7 @@ import type { WorkspaceHistoryIndex } from './useWorkspaceHistoryIndex'
 import type { WorkspacePersistence } from './useWorkspacePersistence'
 import type { WorkspaceRecording } from './useWorkspaceRecording'
 import type { WorkspaceRuntime } from './useWorkspaceRuntime'
-import { DURATION_CHECKPOINT_INTERVAL_MS, buildTransportDiagnostics, defaultSessionTitle } from './workspaceModel'
+import { DURATION_CHECKPOINT_INTERVAL_MS, HISTORY_PAGE_SIZE, buildTransportDiagnostics, defaultSessionTitle } from './workspaceModel'
 
 type Dependencies = Pick<
   WorkspaceRuntime & WorkspacePersistence & WorkspaceHistoryIndex & WorkspaceRecording,
@@ -54,6 +54,8 @@ type Dependencies = Pick<
   | "setTitle"
   | "applyLoadedRecords"
   | "setHistorySessions"
+  | "setHistoryHasMore"
+  | "historyLimitRef"
   | "setHistoryLoading"
   | "setHistoryOpening"
   | "setLegacyHistoryCount"
@@ -120,6 +122,8 @@ export function useWorkspaceSync(scope: Dependencies) {
     setTitle,
     applyLoadedRecords,
     setHistorySessions,
+    setHistoryHasMore,
+    historyLimitRef,
     setHistoryLoading,
     setHistoryOpening,
     setLegacyHistoryCount,
@@ -306,6 +310,8 @@ export function useWorkspaceSync(scope: Dependencies) {
         setTitle(defaultSessionTitle())
         applyLoadedRecords({ segments: [], translations: [] }, 0)
         setHistorySessions([])
+        setHistoryHasMore(false)
+        historyLimitRef.current = HISTORY_PAGE_SIZE
         setHistoryLoading(false)
         setHistoryOpening(null)
         setLegacyHistoryCount(0)
@@ -338,7 +344,7 @@ export function useWorkspaceSync(scope: Dependencies) {
     return () => {
       cancelled = true
     }
-  }, [applyLoadedRecords, cloudQueue, cloudSessionRef, cloudSessionVerifiedRef, currentAudioMimeTypeRef, currentLocationRef, currentSessionRef, historyLoadRequestRef, historyRequestRef, ragQueue, refreshHistory, repositoryOwnerRef, restoreCloudOutbox, setError, setHistoryLoading, setHistoryOpening, setHistorySessions, setLegacyHistoryCount, setSessionId, setSessionSourceLanguage, setTitle, settingsRef, statusRef, stop, stopPromiseRef, user?.id])
+  }, [applyLoadedRecords, cloudQueue, cloudSessionRef, cloudSessionVerifiedRef, currentAudioMimeTypeRef, currentLocationRef, currentSessionRef, historyLimitRef, historyLoadRequestRef, historyRequestRef, ragQueue, refreshHistory, repositoryOwnerRef, restoreCloudOutbox, setError, setHistoryHasMore, setHistoryLoading, setHistoryOpening, setHistorySessions, setLegacyHistoryCount, setSessionId, setSessionSourceLanguage, setTitle, settingsRef, statusRef, stop, stopPromiseRef, user?.id])
 
   useEffect(() => {
     if(

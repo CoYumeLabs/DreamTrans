@@ -447,6 +447,8 @@ export const en: typeof zhCN = {
     emptyTitle: 'No sessions yet',
     emptyBody: 'Your first transcription will appear here.',
     refreshing: 'Refreshing…',
+    loadMore: 'Load older sessions',
+    loadingMore: 'Loading…',
     deleting: 'Deleting…',
     cloudActive: 'Cloud · live',
     cloud: 'Cloud',

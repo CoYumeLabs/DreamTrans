@@ -320,6 +320,7 @@ export interface UnifiedWorkspaceState {
   error: string | null
   feedGeneration: number
   feedItems: ReturnType<TranscriptFeedModel['getSnapshot']>['items']
+  historyHasMore: boolean
   historyLoading: boolean
   historyOpening: HistoryOpenProgress | null
   historySessions: HistorySession[]
@@ -344,6 +345,7 @@ export interface UnifiedWorkspaceState {
   downloadAudio: () => Promise<void>
   downloadText: (mode: 'original' | 'translation' | 'bilingual') => Promise<void>
   loadHistory: (session: HistorySession) => Promise<void>
+  loadMoreHistory: () => Promise<void>
   migrateLegacyHistory: () => Promise<void>
   pauseToggle: () => void
   refreshHistory: () => Promise<void>
@@ -408,6 +410,9 @@ export function isDefaultSessionTitle(title: string): boolean {
 
 /** How often a running session persists its duration (see checkpointDuration). */
 export const DURATION_CHECKPOINT_INTERVAL_MS = 15_000
+
+/** Sessions the history sidebar shows at first and adds per "load more". */
+export const HISTORY_PAGE_SIZE = 60
 
 /** Opening of the conversation, enough for naming without paying for all of it. */
 export const TITLE_EXCERPT_MAX_CHARS = 2000

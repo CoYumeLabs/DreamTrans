@@ -447,6 +447,8 @@ export const zhCN = {
     emptyTitle: '还没有历史会话',
     emptyBody: '完成第一次转录后会出现在这里。',
     refreshing: '正在刷新列表…',
+    loadMore: '加载更早的会话',
+    loadingMore: '正在加载…',
     deleting: '正在删除…',
     cloudActive: '云端 · 进行中',
     cloud: '云端',

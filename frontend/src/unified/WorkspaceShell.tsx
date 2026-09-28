@@ -64,6 +64,7 @@ export interface WorkspaceShellProps {
   error: string | null
   feedGeneration: number
   feedItems: readonly TranscriptFeedItem[]
+  historyHasMore: boolean
   historyLoading: boolean
   historyOpening: HistoryOpenProgress | null
   historySessions: HistorySession[]
@@ -92,6 +93,7 @@ export interface WorkspaceShellProps {
   onDownloadAudio: () => Promise<void>
   onDownloadText: (mode: 'original' | 'translation' | 'bilingual') => Promise<void>
   onLoadHistory: (session: HistorySession) => Promise<void>
+  onLoadMoreHistory: () => Promise<void>
   onMigrateLegacyHistory: () => Promise<void>
   onLogout: () => Promise<void>
   onPauseToggle: () => void
@@ -190,6 +192,7 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
     error,
     feedGeneration,
     feedItems,
+    historyHasMore,
     historyLoading,
     historyOpening,
     historySessions,
@@ -217,6 +220,7 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
     onDownloadAudio,
     onDownloadText,
     onLoadHistory,
+    onLoadMoreHistory,
     onMigrateLegacyHistory,
     onLogout,
     onPauseToggle,
@@ -541,9 +545,11 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
             costs={historyCosts}
             loading={historyLoading}
             opening={historyOpening}
+            hasMore={historyHasMore}
             sessions={historySessions}
             onDelete={onDeleteHistory}
             onLoad={onLoadHistory}
+            onLoadMore={onLoadMoreHistory}
             onEndSession={onEndHistorySession}
             {...(user ? { onUploadToCloud: onUploadHistorySessionToCloud } : {})}
           />
@@ -935,9 +941,11 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
           costs={historyCosts}
           loading={historyLoading}
           opening={historyOpening}
+          hasMore={historyHasMore}
           sessions={historySessions}
           onDelete={onDeleteHistory}
           onLoad={loadHistory}
+          onLoadMore={onLoadMoreHistory}
           onEndSession={onEndHistorySession}
           {...(user ? { onUploadToCloud: onUploadHistorySessionToCloud } : {})}
         />

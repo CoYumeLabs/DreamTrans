@@ -971,7 +971,7 @@ export async function updatePassword(
 export async function listSessions(
   page = 1,
   pageSize = 20
-): Promise<{ sessions: Session[]; page: number; page_size: number }> {
+): Promise<{ sessions: Session[]; total?: number; page: number; page_size: number }> {
   return authFetch(`/api/sessions?page=${page}&page_size=${pageSize}`)
 }
 

@@ -4,7 +4,8 @@ import {
 import { migrateLegacySessionStorage } from '../../db'
 import { messages } from '../../i18n'
 import {
-  listSessions as listCloudSessions
+  listSessions as listCloudSessions,
+  type Session as CloudSession,
 } from '../../pro/api/auth'
 import { lexReplace } from '../../utils/lexicon'
 import type {
@@ -15,6 +16,26 @@ import {
 } from '../workspace/mergeSessionRecords'
 import type { WorkspacePersistence } from './useWorkspacePersistence'
 import type { WorkspaceRuntime } from './useWorkspaceRuntime'
+import { HISTORY_PAGE_SIZE } from './workspaceModel'
+
+// /api/sessions caps page_size at 100.
+const CLOUD_PAGE_SIZE = 100
+
+// Newest `limit` cloud sessions, plus whether older ones exist.
+async function listCloudHistory(limit: number) {
+  const sessions: CloudSession[] = []
+  for(let page = 1; sessions.length < limit; page += 1) {
+    const result = await listCloudSessions(page, CLOUD_PAGE_SIZE)
+    sessions.push(...result.sessions)
+    if(result.sessions.length < CLOUD_PAGE_SIZE) {
+      return { sessions, hasMore: sessions.length > limit }
+    }
+    if(typeof result.total === 'number' && sessions.length >= result.total) {
+      return { sessions, hasMore: sessions.length > limit }
+    }
+  }
+  return { sessions, hasMore: true }
+}
 
 type Dependencies = Pick<
   WorkspaceRuntime & WorkspacePersistence,
@@ -26,6 +47,8 @@ type Dependencies = Pick<
   | "repository"
   | "setLegacyHistoryCount"
   | "setHistorySessions"
+  | "setHistoryHasMore"
+  | "historyLimitRef"
   | "userRef"
   | "syncCloudMetadata"
   | "setError"
@@ -51,6 +74,8 @@ export function useWorkspaceHistoryIndex(scope: Dependencies) {
     repository,
     setLegacyHistoryCount,
     setHistorySessions,
+    setHistoryHasMore,
+    historyLimitRef,
     userRef,
     syncCloudMetadata,
     setError,
@@ -78,9 +103,10 @@ export function useWorkspaceHistoryIndex(scope: Dependencies) {
     // HistoryPanel keeps an existing list visible while loading; only blanks
     // the panel when there is nothing to show yet.
     setHistoryLoading(true)
+    const limit = historyLimitRef.current
     try {
       const [localPage, legacyCount] = await Promise.all([
-        repository.listSessions({ limit: 60 }),
+        repository.listSessions({ limit }),
         repository.countLegacySessions(),
       ])
       if(!isCurrent()) return
@@ -105,15 +131,17 @@ export function useWorkspaceHistoryIndex(scope: Dependencies) {
       setHistorySessions(
         [...merged.values()]
           .sort((left, right) => right.createdAt - left.createdAt)
-          .slice(0, 60),
+          .slice(0, limit),
       )
+      let hasMore = localPage.hasMore
       if(!userRef.current) setHistoryLoading(false)
 
       if(userRef.current) {
         try {
-          const cloud = await listCloudSessions(1, 60)
+          const cloudSessions = await listCloudHistory(limit)
           if(!isCurrent()) return
-          for(const session of cloud.sessions) {
+          hasMore ||= cloudSessions.hasMore
+          for(const session of cloudSessions.sessions) {
             const local = localById.get(session.id)
             const cloudUpdatedAt = Date.parse(session.updated_at) || 0
             const localWins = Boolean(local && local.updatedAt > cloudUpdatedAt)
@@ -166,8 +194,9 @@ export function useWorkspaceHistoryIndex(scope: Dependencies) {
         setHistorySessions(
           [...merged.values()]
             .sort((left, right) => right.createdAt - left.createdAt)
-            .slice(0, 60),
+            .slice(0, limit),
         )
+        setHistoryHasMore(hasMore || merged.size > limit)
       }
     } catch(reason) {
       if(isCurrent()) {
@@ -176,7 +205,12 @@ export function useWorkspaceHistoryIndex(scope: Dependencies) {
     } finally {
       if(isCurrent()) setHistoryLoading(false)
     }
-  }, [historyRequestRef, ownerGenerationRef, ownerScopeIsCurrent, repository, repositoryOwnerRef, setError, setHistoryLoading, setHistorySessions, setLegacyHistoryCount, syncCloudMetadata, userRef])
+  }, [historyLimitRef, historyRequestRef, ownerGenerationRef, ownerScopeIsCurrent, repository, repositoryOwnerRef, setError, setHistoryHasMore, setHistoryLoading, setHistorySessions, setLegacyHistoryCount, syncCloudMetadata, userRef])
+
+  const loadMoreHistory = useCallback(async () => {
+    historyLimitRef.current += HISTORY_PAGE_SIZE
+    await refreshHistory()
+  }, [historyLimitRef, refreshHistory])
 
   const migrateLegacyHistory = useCallback(async () => {
     if(statusRef.current !== 'idle') {
@@ -231,6 +265,7 @@ export function useWorkspaceHistoryIndex(scope: Dependencies) {
   }, [elapsedAccumulatedRef, elapsedRunStartedRef, feedModel, orphanTranslationsRef, setElapsedSeconds, setTopWords, transcriptStore, wordCounterRef])
   return {
     refreshHistory,
+    loadMoreHistory,
     migrateLegacyHistory,
     applyLoadedRecords,
   }

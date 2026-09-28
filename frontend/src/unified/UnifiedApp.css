@@ -1088,6 +1088,27 @@ textarea:focus-visible {
   flex: 0 0 auto;
 }
 
+.dt-history-list__more {
+  margin: 4px 2px 0;
+  padding: 8px;
+  color: var(--dt-accent);
+  background: transparent;
+  border: 1px dashed var(--yf-line);
+  border-radius: var(--yf-r-sm);
+  font: inherit;
+  font-size: var(--yf-text-xs);
+  cursor: pointer;
+}
+
+.dt-history-list__more:hover:not(:disabled) {
+  background: var(--yf-well);
+}
+
+.dt-history-list__more:disabled {
+  color: #6a7488;
+  cursor: default;
+}
+
 .dt-legacy-history {
   display: grid;
   margin: 4px 5px 9px;

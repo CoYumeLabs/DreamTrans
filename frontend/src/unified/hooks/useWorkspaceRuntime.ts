@@ -44,7 +44,7 @@ import { ensureSpeechmaticsPreflight } from '../workspace/speechmaticsPreflight'
 import {
   TranscriptFeedModel
 } from '../workspace/TranscriptFeedModel'
-import { ANONYMOUS_TOKEN_SENTINEL, WordCounter, backendURL, defaultSessionTitle, resolveTranslateProxyUrl, type TransportDiagnostics, type UnifiedWorkspaceOptions } from './workspaceModel'
+import { ANONYMOUS_TOKEN_SENTINEL, HISTORY_PAGE_SIZE, WordCounter, backendURL, defaultSessionTitle, resolveTranslateProxyUrl, type TransportDiagnostics, type UnifiedWorkspaceOptions } from './workspaceModel'
 
 // Own stable session state and transport instances across controller renders.
 export function useWorkspaceRuntime({ ragEnabled, settings, user, onBalanceUpdated }: UnifiedWorkspaceOptions) {
@@ -189,6 +189,8 @@ export function useWorkspaceRuntime({ ragEnabled, settings, user, onBalanceUpdat
   const [historyOpening, setHistoryOpening] = useState<HistoryOpenProgress | null>(null)
   const historySessionsRef = useRef<HistorySession[]>([])
   historySessionsRef.current = historySessions
+  const [historyHasMore, setHistoryHasMore] = useState(false)
+  const historyLimitRef = useRef(HISTORY_PAGE_SIZE)
   const [legacyHistoryCount, setLegacyHistoryCount] = useState(0)
   const [topWords, setTopWords] = useState<Array<{ word: string; count: number }>>([])
   const [transportDiagnostics, setTransportDiagnostics] = useState<TransportDiagnostics | null>(
@@ -331,6 +333,9 @@ export function useWorkspaceRuntime({ ragEnabled, settings, user, onBalanceUpdat
     historyOpening,
     setHistoryOpening,
     historySessionsRef,
+    historyHasMore,
+    setHistoryHasMore,
+    historyLimitRef,
     legacyHistoryCount,
     setLegacyHistoryCount,
     topWords,

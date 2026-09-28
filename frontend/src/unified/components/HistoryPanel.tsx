@@ -23,11 +23,14 @@ interface HistoryPanelProps {
   activeSessionId: string
   /** Per-session cost summaries keyed by session id; cloud sessions only. */
   costs?: Record<string, SessionCostSummary>
+  /** Older sessions exist beyond the loaded list. */
+  hasMore?: boolean
   loading: boolean
   opening?: HistoryOpenProgress | null
   sessions: HistorySession[]
   onDelete: (session: HistorySession) => Promise<void>
   onLoad: (session: HistorySession) => Promise<void>
+  onLoadMore?: () => Promise<void>
   /** Ends a stuck/remote active cloud session and cuts its live stream. */
   onEndSession?: (session: HistorySession) => Promise<void>
   /** Uploads a local-only session's transcripts to the cloud. */
@@ -55,11 +58,13 @@ function formatDuration(seconds: number): string {
 export function HistoryPanel({
   activeSessionId,
   costs,
+  hasMore = false,
   loading,
   opening = null,
   sessions,
   onDelete,
   onLoad,
+  onLoadMore,
   onEndSession,
   onUploadToCloud,
 }: HistoryPanelProps) {
@@ -266,6 +271,16 @@ export function HistoryPanel({
           </article>
         )
       })}
+      {hasMore && onLoadMore && (
+        <button
+          className="dt-history-list__more"
+          disabled={loading}
+          onClick={() => { void onLoadMore() }}
+          type="button"
+        >
+          {loading ? m.history.loadingMore : m.history.loadMore}
+        </button>
+      )}
     </div>
   )
 }
